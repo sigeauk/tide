@@ -54,12 +54,15 @@ def _sigma_payload(upstream_id: str, deployed: Dict[str, Any], options: Dict[str
     return payload, note
 
 
-def upstream_payload(conn, origin: Dict[str, Any], deployed: Dict[str, Any]) -> Tuple[Optional[dict], str]:
+def upstream_payload(conn, origin: Dict[str, Any], deployed: Dict[str, Any],
+                     elastic: Optional[Dict[str, Dict[str, Any]]] = None) -> Tuple[Optional[dict], str]:
     """The upstream rule as it is now, in Kibana's form, under the deployed copy's rule id and on/off
-    state: ``(payload, note)``; payload None (with the reason in note) when there is none."""
+    state: ``(payload, note)``; payload None (with the reason in note) when there is none.
+    ``elastic``: the Elastic rules already read (``elastic_rules.get_rules``), for many rules at once."""
     if origin["origin"] == "elastic":
         from app.services import elastic_rules as er
-        rule = er.get_rule(conn, origin["upstream_id"])
+        rule = (elastic.get(origin["upstream_id"]) if elastic is not None
+                else er.get_rule(conn, origin["upstream_id"]))
         if not rule:
             return None, "The Elastic rule is not in the Elastic rules built into this TIDE."
         payload = er.kibana_payload(rule, deployed.get("rule_id") or origin["rule_id"], bool(deployed.get("enabled")))
@@ -74,6 +77,12 @@ def upstream_payload(conn, origin: Dict[str, Any], deployed: Dict[str, Any]) -> 
     for key, value in _KIBANA_DEFAULTS.items():
         payload.setdefault(key, value)
     return payload, note
+
+
+def _elastic_rules(conn, origins: Dict[Key, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """The Elastic rules ``origins`` came from, read in one query rather than one per rule."""
+    from app.services import elastic_rules as er
+    return er.get_rules(conn, (o["upstream_id"] for o in origins.values() if o["origin"] == "elastic"))
 
 
 def settle_unchanged(conn, keys: Optional[List[Key]] = None) -> int:
@@ -91,12 +100,13 @@ def settle_unchanged(conn, keys: Optional[List[Key]] = None) -> int:
         "SELECT d.rule_id, d.siem_id, d.space, d.raw_data FROM detection_rules d "
         "JOIN k ON d.rule_id = k.r AND d.siem_id = k.s AND d.space = k.sp",
         [[k[0] for k in pending], [k[1] for k in pending], [k[2] for k in pending]]).fetchall()}
+    elastic = _elastic_rules(conn, origins)
     settled = 0
     for key, status in pending.items():
         deployed = json.loads(raw[key]) if isinstance(raw.get(key), str) else raw.get(key)
         if not deployed or key not in origins:
             continue
-        payload, _ = upstream_payload(conn, origins[key], deployed)
+        payload, _ = upstream_payload(conn, origins[key], deployed, elastic)
         if payload is not None and not build_rule_diff(deployed, payload):
             rule_origins.mark_current(conn, key, version=status.get("to_version"), how="unchanged")
             settled += 1
@@ -134,12 +144,13 @@ def unconfirmed_links(conn, keys: Optional[List[Key]] = None) -> Dict[Key, Dict[
         "SELECT d.rule_id, d.siem_id, d.space, d.raw_data FROM detection_rules d "
         "JOIN k ON d.rule_id = k.r AND d.siem_id = k.s AND d.space = k.sp WHERE NOT COALESCE(d.deprecated, false)",
         [[k[0] for k in candidates], [k[1] for k in candidates], [k[2] for k in candidates]]).fetchall()}
+    elastic = _elastic_rules(conn, origins)
     out: Dict[Key, Dict[str, Any]] = {}
     for key, status in candidates.items():
         deployed = json.loads(raw[key]) if isinstance(raw.get(key), str) else raw.get(key)
         if not deployed or key not in origins:
             continue
-        payload, _ = upstream_payload(conn, origins[key], deployed)
+        payload, _ = upstream_payload(conn, origins[key], deployed, elastic)
         sections = link_unconfirmed(status, build_rule_diff(deployed, payload)) if payload else []
         if sections:
             out[key] = {"name": status["name"] or status["upstream_id"], "sections": sections}

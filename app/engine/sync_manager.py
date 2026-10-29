@@ -1,5 +1,5 @@
 """
-sync_manager.py — KEV / OpenCTI / NVD Delta Tracking & Cache Management
+sync_manager.py — KEV / NVD Delta Tracking & Cache Management
 
 Implements the "Moving Target" synchronisation engine:
 
@@ -7,13 +7,12 @@ Implements the "Moving Target" synchronisation engine:
                (new CVEs ingested).
   ORCHESTRATION
     1. Pull initial known-exploited data from local CISA KEV JSON.
-    2. Query local OpenCTI instance (via GraphQL) for updated ``affects``
-       relationships.
-    3. Cross-reference against the NVD database in OpenCTI.
-  PERFORMANCE  Aggressive caching (LRU for NVD, 1-hour TTL for OpenCTI).
+    2. Cross-reference against the local NVD JSON for CPE version ranges.
+  PERFORMANCE  LRU caching for NVD.
 
-This module owns all external data access (disk / network).  The pure
-matching logic lives in ``cpe_validator.py``.
+This module owns all external data access (disk).  The pure matching logic
+lives in ``cpe_validator.py``. (OpenCTI vulnerability lookups were removed in
+6.3.1: nothing gave them an OpenCTI to ask.)
 """
 from __future__ import annotations
 
@@ -21,15 +20,8 @@ import json
 import logging
 import os
 import re
-import time
 from functools import lru_cache
 from typing import Dict, List, Optional
-
-from app.engine.cpe_validator import (
-    Cpe,
-    _eval_cpe_matches,
-    evaluate_nvd_configurations,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -194,357 +186,6 @@ def load_cisa_kev() -> List[Dict]:
     return []
 
 
-# ---------------------------------------------------------------------------
-# OpenCTI — per-CVE query (cached 1 h)
-# ---------------------------------------------------------------------------
-
-_octi_vuln_cache: Dict[str, Optional[Dict]] = {}
-_octi_vuln_cache_ts: Dict[str, float] = {}
-_OCTI_CACHE_TTL = 3600.0
-
-_OCTI_VULN_QUERY = """
-query VulnVersionRanges($cve: String!) {
-  vulnerabilities(
-    filters: {
-      mode: and,
-      filters: [{key: "name", values: [$cve], operator: eq}],
-      filterGroups: []
-    }
-    first: 1
-  ) {
-    edges {
-      node {
-        name
-        description
-        x_opencti_cvss_base_score
-        external_references {
-          edges {
-            node {
-              source_name
-              url
-              description
-            }
-          }
-        }
-        stixCoreRelationships(
-          relationship_type: "affects"
-          toTypes: ["Software"]
-          first: 200
-        ) {
-          edges {
-            node {
-              to {
-                ... on Software {
-                  name
-                  version
-                  cpe
-                }
-              }
-              start_time
-              stop_time
-            }
-          }
-        }
-      }
-    }
-  }
-}
-"""
-
-
-def fetch_cve_opencti(cve_id: str) -> Optional[Dict]:
-    """
-    Query OpenCTI for a Vulnerability entity matching the CVE ID.
-
-    Results are in-process cached for ``_OCTI_CACHE_TTL`` seconds.
-    """
-    cve_id = cve_id.upper()
-    now = time.monotonic()
-    if cve_id in _octi_vuln_cache:
-        if now - _octi_vuln_cache_ts.get(cve_id, 0) < _OCTI_CACHE_TTL:
-            return _octi_vuln_cache[cve_id]
-
-    result = _do_fetch_cve_opencti(cve_id)
-    _octi_vuln_cache[cve_id] = result
-    _octi_vuln_cache_ts[cve_id] = now
-    return result
-
-
-def _do_fetch_cve_opencti(cve_id: str) -> Optional[Dict]:
-    try:
-        from app.config import get_settings
-        import requests as _requests
-
-        settings = get_settings()
-        if not settings.opencti_url or not settings.opencti_token:
-            return None
-
-        headers = {
-            "Authorization": f"Bearer {settings.opencti_token}",
-            "Content-Type": "application/json",
-        }
-        ssl_ctx = settings.ssl_context
-        resp = _requests.post(
-            f"{settings.opencti_url.rstrip('/')}/graphql",
-            json={"query": _OCTI_VULN_QUERY, "variables": {"cve": cve_id}},
-            headers=headers,
-            verify=ssl_ctx,
-            timeout=10,
-        )
-        if resp.status_code != 200:
-            logger.debug("OpenCTI %s for %s", resp.status_code, cve_id)
-            return None
-
-        data = resp.json()
-        if "errors" in data:
-            logger.debug("OpenCTI GraphQL errors for %s: %s", cve_id, data["errors"])
-            return None
-
-        edges = (data.get("data") or {}).get("vulnerabilities", {}).get("edges", [])
-        if not edges:
-            return None
-
-        node = edges[0].get("node", {})
-        cpe_ranges: List[Dict] = []
-        for rel_edge in (node.get("stixCoreRelationships") or {}).get("edges", []):
-            sw = (rel_edge.get("node") or {}).get("to") or {}
-            cpe = sw.get("cpe")
-            version = sw.get("version")
-            if cpe:
-                cpe_ranges.append({
-                    "cpe23Uri": cpe,
-                    "versionEndIncluding": version or None,
-                    "versionStartIncluding": None,
-                    "versionStartExcluding": None,
-                    "versionEndExcluding": None,
-                    "vulnerable": True,
-                })
-
-        return {
-            "name": node.get("name", ""),
-            "description": node.get("description", ""),
-            "cvss_score": node.get("x_opencti_cvss_base_score"),
-            "cpe_ranges": cpe_ranges,
-        }
-    except Exception as exc:
-        logger.debug("OpenCTI query failed for %s: %s", cve_id, exc)
-        return None
-
-
-# ---------------------------------------------------------------------------
-# OpenCTI — bulk vulnerability index (all CVEs + actors, cached 1 h)
-# ---------------------------------------------------------------------------
-
-_octi_bulk_cache: Dict[str, Dict[str, Dict]] = {}
-_octi_bulk_cache_ts: Dict[str, float] = {}
-_OCTI_BULK_TTL = 3600.0
-
-_OCTI_BULK_VULN_QUERY = """
-query BulkVulnerabilities($cursor: ID, $count: Int!) {
-  vulnerabilities(first: $count, after: $cursor) {
-    pageInfo { hasNextPage endCursor }
-    edges {
-      node {
-        name
-        description
-        x_opencti_cvss_base_score
-        affected_software: stixCoreRelationships(
-          relationship_type: "affects"
-          toTypes: ["Software"]
-          first: 100
-        ) {
-          edges {
-            node {
-              to {
-                ... on Software {
-                  name
-                  version
-                  cpe
-                }
-              }
-            }
-          }
-        }
-        threat_actors: stixCoreRelationships(
-          relationship_type: "uses"
-          fromTypes: ["Intrusion-Set"]
-          first: 50
-        ) {
-          edges {
-            node {
-              from {
-                ... on IntrusionSet {
-                  name
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-}
-"""
-
-
-def fetch_opencti_vuln_index(client_id: Optional[str] = None) -> Dict[str, Dict]:
-    """
-    Return the full OpenCTI vulnerability index for the given client, fetching
-    and caching if needed.
-
-    OpenCTI is a per-tenant integration: the URL/token must come from the
-    ``client_opencti_map`` + ``opencti_inventory`` tables. If ``client_id`` is
-    None or the client has no OpenCTI assigned, an empty index is returned so
-    enrichment is skipped (no cross-tenant leakage).
-
-    Returns ``{CVE-ID: {description, cvss_score, cpe_ranges, actors}}``.
-    """
-    global _octi_bulk_cache, _octi_bulk_cache_ts
-    if not client_id:
-        return {}
-    now = time.monotonic()
-    cached = _octi_bulk_cache.get(client_id) if isinstance(_octi_bulk_cache, dict) else None
-    ts = _octi_bulk_cache_ts.get(client_id, 0.0) if isinstance(_octi_bulk_cache_ts, dict) else 0.0
-    if cached is not None and (now - ts) < _OCTI_BULK_TTL:
-        return cached
-    result = _do_fetch_opencti_vuln_index(client_id)
-    if not isinstance(_octi_bulk_cache, dict):
-        _octi_bulk_cache = {}
-        _octi_bulk_cache_ts = {}
-    _octi_bulk_cache[client_id] = result
-    _octi_bulk_cache_ts[client_id] = now
-    return result
-
-
-def _do_fetch_opencti_vuln_index(client_id: str) -> Dict[str, Dict]:
-    try:
-        from app.config import get_settings
-        from app.services.database import get_db
-        import requests as _req
-
-        cfg = get_db().get_client_opencti_config(client_id)
-        if not cfg or not cfg.get("url") or not cfg.get("token"):
-            return {}
-
-        headers = {
-            "Authorization": f"Bearer {cfg['token']}",
-            "Content-Type": "application/json",
-        }
-        ssl_ctx = get_settings().ssl_context
-        base = cfg["url"].rstrip("/") + "/graphql"
-        page_size = 50
-
-        index: Dict[str, Dict] = {}
-        cursor = None
-        page = 0
-
-        while True:
-            variables: Dict = {"count": page_size}
-            if cursor:
-                variables["cursor"] = cursor
-
-            resp = _req.post(
-                base,
-                json={"query": _OCTI_BULK_VULN_QUERY, "variables": variables},
-                headers=headers,
-                verify=ssl_ctx,
-                timeout=30,
-            )
-            if resp.status_code != 200:
-                logger.warning("[opencti-index] HTTP %s on page %d", resp.status_code, page)
-                break
-
-            data = resp.json()
-            if "errors" in data:
-                logger.warning("[opencti-index] GraphQL errors: %s", data["errors"])
-                break
-
-            vuln_data = (data.get("data") or {}).get("vulnerabilities", {})
-            for edge in vuln_data.get("edges", []):
-                node = edge.get("node") or {}
-                cve_id = (node.get("name") or "").upper()
-                if not cve_id.startswith("CVE-"):
-                    continue
-
-                cpe_ranges: List[Dict] = []
-                for rel in (node.get("affected_software") or {}).get("edges", []):
-                    sw = (rel.get("node") or {}).get("to") or {}
-                    cpe = sw.get("cpe")
-                    version = sw.get("version")
-                    if cpe:
-                        cpe_ranges.append({
-                            "cpe23Uri": cpe,
-                            "versionEndIncluding": version or None,
-                            "versionStartIncluding": None,
-                            "versionStartExcluding": None,
-                            "versionEndExcluding": None,
-                            "vulnerable": True,
-                        })
-
-                actors: List[str] = []
-                for rel in (node.get("threat_actors") or {}).get("edges", []):
-                    actor_name = ((rel.get("node") or {}).get("from") or {}).get("name", "")
-                    if actor_name and actor_name not in actors:
-                        actors.append(actor_name)
-
-                index[cve_id] = {
-                    "description": node.get("description", ""),
-                    "cvss_score": node.get("x_opencti_cvss_base_score"),
-                    "cpe_ranges": cpe_ranges,
-                    "actors": actors,
-                }
-
-            page_info = vuln_data.get("pageInfo", {})
-            if not page_info.get("hasNextPage"):
-                break
-            cursor = page_info.get("endCursor")
-            page += 1
-
-        logger.info("[opencti-index] Loaded %d vulnerabilities from OpenCTI", len(index))
-        return index
-
-    except Exception as exc:
-        logger.warning("[opencti-index] Fetch failed: %s", exc)
-        return {}
-
-
-# ---------------------------------------------------------------------------
-# OpenCTI CPE-range evaluation (reuses core cpe_validator logic)
-# ---------------------------------------------------------------------------
-
-def evaluate_opencti_ranges(
-    cpe_ranges: List[Dict], host_cpes: List[str],
-) -> Optional[bool]:
-    """
-    Evaluate OpenCTI CPE ranges against the host using CPE identity matching.
-
-    OpenCTI's NVD connector returns flat ``cpe_ranges`` (no nested nodes),
-    so we emulate a single OR-group of ``cpeMatch`` entries.
-    """
-    if not cpe_ranges:
-        return None
-    return _eval_cpe_matches(cpe_ranges, "OR", host_cpes)
-
-
-# ---------------------------------------------------------------------------
-# Cache management
-# ---------------------------------------------------------------------------
-
-def clear_opencti_vuln_cache() -> None:
-    """Flush all in-process OpenCTI caches (per-CVE and per-tenant bulk index)."""
-    global _octi_bulk_cache, _octi_bulk_cache_ts
-    _octi_vuln_cache.clear()
-    _octi_vuln_cache_ts.clear()
-    _octi_bulk_cache = {}
-    _octi_bulk_cache_ts = {}
-    # Allow inventory_engine to re-trigger a background warm-up per tenant
-    try:
-        import app.inventory_engine as _ie
-        _ie._octi_warmup_started = {}
-    except Exception:
-        pass
-
-
 def invalidate_nvd_cache() -> None:
     """Clear the LRU cache for NVD entries (e.g. after a data update)."""
     load_nvd_entry.cache_clear()
@@ -561,9 +202,7 @@ def on_component_added(device_id: str) -> None:
     Invalidates caches so the next vulnerability scan picks up the change.
     """
     logger.info("[sync] Component added to device %s — caches will refresh on next scan", device_id)
-    # Per-CVE OpenCTI cache is TTL-based; only bulk cache needs a nudge
-    # if the component introduces a new CPE that wasn't in the index.
-    # For now this is a no-op — the 1-hour TTL handles natural refresh.
+    # Nothing to flush: the NVD cache is keyed by CVE, not by device.
 
 
 def on_data_updated() -> None:
@@ -573,5 +212,4 @@ def on_data_updated() -> None:
     Flushes all caches so the next scan uses fresh data.
     """
     logger.info("[sync] CVE data updated — flushing all caches")
-    clear_opencti_vuln_cache()
     invalidate_nvd_cache()

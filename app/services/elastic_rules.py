@@ -18,7 +18,7 @@ import os
 import re
 import tomllib
 from datetime import date, datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from app.config import get_settings
 
@@ -486,8 +486,19 @@ def _decode(row: Dict[str, Any], *json_cols: str) -> Dict[str, Any]:
 
 def get_rule(conn, rule_id: str) -> Optional[Dict[str, Any]]:
     """One rule with its ``rule_json`` / ``metadata_json`` / ``stack_versions`` / ``stack_changes`` decoded."""
-    rows = rows_as_dicts(conn.execute("SELECT * FROM elastic_rules_index WHERE rule_id = ?", [rule_id]))
-    return _decode(rows[0], "rule_json", "metadata_json", "stack_versions", "stack_changes") if rows else None
+    return get_rules(conn, [rule_id]).get(rule_id)
+
+
+def get_rules(conn, rule_ids: Iterable[str]) -> Dict[str, Dict[str, Any]]:
+    """``get_rule`` for many rules in one query (each is a scan of the index): ``{rule_id: rule}``."""
+    ids = sorted({str(r) for r in rule_ids if r})
+    if not ids:
+        return {}
+    out: Dict[str, Dict[str, Any]] = {}
+    for row in rows_as_dicts(conn.execute(
+            "SELECT * FROM elastic_rules_index WHERE rule_id IN (SELECT unnest(?::VARCHAR[]))", [ids])):
+        out.setdefault(row["rule_id"], _decode(row, "rule_json", "metadata_json", "stack_versions", "stack_changes"))
+    return out
 
 
 def search_hunts(conn, q: str = "", technique: str = "", platform: str = "",

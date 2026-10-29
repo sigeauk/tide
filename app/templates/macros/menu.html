@@ -15,3 +15,18 @@
     {%- else %}{{ icon('more-vertical', '16') }}{% endif -%}
 </button>
 {%- endmacro %}
+
+{# A client page section's ⋮ (partials/client_*.html): ``item`` ("Manage SIEMs") opens the section's
+   dialog (``target``, its id). ``label`` names the section ("Linked SIEMs"). #}
+{% macro manage_menu(label, item, target, title='') -%}
+<div class="client-section-toggle__actions">
+    <div class="rh-more" data-more>
+        {{ more_button(label ~ ' actions', title=title or item, attrs='name="' ~ label ~ ' Actions"') }}
+        <div class="rh-more__menu" role="menu" hidden>
+            <button name="{{ item }}" type="button" role="menuitem" class="rh-more__item" data-click="el.show" data-target="{{ target }}">
+                {{ icon('pencil', '15') }}<span>{{ item }}</span>
+            </button>
+        </div>
+    </div>
+</div>
+{%- endmacro %}

@@ -166,7 +166,7 @@ Integrations are added in TIDE. Super admins add them under **Settings → Manag
 |-------------|-------|----------|
 | **SIEM** (Elastic) | SIEMs | Reading and writing detection rules. Splunk and Sentinel SIEMs can be recorded but don't sync yet. |
 | **OpenCTI** | Threat intel | The threat actors (intrusion sets) Threat Landscape adds to ATT&CK's. |
-| **GitLab** | Source control | Recorded and linked to clients, for report publishing (planned). |
+| **GitLab** | Source control | The GitLab whose projects clients link, for rule backup and issues (see [Link GitLab projects](CLIENTS.md#link-gitlab-projects)). It has no token of its own: each project has its own. |
 | **Keycloak** | Identity | Single sign-on: TIDE signs people in with it (see [Single sign-on with Keycloak](#single-sign-on-with-keycloak)). There is one. |
 
 A client's admins then link the SIEM spaces and connectors their client should use from the client's page. Credentials are stored encrypted with the key in `data/credentials.key`; see [Backups](OPERATIONS.md#backups-and-upgrades).

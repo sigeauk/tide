@@ -98,10 +98,6 @@ class Settings(BaseSettings):
         alias="ELASTIC_INDICES"
     )
     
-    # --- OPENCTI ---
-    opencti_url: str = Field(default="http://opencti:8080", alias="OPENCTI_URL")
-    opencti_token: str = Field(default="", alias="OPENCTI_TOKEN")
-
     # --- ELASTIC APM ---
     elastic_apm_enabled: bool = Field(default=False, alias="ELASTIC_APM_ENABLED")
     elastic_apm_service_name: str = Field(default="TIDE", alias="ELASTIC_APM_SERVICE_NAME")
@@ -137,10 +133,6 @@ class Settings(BaseSettings):
             ctx.verify_mode = _ssl.CERT_NONE
             return ctx
         return _ssl.create_default_context()
-    
-    # --- GITLAB ---
-    gitlab_url: str = Field(default="http://gitlab:8929/", alias="GITLAB_URL")
-    gitlab_token: str = Field(default="", alias="GITLAB_TOKEN")
     
     # --- BUILT-IN DATA (baked into the Docker image; app/services/builtin_data.py reports on it) ---
     sigma_repo_path: str = Field(default="/opt/repos/sigma", alias="SIGMA_REPO_PATH")

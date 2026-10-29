@@ -1,6 +1,6 @@
 /*
- * The New / Edit Client dialog (#client-modal) on Management and the Clients page, and Delete
- * client (those pages and a client's own page). What follows a save or a delete is the control's
+ * The New Client dialog (#client-modal) on Management's Clients tab, and Delete client (a client's
+ * own page; its Edit client has its own dialog). What follows a save or a delete is the control's
  * data-after: "tab" refreshes Management's Clients tab, a path opens that page, anything else
  * reloads the page.
  */
@@ -31,7 +31,6 @@
 
     TIDE.actions('clients', {
         create: function () { openModal(); },
-        edit: function (e, el) { openModal(el.dataset.id, el.dataset.name, el.dataset.desc); },
         close: closeModal,
         backdrop: function (e, el) { if (e.target === el) closeModal(); },
         submit: async function (e, form) {

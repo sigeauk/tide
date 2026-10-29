@@ -119,8 +119,9 @@
         htmx.ajax('GET', el.getAttribute('data-url'), { target: '#modal-container', swap: 'innerHTML' });
     });
     // A section head that shows or hides its body (data-body; data-display is its shown display),
-    // turning its chevron (data-chev).
+    // turning its chevron (data-chev). Its ⋮ menu (data-more) opens without folding it.
     TIDE.action('section.toggle', function (e, el) {
+        if (e.target.closest && e.target.closest('[data-more]')) return;
         var b = document.getElementById(el.getAttribute('data-body')), c = document.getElementById(el.getAttribute('data-chev'));
         var opening = b.style.display === 'none';
         b.style.display = opening ? (el.getAttribute('data-display') || '') : 'none';

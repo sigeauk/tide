@@ -92,7 +92,7 @@ The **⋮** menu beside the dashboard makes a **New dashboard**, **Duplicate**s 
 
 ## Your profile
 
-Click your name at the bottom of the sidebar, then **Settings**. **Profile & Preferences** has:
+Click your name at the bottom of the sidebar, then **Settings**. Settings opens on **Management** if you're an admin; **Profile & Preferences** is its last tab, and where it opens for everyone else. It has:
 
 - **Profile:** the name TIDE shows for you, and your picture (PNG, JPEG, WebP or GIF, up to 256 KB). Without a picture, TIDE shows your initials.
 - **Sign-in:** how you sign in, your roles on each client, when you last signed in, and your email and password if you sign in with a TIDE account.

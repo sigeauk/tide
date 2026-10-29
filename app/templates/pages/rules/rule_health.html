@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon, icon_text %}
-{% from "macros/filters.html" import filter_dropdown, filter_choice, filter_multi, choice_rows %}
+{% from "macros/filters.html" import filter_dropdown, filter_choice, filter_multi, choice_rows, check_rows, choice_text %}
 {% from "macros/modal.html" import close_button %}
 {% from "macros/menu.html" import more_button %}
 {% from "macros/help.html" import help_button with context %}
@@ -63,7 +63,7 @@
         </div>
     </div>
 </div>
-{% set rh_filter_include = "[name='search'], [name='space'], [name='enabled'], [name='state'], [name='upstream'], [name='min_score'], [name='max_score'], [name='validated_from'], [name='validated_to'], [name='sort_score'], [name='sort_validated'], [name='sort_name'], [name='sort_col'], [name='sort_dir'], [name='view']" %}
+{% set rh_filter_include = "[name='search'], [name='space'], [name='enabled'], [name='state'], [name='linked_to'], [name='upstream'], [name='min_score'], [name='max_score'], [name='validated_from'], [name='validated_to'], [name='sort_score'], [name='sort_validated'], [name='sort_name'], [name='sort_col'], [name='sort_dir'], [name='view']" %}
 
 <div class="rule-browser-controls">
 <!-- Metrics Row -->
@@ -104,12 +104,22 @@
     {{ filter_choice('rh-status', 'enabled', 'Status', [('', 'All'), ('true', 'Enabled'), ('false', 'Disabled')],
                      enabled, counts.enabled or {}, rh_hx) }}
 
-    {{ filter_multi('rh-state', 'state', 'State', [('unlinked', 'Unlinked'), ('linked', 'Linked'), ('offline', 'SIEM offline'), ('deprecated', 'Deprecated')],
-                    state, 'All states', counts.state or {}, rh_hx,
-                    {'unlinked': 'Found at the last successful sync, with no copy linked in another destination',
-                     'linked': 'Found at the last successful sync, with a copy linked in another destination',
-                     'offline': "Its SIEM could not be reached before the last sync; shown from TIDE's last copy",
-                     'deprecated': 'Not found at the last successful sync'}) }}
+    {# State: the card's badge. Linked to narrows Linked to the rules linked to a copy at one of the SIEM
+       filter's destinations; the page script names the button and ticks Linked when one is picked. #}
+    {% set state_opts = [('unlinked', 'Unlinked'), ('linked', 'Linked'), ('offline', 'SIEM offline'), ('deprecated', 'Deprecated')] %}
+    {% set linked_to_opts = [('', 'Any SIEM')] + siem_opts[1:] %}
+    {% set state_text = [] %}
+    {% for value, text in state_opts if value in state %}{% set _ = state_text.append(text ~ (' to ' ~ choice_text(linked_to_opts, linked_to) if value == 'linked' and linked_to else '')) %}{% endfor %}
+    {% call filter_dropdown('rh-state', 'State', state_text | join(', ') or 'All states') %}
+        <div class="tide-filter-section-label">Show</div>
+        {{ check_rows('state', state_opts, state, counts.state or {}, rh_hx,
+                      {'unlinked': 'Found at the last successful sync, with no copy linked in another destination',
+                       'linked': 'Found at the last successful sync, with a copy linked in another destination',
+                       'offline': "Its SIEM could not be reached before the last sync; shown from TIDE's last copy",
+                       'deprecated': 'Not found at the last successful sync'}) }}
+        <div class="tide-filter-section-label">Linked to</div>
+        {{ choice_rows('rh-linked-to', 'linked_to', linked_to_opts, linked_to, counts.linked_to or {}, rh_hx) }}
+    {% endcall %}
 
     {{ filter_multi('rh-upstream', 'upstream', 'Upstream', upstream_options, upstream, 'Any', counts.upstream or {}, rh_hx,
                     {'update_elastic': "Came from Elastic's rules, which have a newer version of it",
@@ -179,7 +189,7 @@
 
 <!-- Rules Grid - Load on page load via HTMX -->
 <div class="rule-scroll-region">
-<div id="rules-grid"
+<div id="rules-grid" data-keep-url="/rules"
      hx-get="/api/rules"
      hx-trigger="load, refreshRules from:body"
     hx-include="{{ rh_filter_include }}"

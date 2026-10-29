@@ -1,33 +1,41 @@
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon %}
 {% from "macros/modal.html" import close_button %}
+{% from "macros/menu.html" import more_button %}
 {% from "macros/help.html" import help_button with context %}
 {% from "components/ui/loading_state.html" import loading_state %}
+{% from "components/ui/breadcrumb.html" import breadcrumb %}
 
 {% block title %}{{ client.name }} | Clients | TIDE{% endblock %}
 
 {% block content %}
-<div class="page-header flex items-start justify-between">
+{# The header as every page has it (Rule Health's, the System page's): breadcrumb, then the title with
+   its pill and ?, the description, and the ⋮ level with the title. #}
+{{ breadcrumb(items=[('Home', '/'), ('Settings', '/settings'), ('Clients', '/settings/management?tab=clients'), (client.name, none)]) }}
+<div class="page-header flex items-start justify-between gap-md">
     <div>
-        <div class="flex items-center gap-sm mb-xs">
-            <a name="Clients" href="/settings/management?tab=clients" class="text-muted fs-base">&larr; Clients</a>
-        </div>
-        <h1 class="page-title-hero">{{ client.name }} {{ help_button('client') }}</h1>
-        <span class="system-card__classification mt-xs">{{ client.slug }}</span>
-        <p class="page-subtitle">
-            {% if client.description %}{{ client.description }}{% else %}No description.{% endif %}
-        </p>
+        <h1 class="page-title-hero">
+            {{ client.name }}
+            <span class="status-pill sys-header__clf" title="Slug">{{ client.slug }}</span>
+            {{ help_button('client') }}
+        </h1>
+        <p class="page-subtitle">{{ client.description or 'No description.' }}</p>
     </div>
-    <div class="flex gap-sm shrink-0 items-start pt-sm">
-        <button  name="Edit Client" class="btn btn-secondary btn-sm" data-click="el.show" data-target="edit-client-modal">
-            {{ icon('pencil', '14') }} Edit
-        </button>
-        {% if not client.is_default %}
-        <button name="Delete" class="btn btn-danger btn-sm"
-                data-click="clients.delete" data-id="{{ client.id }}" data-name="{{ client.name }}" data-after="/settings/management?tab=clients">
-            {{ icon('trash-2', '14') }} Delete
-        </button>
-        {% endif %}
+    <div class="rh-more shrink-0" data-more>
+        {{ more_button('More actions', title='Edit this client' ~ ('' if client.is_default else ', or delete it'), attrs='name="Client Actions"') }}
+        <div class="rh-more__menu" role="menu" hidden>
+            <button name="Edit Client" type="button" role="menuitem" class="rh-more__item"
+                    data-click="el.show" data-target="edit-client-modal">
+                {{ icon('pencil', '15') }}<span>Edit client</span>
+            </button>
+            {% if not client.is_default %}
+            <div class="rh-more__sep" role="separator"></div>
+            <button name="Delete" type="button" role="menuitem" class="rh-more__item rh-more__item--danger"
+                    data-click="clients.delete" data-id="{{ client.id }}" data-name="{{ client.name }}" data-after="/settings/management?tab=clients">
+                {{ icon('trash-2', '15') }}<span>Delete client</span>
+            </button>
+            {% endif %}
+        </div>
     </div>
 </div>
 
@@ -70,6 +78,13 @@
 <div class="card card-padded card-mb" id="client-connectors-card">
     <div id="client-connectors-section">
         {% include "partials/client_connectors.html" %}
+    </div>
+</div>
+
+<!-- GitLab Projects Section (rule backup and issues, app.services.gitlab) -->
+<div class="card card-padded card-mb" id="client-gitlab-card">
+    <div id="client-gitlab-section">
+        {% include "partials/client_gitlab.html" %}
     </div>
 </div>
 

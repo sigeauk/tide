@@ -1,31 +1,37 @@
-{# Partial: host_header.html — re-rendered after device edit
-   Context: host, system, software (list), vulns (list), user #}
+{# Partial: host_header.html — the device's header and figures, re-rendered after Edit device.
+   Context: host, system, software (list), vulns (list), clf_color, user.
+   The header as every page has it (Rule Health's, the System page's): the title with the system's
+   classification pill, the device's address and operating system as its description (when it has
+   either), and the ⋮ level with the title. #}
 {% from "macros/icons.html" import icon %}
+{% from "macros/menu.html" import more_button %}
 <div id="host-header">
-    <div class="flex items-start justify-between flex-wrap gap-md mb-lg">
+    <div class="page-header flex items-start justify-between gap-md">
         <div>
-            <h1 class="m-0 fs-2xl fw-700">
-                {{ icon('server', '24') }} {{ host.name }}
+            <h1 class="page-title-hero">
+                {{ host.name }}
+                {% if system and system.classification %}
+                <span class="status-pill sys-header__clf{% if clf_color %} u-bg-dyn-tint clf-tinted{% endif %}"
+                      {% if clf_color %}style="--u-bg-color:{{ clf_color }}"{% endif %}
+                      title="Classification">{{ system.classification }}</span>
+                {% endif %}
             </h1>
-            {% if system and system.classification %}
-            <span class="system-card__classification u-bg-dyn-tint clf-tinted clf-tinted--soft host-header-clf" style="--u-bg-color:{{ clf_color }}">{{ icon('lock', '10') }} {{ system.classification }}</span>
-            {% endif %}
-            {% if host.ip_address %}
-            <p class="mt-xs mx-0 mb-0 text-muted mono fs-base">{{ host.ip_address }}</p>
-            {% endif %}
-            {% if host.os %}
-            <p class="mt-xs mx-0 mb-0 text-muted fs-base">{{ host.os }}</p>
+            {% if host.ip_address or host.os %}
+            <p class="page-subtitle">
+                {%- if host.ip_address %}{{ host.ip_address }}{% endif %}
+                {%- if host.ip_address and host.os %} &middot; {% endif %}
+                {{- host.os or '' -}}
+            </p>
             {% endif %}
         </div>
-        <div class="flex gap-sm flex-wrap">
-            <button name="Edit Device" class="btn btn-secondary btn-sm"
-                    data-click="el.show" data-target="edit-host-modal">
-                {{ icon('pencil', '14') }} Edit Device
-            </button>
-            <button name="Add Package" class="btn btn-primary btn-sm"
-                    data-click="el.show" data-target="add-sw-modal">
-                {{ icon('plus', '16') }} Add Package
-            </button>
+        <div class="rh-more shrink-0" data-more>
+            {{ more_button('More actions', title='Edit this device', attrs='name="Device Actions"') }}
+            <div class="rh-more__menu" role="menu" hidden>
+                <button name="Edit Device" type="button" role="menuitem" class="rh-more__item"
+                        data-click="el.show" data-target="edit-host-modal">
+                    {{ icon('pencil', '15') }}<span>Edit device</span>
+                </button>
+            </div>
         </div>
     </div>
     <!-- Stat Cards -->

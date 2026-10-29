@@ -434,6 +434,15 @@ async def lifespan(app: FastAPI):
         except Exception as _e:
             logger.warning(f"Tenant rule identity re-key skipped: {_e}")
 
+        # 6.3.1 — the shared threat actors are MITRE's alone; an earlier threat sync merged a
+        # client's OpenCTI actors into them, where every client saw them. Rebuilt from MITRE's
+        # files when so (nothing to do otherwise).
+        try:
+            from app.services.sync import rebuild_shared_actors_if_mixed
+            rebuild_shared_actors_if_mixed()
+        except Exception as _e:
+            logger.warning(f"Shared threat actor check skipped: {_e}")
+
         # 4.1.3 \u2014 startup auth-source banner. Logs (in plain English) what
         # TIDE will use to talk to Kibana on the next sync. Saves operators
         # hours of "is it the env var, the DB record, or the per-tenant
@@ -1970,6 +1979,7 @@ def create_app() -> FastAPI:
         enabled_q = qp.get("enabled") or ""
         from app.services.database import normalize_rule_states
         state_q = normalize_rule_states(qp.getlist("state"))
+        linked_to_q = (qp.get("linked_to") or "") if "linked" in state_q else ""
         upstream_q = rule_origins.filter_values(u for u in qp.getlist("upstream") if u)
         min_score_q = qp.get("min_score") or ""
         max_score_q = qp.get("max_score") or ""
@@ -1998,21 +2008,19 @@ def create_app() -> FastAPI:
         # the grid renders (see _get_filtered_deduped_rules), so a
         # migrated/merged identity's staging and production copies aren't
         # double-counted against the grid's single card.
-        _all_rules, _deduped_rules = _get_filtered_rules(
-            db,
-            RuleFilters(
-                search=search_q or None,
-                space=space_q or None,
-                enabled=None if not enabled_q else (enabled_q.lower() == 'true'),
-                state=state_q,
-                upstream=upstream_q,
-                min_score=min_score_int,
-                max_score=max_score_int,
-                validated_from=_parse_date_bound(validated_from_q, end_of_day=False),
-                validated_to=_parse_date_bound(validated_to_q, end_of_day=True),
-            ),
-            _cid,
+        page_filters = RuleFilters(
+            search=search_q or None,
+            space=space_q or None,
+            enabled=None if not enabled_q else (enabled_q.lower() == 'true'),
+            state=state_q,
+            linked_to=linked_to_q or None,
+            upstream=upstream_q,
+            min_score=min_score_int,
+            max_score=max_score_int,
+            validated_from=_parse_date_bound(validated_from_q, end_of_day=False),
+            validated_to=_parse_date_bound(validated_to_q, end_of_day=True),
         )
+        _all_rules, _deduped_rules = _get_filtered_rules(db, page_filters, _cid)
         metrics = _metrics_from_rules(_deduped_rules, _all_rules)
         # Hide orphan space buckets (rules whose (siem_id, space) is no
         # longer in client_siem_map after a mapping change). The sync
@@ -2074,11 +2082,12 @@ def create_app() -> FastAPI:
                 "space": space_q,
                 "enabled": enabled_q,
                 "state": state_q,
+                "linked_to": linked_to_q,
                 "upstream": upstream_q,
                 "upstream_options": rule_origins.FILTER_STATES,
-                # How many of the tenant's rules each SIEM, Status, State and Upstream choice holds,
-                # whatever the filters
-                "filter_counts": db.rule_filter_counts(),
+                # How many rules each SIEM, Status, State, Linked to and Upstream choice would show,
+                # with the other filters as they are (kept up to date by the metrics' filterCounts)
+                "filter_counts": db.rule_filter_counts(page_filters, client_id=_cid),
                 "min_score": min_score_q,
                 "max_score": max_score_q,
                 "validated_from": validated_from_q,
@@ -2657,14 +2666,20 @@ def create_app() -> FastAPI:
             }
         )
     
-    # Settings & Administration (/settings/*): one page with a tab each for Profile & Preferences,
-    # Management, Diagnostics and Documentation (pages/admin/settings_layout.html). Each tab keeps
-    # its own access rule; the old addresses redirect to their tab.
+    # Settings & Administration (/settings/*): one page with a tab each for Management, Diagnostics,
+    # Documentation, Changelog and Profile & Preferences (pages/admin/settings_layout.html). Each tab
+    # keeps its own access rule; the old addresses redirect to their tab.
     @app.get("/preferences")
     def preferences_page():
-        return RedirectResponse(url="/settings", status_code=302)
+        return RedirectResponse(url="/settings/profile", status_code=302)
 
-    @app.get("/settings", response_class=HTMLResponse)
+    @app.get("/settings")
+    def settings_home(user: CurrentUser):
+        """Settings opens on Management for those who may see it, else on Profile & Preferences."""
+        return RedirectResponse(url="/settings/management" if user and user.is_admin() else "/settings/profile",
+                                status_code=302)
+
+    @app.get("/settings/profile", response_class=HTMLResponse)
     def settings_page(request: Request, user: CurrentUser, db: DbDep):
         """Profile & Preferences: your name and picture, theme, sign-in and API keys."""
         db_user = db.get_user_by_id(user.id) if user else None
@@ -2748,26 +2763,10 @@ def create_app() -> FastAPI:
              "doc_page": docs.CHANGELOG, "doc_nav": None, "doc_slug": docs.CHANGELOG.slug},
         )
 
-    @app.get("/clients", response_class=HTMLResponse)
-    def clients_page(request: Request, user: CurrentUser, db: DbDep):
-        """Client management page (admin only)."""
-        if user and not user.is_admin():
-            from fastapi.responses import RedirectResponse
-            return RedirectResponse(url="/", status_code=302)
-        clients = db.list_clients()
-        # Enrich each client dict with SIEM configs and users for the template
-        for c in clients:
-            c["_siem_configs"] = db.list_siem_configs(c["id"])
-            c["_users"] = db.get_client_users(c["id"])
-        return render_template(
-            "pages/admin/clients.html",
-            request,
-            {
-                "user": user,
-                "active_page": "clients",
-                "clients": clients,
-            }
-        )
+    @app.get("/clients")
+    def clients_page():
+        """The clients are listed in Settings → Management → Clients; the old address goes there."""
+        return RedirectResponse(url="/settings/management?tab=clients", status_code=302)
 
     @app.get("/clients/{client_id}", response_class=HTMLResponse)
     def client_detail_page(request: Request, client_id: str, user: CurrentUser, db: DbDep):
@@ -2784,12 +2783,6 @@ def create_app() -> FastAPI:
         # Available SIEMs — show all so same SIEM can be linked as production + staging
         all_siems = db.list_siem_inventory()
         available_siems = all_siems
-        # 5.0.0 — legacy per-tenant OpenCTI inventory linking has
-        # been removed. The new per-tenant link surface is the
-        # ``Linked CTI Connectors`` section just below, driven by
-        # ``client_connectors`` / ``available_connectors``.
-        client_opencti: list = []
-        available_opencti: list = []
         # CTI connectors linked to this client (new generic framework).
         # Per-tenant linking lives here on the client detail page, mirroring
         # the SIEM/OpenCTI pattern, so operators add/remove connectors from
@@ -2851,7 +2844,7 @@ def create_app() -> FastAPI:
                     siem_rule_counts[str(space)] = entry  # legacy fallback
         except Exception as _exc:
             logger.warning(f"siem_rule_counts read for client {client_id} failed: {_exc}")
-        from app.api.management import can_switch_to_client
+        from app.api.management import can_switch_to_client, client_gitlab_context
         return render_template(
             "pages/admin/client_detail.html",
             request,
@@ -2865,8 +2858,6 @@ def create_app() -> FastAPI:
                 "available_users": available_users,
                 "all_roles": all_roles,
                 "known_kibana_spaces": (db.get_all_kibana_spaces() or []),
-                "client_opencti": client_opencti,
-                "available_opencti": available_opencti,
                 "client_connectors": client_connectors,
                 "available_connectors": available_connectors,
                 "siems": all_siems,
@@ -2879,6 +2870,7 @@ def create_app() -> FastAPI:
                 "siem_rule_counts_by_pair": siem_rule_counts_by_pair,
                 "all_clients": [c for c in db.list_clients() if c["id"] != client_id],
                 "can_switch": can_switch_to_client(user, client_id, db),
+                **{k: v for k, v in client_gitlab_context(client_id, db).items() if k != "client"},
             }
         )
     

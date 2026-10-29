@@ -1,0 +1,259 @@
+{# Partial: client_gitlab.html -- the client's GitLab projects (app.services.gitlab), laid out like
+   Linked SIEMs and Linked CTI Connectors above it.
+   Context (management.client_gitlab_context): client, client_gitlab_projects (list_client_gitlab_projects
+   rows + expiry_days), gitlab_instances, gitlab_purposes, gitlab_default_branch, gitlab_expiry_days,
+   gitlab_destinations, has_backup_project.
+   A project is used for rule backup, issues or both (p.uses). Each has its own access token, never
+   shown again; the edit popover's blank token keeps it. Every change re-renders this section, which
+   tests the project again. Each project's ⋮ has Test and Edit; the backup project's also Back up
+   now and Pause/Resume backups. The backup project shows the destinations it doesn't back up
+   (skip_names) and its last backup (backing_up, last_backup: app.services.gitlab_backup); while one
+   runs, the section asks for itself again every few seconds. #}
+{% from "macros/icons.html" import icon %}
+{% from "macros/modal.html" import close_button, empty_state %}
+{% from "macros/menu.html" import more_button, manage_menu %}
+{% set section = '#client-gitlab-section' %}
+
+{# What it's used for: Rule backup (only one project per client) and Issues. #}
+{% macro use_boxes(p) %}
+{% set backup_taken = has_backup_project and not (p and p.backup) %}
+<div class="client-roles">
+    <label class="role-checkbox client-role-box"{% if backup_taken %} title="Rules are already backed up to another of this client's projects"{% endif %}>
+        <input type="checkbox" name="use" value="backup" data-change="clientGitlab.uses"
+               {% if (p and p.backup) or (not p and not has_backup_project) %} checked{% endif %}{% if backup_taken %} disabled{% endif %}> Rule backup
+    </label>
+    <label class="role-checkbox client-role-box">
+        <input type="checkbox" name="use" value="issues" data-change="clientGitlab.uses"
+               {% if (p and p.issues) or (not p and has_backup_project) %} checked{% endif %}> Issues
+    </label>
+</div>
+{% endmacro %}
+
+{# Rule backup's settings: branch, folder and the destinations it backs up (all, unless unticked). #}
+{% macro backup_fields(p, id_prefix='') %}
+<div>
+    <label class="form-label"{% if id_prefix %} for="{{ id_prefix }}branch"{% endif %}>Branch</label>
+    <input type="text" name="branch"{% if id_prefix %} id="{{ id_prefix }}branch"{% endif %} class="form-input"
+           value="{{ (p.branch if p else '') or gitlab_default_branch }}">
+</div>
+<div>
+    <label class="form-label"{% if id_prefix %} for="{{ id_prefix }}folder"{% endif %}>Folder (optional)</label>
+    <input type="text" name="folder"{% if id_prefix %} id="{{ id_prefix }}folder"{% endif %} class="form-input"
+           value="{{ (p.folder if p else '') or '' }}" placeholder="The project's top folder">
+</div>
+{% if gitlab_destinations %}
+<div>
+    <span class="form-label">Back up</span>
+    <div class="stack gap-xs">
+        {% for d in gitlab_destinations %}
+        <label class="role-checkbox client-role-box">
+            <input type="checkbox" name="dest" value="{{ d.key }}"{% if not p or d.pair not in p.skip %} checked{% endif %}> {{ d.name }}
+        </label>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+{% endmacro %}
+
+<div name="GitLab Projects Edit" class="client-section-toggle" data-click="section.toggle" data-body="gitlab-body" data-chev="gitlab-chev">
+    <span class="client-list-item__icon">{{ icon('gitlab', '14') }}</span>
+    <h2 class="client-section-toggle__title">GitLab Projects</h2>
+    <span class="badge badge-neutral badge--xs">{{ client_gitlab_projects | length }}</span>
+    {{ manage_menu('GitLab Projects', 'Manage projects', 'edit-gitlab-modal', 'Link GitLab projects, or remove them') }}
+    <span id="gitlab-chev" class="client-section-toggle__chevron" style="transform:rotate(90deg);">{{ icon('chevron-right', '16') }}</span>
+</div>
+
+<div id="gitlab-body">
+{% if client_gitlab_projects %}
+<div class="client-list">
+    {% for p in client_gitlab_projects %}
+    {% set edit_id = 'gitlab-edit-' ~ loop.index %}
+    <div class="client-list-item client-list-item--{{ 'inactive' if p.last_status == 'fail' else 'active' }}">
+        <div class="client-list-item__body">
+            <span class="client-list-item__title cursor-default">{{ p.name or p.project }}</span>
+            {% for u in p.uses %}<span class="badge badge-info badge--xs">{{ gitlab_purposes[u] }}</span>{% endfor %}
+            <span class="badge badge-muted fs-xs">{{ p.gitlab_label or 'GitLab removed' }}</span>
+            {% if p.last_status == 'ok' %}<span class="badge badge-success badge--xs">Ready</span>
+            {% elif p.last_status == 'warn' %}<span class="badge badge-warning badge--xs">Needs attention</span>
+            {% elif p.last_status == 'fail' %}<span class="badge badge-danger badge--xs">Can't use</span>
+            {% else %}<span class="badge badge-grey badge--xs">Untested</span>{% endif %}
+            {% if p.backup and p.backup_paused %}<span class="badge badge-grey badge--xs">Backups paused</span>{% endif %}
+            <span class="client-list-item__meta">
+                {% if p.project_url %}<a href="{{ p.project_url }}" target="_blank" rel="noopener" class="text-primary">{{ p.project }}</a>{% else %}{{ p.project }}{% endif %}
+                {% if p.backup %} &middot; {{ p.branch or gitlab_default_branch }}{% if p.folder %} &middot; {{ p.folder }}/{% endif %}{% endif %}
+            </span>
+            {% if p.expiry_days is not none %}
+            <span class="client-list-item__meta{{ ' text-danger' if p.expiry_days <= gitlab_expiry_days else '' }}">Token expires {{ p.token_expires_at }}</span>
+            {% endif %}
+            {% if p.last_message and p.last_status != 'ok' %}
+            <span class="client-list-item__meta client-gitlab-message">{{ p.last_message }}</span>
+            {% endif %}
+            {% if p.backup %}
+            {% set b = p.last_backup %}
+            {% if p.skip_names %}
+            <span class="client-list-item__meta client-gitlab-message">Doesn't back up {{ p.skip_names | join(', ') }}.</span>
+            {% endif %}
+            <span class="client-list-item__meta client-gitlab-message{{ ' text-danger' if b and b.status == 'failed' and not p.backing_up and not p.backup_paused else '' }}">
+                {% if p.backing_up %}Backing up&hellip;
+                {% elif p.backup_paused %}Backups are paused: TIDE won't back up to it until you resume them.{% if b %} Last backup {{ b.started_at.strftime('%Y-%m-%d %H:%M') }}.{% endif %}
+                {% elif not b %}Not backed up yet: it backs up after each sync, or now with Back up now.
+                {% else %}{{ 'Last backup' if b.status != 'failed' else 'Last backup failed' }} {{ b.started_at.strftime('%Y-%m-%d %H:%M') }}
+                    ({{ 'after a sync' if b.trigger == 'sync' else 'Back up now' }}): {{ b.message }}
+                    {% if b.commit_url %}<a href="{{ b.commit_url }}" target="_blank" rel="noopener" class="text-primary">See the commit</a>{% endif %}
+                {% endif %}
+            </span>
+            {% if p.backing_up %}
+            {# Asks for the section again until the backup ends. #}
+            <span hx-get="/api/management/clients/{{ client.id }}/gitlab-projects" hx-trigger="load delay:3s"
+                  hx-target="{{ section }}" hx-swap="innerHTML" aria-hidden="true"></span>
+            {% endif %}
+            {% endif %}
+        </div>
+        <div class="relative flex-none">
+            <div class="rh-more" data-more>
+                {{ more_button('Project actions', title=('Back up now, pause or resume backups, test or edit it' if p.backup else 'Test or edit it'),
+                               attrs='name="GitLab Project Actions"') }}
+                <div class="rh-more__menu" role="menu" hidden>
+                    {% if p.backup and p.backup_paused %}
+                    <button name="Resume Backups" type="button" role="menuitem" class="rh-more__item"
+                            hx-post="/api/management/clients/{{ client.id }}/gitlab-projects/{{ p.id }}/pause" hx-vals='{"paused": "0"}'
+                            hx-target="{{ section }}" hx-swap="innerHTML"
+                            title="Back up to it after each sync again">{{ icon('play', '15') }}<span>Resume backups</span></button>
+                    {% elif p.backup %}
+                    <button name="Back Up Now" type="button" role="menuitem" class="rh-more__item"
+                            hx-post="/api/management/clients/{{ client.id }}/gitlab-projects/{{ p.id }}/backup"
+                            hx-target="{{ section }}" hx-swap="innerHTML"
+                            {% if p.backing_up or p.last_status not in ('ok', 'warn') %}disabled{% endif %}
+                            title="Back up the rules of every destination it backs up, now">{{ icon('upload', '15') }}<span>Back up now</span></button>
+                    <button name="Pause Backups" type="button" role="menuitem" class="rh-more__item"
+                            hx-post="/api/management/clients/{{ client.id }}/gitlab-projects/{{ p.id }}/pause" hx-vals='{"paused": "1"}'
+                            hx-target="{{ section }}" hx-swap="innerHTML"
+                            title="Stop backing up to it, keeping it linked">{{ icon('pause', '15') }}<span>Pause backups</span></button>
+                    {% endif %}
+                    {% if p.backup %}<div class="rh-more__sep" role="separator"></div>{% endif %}
+                    <button name="Test Project" type="button" role="menuitem" class="rh-more__item"
+                            hx-post="/api/management/clients/{{ client.id }}/gitlab-projects/{{ p.id }}/test"
+                            hx-target="{{ section }}" hx-swap="innerHTML"
+                            title="Test it the way TIDE will use it, with its token">{{ icon('zap', '15') }}<span>Test</span></button>
+                    <button name="Edit Project" type="button" role="menuitem" class="rh-more__item"
+                            title="Edit what it's used for, its name, access token{{ ', branch, folder and destinations' if p.backup else '' }}"
+                            data-click="clientSiems.toggleEdit" data-target="{{ edit_id }}">{{ icon('pencil', '15') }}<span>Edit</span></button>
+                </div>
+            </div>
+            <div id="{{ edit_id }}" class="client-siem-edit-popover" style="display:none;" data-stop-click>
+                <form hx-post="/api/management/clients/{{ client.id }}/gitlab-projects/{{ p.id }}"
+                      hx-target="{{ section }}" hx-swap="innerHTML" class="stack gap-sm">
+                    <div>
+                        <label class="form-label">Name</label>
+                        <input type="text" name="name" value="{{ p.name or '' }}" class="form-input" placeholder="{{ p.project }}">
+                    </div>
+                    <div>
+                        <span class="form-label">Use it for</span>
+                        {{ use_boxes(p) }}
+                    </div>
+                    <div class="stack gap-sm client-gitlab-backup" data-gitlab-backup-only{% if not p.backup %} hidden{% endif %}>
+                        {{ backup_fields(p) }}
+                    </div>
+                    <div>
+                        <label class="form-label">New access token</label>
+                        <input type="password" name="token" class="form-input" autocomplete="new-password" placeholder="Leave blank to keep it">
+                    </div>
+                    <div class="flex justify-end gap-sm">
+                        <button type="button" class="btn btn-secondary btn-sm" data-click="clientSiems.toggleEdit" data-target="{{ edit_id }}">Cancel</button>
+                        <button type="submit" class="btn btn-primary btn-sm">{{ icon('save', '12') }} Save</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+{% call empty_state('gitlab') %}
+    <p class="empty-state-title">No GitLab projects linked to this client yet.</p>
+    <p>Link one project to back up its rules to, and any to raise issues in. One project can do both.</p>
+{% endcall %}
+{% endif %}
+</div>
+
+<!-- Edit GitLab Projects Modal -->
+<div name="Edit Gitlab Modal" id="edit-gitlab-modal" class="modal-overlay" style="display:none;"
+     data-click="backdrop.hide">
+    <div class="modal-content modal-md">
+        <div class="modal-header">
+            <h3 class="modal-title">Manage GitLab projects &mdash; {{ client.name }}</h3>
+            {{ close_button('name="Close Modal" data-click="el.hide" data-target="edit-gitlab-modal"') }}
+        </div>
+        <div class="stack gap-md">
+            {% if client_gitlab_projects %}
+            <div>
+                <label class="form-label">Currently linked</label>
+                <div class="stack gap-xs">
+                    {% for p in client_gitlab_projects %}
+                    <div class="u-bg-surface list-row list-row--plain">
+                        <span>{{ p.name or p.project }} <span class="badge badge-muted fs-2xs">{{ p.used_for }}</span></span>
+                        <button name="Remove" class="btn btn-ghost btn-sm text-danger btn-xs"
+                                hx-delete="/api/management/clients/{{ client.id }}/gitlab-projects/{{ p.id }}"
+                                hx-target="{{ section }}" hx-swap="innerHTML"
+                                hx-confirm="Unlink {{ p.project }} ({{ p.used_for | lower }}) from this client? Nothing changes in GitLab."
+                                hx-on::before-request="document.getElementById('edit-gitlab-modal').style.display='none'">
+                            {{ icon('x', '12') }} Remove
+                        </button>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+            {% if gitlab_instances %}
+            <hr class="divider-line">
+            <form name="Submit Gitlab Project" hx-post="/api/management/clients/{{ client.id }}/gitlab-projects"
+                  hx-target="{{ section }}" hx-swap="innerHTML" class="stack gap-ms"
+                  hx-on::before-request="if(event.detail.elt===this) document.getElementById('edit-gitlab-modal').style.display='none'">
+                <label class="form-label">Link a project</label>
+                <div>
+                    <label class="form-label" for="gitlab-add-instance">GitLab</label>
+                    <select name="gitlab_id" id="gitlab-add-instance" class="form-input" required>
+                        {% for g in gitlab_instances %}
+                        <option value="{{ g.id }}">{{ g.label }} &mdash; {{ g.url }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <span class="form-label">Use it for</span>
+                    {{ use_boxes(none) }}
+                    {% if has_backup_project %}<span class="form-hint">Rules are already backed up to another project.</span>{% endif %}
+                </div>
+                <div>
+                    <label class="form-label" for="gitlab-add-project">Project</label>
+                    <input type="text" name="project" id="gitlab-add-project" class="form-input" required
+                           placeholder="group/project">
+                    <span class="form-hint">Its path, as in its address: <code>group/project</code>.</span>
+                </div>
+                <div>
+                    <label class="form-label" for="gitlab-add-name">Name (optional)</label>
+                    <input type="text" name="name" id="gitlab-add-name" class="form-input" placeholder="Engineering">
+                </div>
+                <div class="stack gap-ms client-gitlab-backup" data-gitlab-backup-only{% if has_backup_project %} hidden{% endif %}>
+                    {{ backup_fields(none, 'gitlab-add-') }}
+                </div>
+                <div>
+                    <label class="form-label" for="gitlab-add-token">Access token</label>
+                    <input type="password" name="token" id="gitlab-add-token" class="form-input" required autocomplete="new-password">
+                    <span class="form-hint">A project access token with the <code>api</code> scope: Developer role for rule backup
+                        (Maintainer if the branch is protected), Planner or above for issues only.</span>
+                </div>
+                <button name="Link Project" type="submit" class="btn btn-primary btn-sm">{{ icon('plus', '14') }} Link and test</button>
+            </form>
+            {% else %}
+            <p class="text-muted fs-base text-center">
+                No GitLab has been added yet. A Platform Admin adds one in
+                <a name="Management Integrations" href="/settings/management#mgmt-integrations" class="text-primary">Management &rsaquo; Integrations</a>.
+            </p>
+            {% endif %}
+            <div class="modal-actions">
+                <button name="Close Modal" type="button" class="btn btn-secondary"
+                        data-click="el.hide" data-target="edit-gitlab-modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>

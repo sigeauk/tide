@@ -3,16 +3,13 @@
 #}
 {% from "macros/icons.html" import icon %}
 {% from "macros/modal.html" import empty_state %}
+{% from "macros/menu.html" import manage_menu %}
 
 <div  name="Baselines Edit" class="client-section-toggle" data-click="section.toggle" data-body="baselines-body" data-chev="baselines-chev">
     <span class="client-list-item__icon">{{ icon('shield', '14') }}</span>
     <h2 class="client-section-toggle__title">Baselines</h2>
     <span class="badge badge-neutral badge--xs">{{ client_baselines | length }}</span>
-    <div   name="Edit Item" class="client-section-toggle__actions" data-stop-click>
-        <button  name="Open Edit Baselines Modal" class="btn btn-info btn-sm" data-click="el.show" data-target="edit-baselines-modal">
-            {{ icon('pencil', '14') }} Edit
-        </button>
-    </div>
+    {{ manage_menu('Baselines', 'Manage baselines', 'edit-baselines-modal', 'Add, clone or remove baseline templates') }}
     <span id="baselines-chev" class="client-section-toggle__chevron" style="transform:rotate(90deg);">{{ icon('chevron-right', '16') }}</span>
 </div>
 

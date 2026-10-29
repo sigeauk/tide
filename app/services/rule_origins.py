@@ -244,6 +244,19 @@ def elastic_id_held(conn, rule: Optional[Dict[str, Any]], rule_id: str) -> Optio
     return held if held and (is_prebuilt(rule) or upstream(conn, "elastic", held)) else None
 
 
+def holds_elastic_id(conn, client_id: str, key: Key, rule) -> bool:
+    """Whether ``rule`` (TIDE's row at ``key``) is a custom rule under one of Elastic's rule ids, so it
+    can be given its own (promotion.own_rule_id): not deprecated, not Elastic's prebuilt rule, and
+    not already given one in Kibana with TIDE's part still to finish (pending_actions)."""
+    from app.services import pending_actions
+    raw = rule.raw_data or {}
+    if rule.deprecated or is_prebuilt(raw):
+        return False
+    if any(e["kind"] == "own_rule_id" and not e.get("copy_id") for e in pending_actions.for_rule(client_id, key)):
+        return False
+    return bool(elastic_id_held(conn, raw, key[0]))
+
+
 # ``is_prebuilt`` on detection_rules.raw_data.
 PREBUILT_SQL = ("(COALESCE(TRY_CAST(json_extract_string(raw_data, '$.immutable') AS BOOLEAN), false) "
                 "OR COALESCE(json_extract_string(raw_data, '$.rule_source.type') = 'external', false))")

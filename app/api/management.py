@@ -16,7 +16,8 @@ import requests as http_requests
 from fastapi import APIRouter, Request, Form, File, UploadFile
 from fastapi.responses import HTMLResponse, Response
 
-from app.services.icons import close_button as _close_button, icon as _icon, icon_text as _icon_text, empty_state as _empty_state
+from app.services.icons import (close_button as _close_button, icon as _icon, icon_text as _icon_text,
+                                empty_state as _empty_state, more_button as _more_button)
 from app.api.deps import (DbDep, ClientAdmin, RequireAdmin, RequireSuperadmin, ActiveClient, admin_client_ids,
                           can_manage_user, require_client_member, require_manageable_user)
 from app.services import tls
@@ -568,18 +569,16 @@ def delete_keycloak(request: Request, keycloak_id: str, db: DbDep, user: Require
 
 @router.post("/gitlab", response_class=HTMLResponse)
 async def create_gitlab(request: Request, db: DbDep, user: RequireSuperadmin):
-    """Create a GitLab instance in the centralized inventory."""
+    """Create a GitLab instance in the centralized inventory: its address and TLS setting only. Its
+    tokens are its projects', linked on each client's page (add_gitlab_project)."""
     form = await request.form()
     label = str(form.get("label", "")).strip()
     url = str(form.get("url", "")).strip()
-    token = str(form.get("token", "")).strip() or None
-    default_group = str(form.get("default_group", "")).strip() or None
 
     if not label or not url:
         return _form_refused("Label and URL are required.")
 
-    db.create_gitlab_inventory_item(label=label, url=url, token_enc=token, tls_verify=bool(_form_tls_verify(form)),
-                                    default_group=default_group)
+    db.create_gitlab_inventory_item(label=label, url=url, tls_verify=bool(_form_tls_verify(form)))
     logger.info(f"GitLab instance created: {label} by {user.username}")
     return _integrations_response(request, db, f"GitLab '{label}' created.")
 
@@ -589,12 +588,10 @@ async def update_gitlab(request: Request, gitlab_id: str, db: DbDep, user: Requi
     """Update a GitLab instance."""
     form = await request.form()
     updates = {}
-    for field in ("label", "url", "default_group"):
+    for field in ("label", "url"):
         val = form.get(field)
         if val is not None:
             updates[field] = str(val).strip() or None
-    if form.get("token") is not None:
-        updates["token_enc"] = str(form.get("token")).strip() or None
     is_active = form.get("is_active")
     if is_active is not None:
         updates["is_active"] = str(is_active).lower() in ("true", "on", "1")
@@ -616,32 +613,220 @@ def delete_gitlab(request: Request, gitlab_id: str, db: DbDep, user: RequireSupe
     return _integrations_response(request, db, "GitLab instance deleted.")
 
 
-@router.post("/clients/{client_id}/gitlab", response_class=HTMLResponse)
-async def link_gitlab_to_client(request: Request, client_id: str, db: DbDep, user: ClientAdmin):
-    """Link a GitLab instance to a client."""
+# ---------------------------------------------------------------------------
+# A client's GitLab projects (app.services.gitlab): linked on the client's page by its admins, each
+# with its own access token. Every change re-renders the section (partials/client_gitlab.html).
+# ---------------------------------------------------------------------------
+
+def _gitlab_destinations(db, client_id: str) -> list:
+    """The client's destinations a backup project can back up: ``key`` ("siem_id|space", a form
+    value), ``pair`` ((siem_id, space), as in a project's ``skip``) and ``name``."""
+    out = []
+    for d in db.get_client_siems(client_id) or []:
+        space = str(d.get("space") or "default")
+        out.append({"key": f"{d['id']}|{space}", "pair": (d["id"], space), "name": d.get("name") or space})
+    return out
+
+
+def client_gitlab_context(client_id: str, db) -> dict:
+    """What partials/client_gitlab.html needs, for the client's page and the section's own redraws.
+    The backup project also carries ``backing_up``, its ``last_backup`` (gitlab_backup, from the
+    client's own database) and ``skip_names``, the destinations it doesn't back up."""
+    from datetime import date
+    from app.services import gitlab, gitlab_backup
+    from app.services.tenant_manager import tenant_context_for
+    today = date.today()
+    projects = db.list_client_gitlab_projects(client_id)
+    destinations = _gitlab_destinations(db, client_id)
+    for p in projects:
+        expires = p.get("token_expires_at")
+        p["expiry_days"] = (expires - today).days if expires else None
+        p["used_for"] = " and ".join(gitlab.PURPOSES[u] for u in p["uses"])
+        if p["backup"]:
+            p["skip_names"] = [d["name"] for d in destinations if d["pair"] in p["skip"]]
+            p["backing_up"] = gitlab_backup.running(p["id"])
+            try:
+                with tenant_context_for(client_id), db.get_connection() as conn:
+                    p["last_backup"] = gitlab_backup.last_run(conn, p["id"])
+            except Exception:  # noqa: BLE001 - no client database yet: no backup either
+                logger.debug("No backup runs read for client %s", client_id, exc_info=True)
+                p["last_backup"] = None
+    return {"client": db.get_client(client_id), "client_gitlab_projects": projects,
+            "gitlab_instances": db.list_gitlab_inventory(), "gitlab_purposes": gitlab.PURPOSES,
+            "gitlab_default_branch": gitlab.DEFAULT_BRANCH, "gitlab_expiry_days": gitlab.EXPIRY_WARNING_DAYS,
+            "gitlab_destinations": destinations, "has_backup_project": any(p["backup"] for p in projects)}
+
+
+def _render_client_gitlab(request: Request, client_id: str, db, toast: str = "", kind: str = "success") -> HTMLResponse:
+    html = request.app.state.templates.env.get_template("partials/client_gitlab.html").render(
+        **client_gitlab_context(client_id, db))
+    if toast:
+        html += (f'<div hx-swap-oob="afterbegin:#toast-container">'
+                 f'<div class="toast toast-{kind}">{_esc(toast)}</div></div>')
+    return HTMLResponse(html)
+
+
+def _test_gitlab_project(db, client_id: str, link_id: str) -> dict:
+    """Run app.services.gitlab.check on one of the client's projects and keep what it found."""
+    from datetime import datetime
+    from app.services import gitlab
+    link = db.get_client_gitlab_project(client_id, link_id, with_token=True)
+    result = gitlab.check(link)
+    found = {k: result[k] for k in ("project", "project_id", "project_url", "token_expires_at") if result.get(k)}
+    db.update_client_gitlab_project(link_id, last_status=result["status"], last_message=result["message"],
+                                    last_checked_at=datetime.now(), **found)
+    return result
+
+
+def _gitlab_toast(what: str, result: dict) -> tuple:
+    """``(toast, kind)`` for a project just linked, changed or tested."""
+    if result["status"] == "fail":
+        return f"{what}, but TIDE can't use it yet: {result['message']}", "danger"
+    return f"{what}. {result['message']}", "warning" if result["status"] == "warn" else "success"
+
+
+def _gitlab_uses(form) -> list:
+    """What the form says a project is used for (its ``use`` boxes), in gitlab.PURPOSES order."""
+    from app.services import gitlab
+    ticked = form.getlist("use")
+    return [u for u in gitlab.PURPOSES if u in ticked]
+
+
+def _gitlab_skip(db, client_id: str, form) -> str:
+    """``backup_skip`` from the form's destination boxes (``dest``): the destinations left unticked,
+    as JSON, or '' when every one is backed up."""
+    import json
+    ticked = set(form.getlist("dest"))
+    skip = [list(d["pair"]) for d in _gitlab_destinations(db, client_id) if d["key"] not in ticked]
+    return json.dumps(skip) if skip else ""
+
+
+@router.post("/clients/{client_id}/gitlab-projects", response_class=HTMLResponse)
+async def add_gitlab_project(request: Request, client_id: str, db: DbDep, user: ClientAdmin):
+    """Link a GitLab project to the client for rule backup, issues or both, then test it with its
+    token (_test_gitlab_project)."""
+    from starlette.concurrency import run_in_threadpool
+    from app.services import gitlab
     form = await request.form()
-    gitlab_id = str(form.get("gitlab_id", "")).strip()
-    if not gitlab_id:
-        return HTMLResponse("")
-    db.link_client_gitlab(client_id, gitlab_id)
-    logger.info(f"GitLab {gitlab_id} linked to client {client_id} by {user.username}")
-    # Only the toast: the GitLab inventory serves every client, so a client admin isn't shown it.
-    return HTMLResponse("""
-    <div hx-swap-oob="afterbegin:#toast-container">
-        <div class="toast toast-success">GitLab linked to client.</div>
-    </div>""")
+    value = lambda name: str(form.get(name) or "").strip()  # noqa: E731
+    gitlab_id, uses, token = value("gitlab_id"), _gitlab_uses(form), value("token")
+    project, folder = value("project").strip("/"), value("folder").strip("/")
+    if not uses or not any(g["id"] == gitlab_id for g in db.list_gitlab_inventory()):
+        return _render_client_gitlab(request, client_id, db, "Choose a GitLab and what the project is used for.", "danger")
+    if not project or not token:
+        return _render_client_gitlab(request, client_id, db, "A project and its access token are both needed.", "danger")
+    linked = db.list_client_gitlab_projects(client_id)
+    backup = next((p for p in linked if p["backup"]), None)
+    if "backup" in uses and backup:
+        return _render_client_gitlab(request, client_id, db, f"Rules are already backed up to {backup['project']}: "
+                                     "untick Rule backup on it first to back up somewhere else.", "danger")
+    if any(p["gitlab_id"] == gitlab_id and p["project"].lower() == project.lower() for p in linked):
+        return _render_client_gitlab(request, client_id, db, f"{project} is already linked: change what it's used for "
+                                     "with its pencil.", "danger")
+    on_backup = "backup" in uses
+    link_id = db.create_client_gitlab_project(client_id, gitlab_id, ",".join(uses), project, token, name=value("name"),
+                                              branch=(value("branch") or gitlab.DEFAULT_BRANCH) if on_backup else None,
+                                              folder=folder if on_backup else None)
+    if on_backup:
+        db.update_client_gitlab_project(link_id, backup_skip=_gitlab_skip(db, client_id, form))
+    audit_admin("gitlab_project_linked", user, client=client_id, project=project, purpose=",".join(uses))
+    result = await run_in_threadpool(_test_gitlab_project, db, client_id, link_id)
+    what = " and ".join(gitlab.PURPOSES[u].lower() for u in uses)
+    return _render_client_gitlab(request, client_id, db, *_gitlab_toast(f"Linked {result['project']} for {what}", result))
 
 
-@router.delete("/clients/{client_id}/gitlab/{gitlab_id}", response_class=HTMLResponse)
-def unlink_gitlab_from_client(request: Request, client_id: str, gitlab_id: str,
-                              db: DbDep, user: ClientAdmin):
-    """Unlink a GitLab instance from a client."""
-    db.unlink_client_gitlab(client_id, gitlab_id)
-    logger.info(f"GitLab {gitlab_id} unlinked from client {client_id} by {user.username}")
-    return HTMLResponse("""
-    <div hx-swap-oob="afterbegin:#toast-container">
-        <div class="toast toast-success">GitLab unlinked.</div>
-    </div>""")
+@router.post("/clients/{client_id}/gitlab-projects/{link_id}", response_class=HTMLResponse)
+async def edit_gitlab_project(request: Request, client_id: str, link_id: str, db: DbDep, user: ClientAdmin):
+    """Change what a project is used for, its name, its access token (blank keeps it) and, for rule
+    backup, its branch, folder and the destinations it backs up; then test it again."""
+    from starlette.concurrency import run_in_threadpool
+    from app.services import gitlab
+    link = db.get_client_gitlab_project(client_id, link_id)
+    if not link:
+        return _render_client_gitlab(request, client_id, db, "That GitLab project is no longer linked.", "danger")
+    form = await request.form()
+    value = lambda name: str(form.get(name) or "").strip()  # noqa: E731
+    uses = _gitlab_uses(form)
+    if not uses:
+        return _render_client_gitlab(request, client_id, db, "Choose what the project is used for: rule backup, issues "
+                                     "or both. To stop using it, remove it.", "danger")
+    other = next((p for p in db.list_client_gitlab_projects(client_id) if p["backup"] and p["id"] != link_id), None)
+    if "backup" in uses and other:
+        return _render_client_gitlab(request, client_id, db, f"Rules are already backed up to {other['project']}: "
+                                     "untick Rule backup on it first.", "danger")
+    changes = {"purpose": ",".join(uses), "name": value("name"), "token": value("token")}
+    if "backup" in uses:
+        changes.update(branch=value("branch") or link["branch"] or gitlab.DEFAULT_BRANCH,
+                       folder=value("folder").strip("/"), backup_skip=_gitlab_skip(db, client_id, form))
+    db.update_client_gitlab_project(link_id, **changes)
+    audit_admin("gitlab_project_changed", user, client=client_id, project=link["project"], purpose=changes["purpose"],
+                token_replaced=bool(changes["token"]))
+    result = await run_in_threadpool(_test_gitlab_project, db, client_id, link_id)
+    return _render_client_gitlab(request, client_id, db, *_gitlab_toast(f"Saved {result['project']}", result))
+
+
+@router.post("/clients/{client_id}/gitlab-projects/{link_id}/test", response_class=HTMLResponse)
+async def test_gitlab_project(request: Request, client_id: str, link_id: str, db: DbDep, user: ClientAdmin):
+    """Test one of the client's GitLab projects again."""
+    from starlette.concurrency import run_in_threadpool
+    if not db.get_client_gitlab_project(client_id, link_id):
+        return _render_client_gitlab(request, client_id, db, "That GitLab project is no longer linked.", "danger")
+    result = await run_in_threadpool(_test_gitlab_project, db, client_id, link_id)
+    return _render_client_gitlab(request, client_id, db, *_gitlab_toast(f"Tested {result['project']}", result))
+
+
+@router.get("/clients/{client_id}/gitlab-projects", response_class=HTMLResponse)
+def gitlab_projects_section(request: Request, client_id: str, db: DbDep, user: ClientAdmin):
+    """The section as it is now: it asks for itself again while a backup runs."""
+    return _render_client_gitlab(request, client_id, db)
+
+
+@router.post("/clients/{client_id}/gitlab-projects/{link_id}/backup", response_class=HTMLResponse)
+def backup_gitlab_project(request: Request, client_id: str, link_id: str, db: DbDep, user: ClientAdmin):
+    """Back up now: every destination's rules to the backup project, in the background
+    (app.services.gitlab_backup.start). The section shows it running, then how it went."""
+    from app.services import gitlab_backup
+    link = db.get_client_gitlab_project(client_id, link_id, with_token=True)
+    if not link or not link["backup"]:
+        return _render_client_gitlab(request, client_id, db, "That GitLab backup project is no longer linked.", "danger")
+    if link["backup_paused"]:
+        return _render_client_gitlab(request, client_id, db, "Backups to this project are paused: resume them first.",
+                                     "warning")
+    if not gitlab_backup.usable(link):
+        return _render_client_gitlab(request, client_id, db, "TIDE can't use this project yet: Test it and fix what it "
+                                     "says first.", "danger")
+    if not gitlab_backup.start(db, client_id, link):
+        return _render_client_gitlab(request, client_id, db, "A backup to this project is already running.", "warning")
+    audit_admin("gitlab_backup_started", user, client=client_id, project=link["project"])
+    return _render_client_gitlab(request, client_id, db, f"Backing up the rules to {link['project']}.")
+
+
+@router.post("/clients/{client_id}/gitlab-projects/{link_id}/pause", response_class=HTMLResponse)
+async def pause_gitlab_backup(request: Request, client_id: str, link_id: str, db: DbDep, user: ClientAdmin):
+    """Pause (form ``paused`` "1") or resume ("0") the backup project's backups: after syncs and Back
+    up now. The project stays linked and everything else about it is kept."""
+    link = db.get_client_gitlab_project(client_id, link_id)
+    if not link or not link["backup"]:
+        return _render_client_gitlab(request, client_id, db, "That GitLab backup project is no longer linked.", "danger")
+    paused = str((await request.form()).get("paused") or "") == "1"
+    db.update_client_gitlab_project(link_id, backup_paused=paused)
+    audit_admin("gitlab_backup_paused" if paused else "gitlab_backup_resumed", user, client=client_id,
+                project=link["project"])
+    if paused:
+        return _render_client_gitlab(request, client_id, db, f"Paused backups to {link['project']}: TIDE won't back up "
+                                     "to it until you resume them.")
+    return _render_client_gitlab(request, client_id, db, f"Resumed backups to {link['project']}: TIDE backs up after "
+                                 "each sync again.")
+
+
+@router.delete("/clients/{client_id}/gitlab-projects/{link_id}", response_class=HTMLResponse)
+def remove_gitlab_project(request: Request, client_id: str, link_id: str, db: DbDep, user: ClientAdmin):
+    """Unlink one of the client's GitLab projects. Nothing changes in GitLab."""
+    link = db.get_client_gitlab_project(client_id, link_id)
+    if not link or not db.delete_client_gitlab_project(client_id, link_id):
+        return _render_client_gitlab(request, client_id, db, "That GitLab project is no longer linked.", "danger")
+    audit_admin("gitlab_project_unlinked", user, client=client_id, project=link["project"])
+    return _render_client_gitlab(request, client_id, db, f"Unlinked {link['project']}. Nothing changed in GitLab.")
 
 
 # ---------------------------------------------------------------------------
@@ -925,25 +1110,22 @@ def _run_inventory_test(kind: str, item: dict, linked_spaces=None) -> tuple[bool
             return False, f"HTTP {resp.status_code}"
 
         if kind == "gitlab":
+            # No token here (each project linked on a client's page has its own): GitLab's API asks
+            # for one, and its own "401 Unauthorized" answer shows it is GitLab at this address.
             url = (item.get("url") or "").strip()
-            token = (item.get("token_enc") or "").strip()
             if not url:
                 return False, "Missing URL"
-            api_url = url.rstrip("/") + "/api/v4/version"
-            headers = {}
-            if token:
-                headers["PRIVATE-TOKEN"] = token
-            resp = http_requests.get(api_url, headers=headers, timeout=10, verify=tls.verify_arg(item.get("tls_verify")))
-            if resp.status_code == 200:
-                try:
-                    data = resp.json()
-                    ver = data.get("version", "unknown")
-                    return True, f"GitLab {ver}"
-                except Exception:
-                    return True, "Reachable (non-JSON response)"
-            if resp.status_code in (401, 403):
-                return False, "Authentication failed (token missing or invalid)"
-            return False, f"HTTP {resp.status_code}"
+            resp = http_requests.get(url.rstrip("/") + "/api/v4/version", timeout=10,
+                                     verify=tls.verify_arg(item.get("tls_verify")))
+            try:
+                data = resp.json()
+            except ValueError:
+                data = {}
+            if resp.status_code == 200 and isinstance(data, dict) and data.get("version"):
+                return True, f"GitLab {data['version']}"
+            if resp.status_code == 401 and isinstance(data, dict) and "Unauthorized" in str(data.get("message")):
+                return True, "GitLab answered at this address"
+            return False, f"No GitLab API at this address (HTTP {resp.status_code})"
 
         if kind == "keycloak":
             url = (item.get("url") or "").strip()
@@ -2227,16 +2409,24 @@ def _tenant_chips_html(clients: list, *, all_tenants: bool = False) -> str:
     return " ".join(chips)
 
 
-def _test_button_html(kind: str, item_id: str, target_id: str) -> str:
-    """Per-card Test Connection button that persists status server-side."""
-    return (
-        f'<button class="btn btn-ghost btn-sm" '
-        f'hx-post="/api/management/{kind}/{item_id}/test" '
-        f'hx-target="#{target_id}" hx-swap="outerHTML" '
-        f'title="Run test connection now" '
-        f'aria-label="Test connection">'
-        f'{_icon("arrow-right", "14")}</button>'
-    )
+def _card_menu(kind: str, test: str, edit: str, delete: str) -> str:
+    """An integration card's ⋮, like every other ⋮ in TIDE (macros/menu.html): Test connection,
+    Edit, then Delete. ``test``, ``edit`` and ``delete`` are each item's attributes (what it does);
+    ``kind`` names the card ("SIEM") for its name and screen readers."""
+    def item(name, icon_name, text, attrs, danger=False):
+        return (f'<button name="{name}" type="button" role="menuitem" class="rh-more__item'
+                f'{" rh-more__item--danger" if danger else ""}" {attrs}>{_icon(icon_name, "15")}<span>{text}</span></button>')
+    toggle = _more_button(f"{kind} actions", title="Test the connection, edit or delete it",
+                          attrs=f'name="{kind} Actions"')
+    return (f'<div class="rh-more" data-more>{toggle}<div class="rh-more__menu" role="menu" hidden>'
+            f'{item("Test Connection", "zap", "Test connection", test)}{item("Edit", "pencil", "Edit", edit)}'
+            f'<div class="rh-more__sep" role="separator"></div>{item("Delete", "trash-2", "Delete", delete, True)}'
+            f'</div></div>')
+
+
+def _test_attrs(kind: str, item_id: str, target_id: str) -> str:
+    """Test connection's attributes: the test runs server-side and keeps its status (the card's pill)."""
+    return f'hx-post="/api/management/{kind}/{item_id}/test" hx-target="#{target_id}" hx-swap="outerHTML"'
 
 
 def _render_clients_tab(clients: list) -> str:
@@ -2476,8 +2666,14 @@ def _siem_card(s: dict) -> str:
     kb_url = escape(s.get("kibana_url") or "-")
     status_pill = _status_pill_html(s, target_id=f"siem-status-{sid}")
     tenant_chips = _tenant_chips_html(s.get("_clients", []))
-    test_btn = _test_button_html("siems", sid, f"siem-status-{sid}")
     logging_block = _siem_logging_block_html(s)
+    menu = _card_menu(
+        "SIEM", _test_attrs("siems", sid, f"siem-status-{sid}"),
+        f'data-click="mgmt.siemEdit" data-id="{sid}" data-label="{lbl_esc}" data-type="{stype_esc}" '
+        f'data-es-url="{escape(s.get("elasticsearch_url") or "")}" data-kb-url="{escape(s.get("kibana_url") or "")}" '
+        f'data-tls-verify="{"true" if s.get("tls_verify") else "false"}"',
+        f'hx-delete="/api/management/siems/{sid}" hx-target="#mgmt-integrations" hx-swap="innerHTML" '
+        f'hx-confirm="Delete SIEM \'{lbl_esc}\'? This will unlink it from all clients."')
 
     return f'''
     <div class="system-card stack" data-integration="siem">
@@ -2487,23 +2683,7 @@ def _siem_card(s: dict) -> str:
                 <span class="badge badge-muted">SIEM &middot; {stype_esc}</span>
                 {status_pill}
             </div>
-            <div class="flex gap-xs">
-                {test_btn}
-                <button class="btn btn-ghost btn-sm"
-                        data-click="mgmt.siemEdit" data-id="{sid}" data-label="{lbl_esc}" data-type="{stype_esc}"
-                        data-es-url="{escape(s.get("elasticsearch_url") or "")}" data-kb-url="{escape(s.get("kibana_url") or "")}"
-                        data-tls-verify="{'true' if s.get('tls_verify') else 'false'}"
-                        title="Edit">
-                    {_icon("pencil", "14")}
-                </button>
-                <button class="btn btn-ghost btn-sm text-danger"
-                        hx-delete="/api/management/siems/{sid}"
-                        hx-target="#mgmt-integrations" hx-swap="innerHTML"
-                        hx-confirm="Delete SIEM '{lbl_esc}'? This will unlink it from all clients."
-                        title="Delete">
-                    {_icon("trash-2", "14")}
-                </button>
-            </div>
+            {menu}
         </div>
         <div class="system-card__desc mt-sm">
             <div class="kv-grid">
@@ -2781,110 +2961,20 @@ def _render_permissions_tab(db, client_id: Optional[str] = None) -> str:
     </div>'''
 
 
-def _render_threat_intel_tab(instances: list) -> str:
-    """Render the Threat Intel (OpenCTI) tab as system-card style cards."""
-    from html import escape
-    count = len(instances)
-    cards = ""
-    for i in instances:
-        iid = i["id"]
-        lbl_esc = escape(i["label"])
-        url_esc = escape(i["url"])
-        kind = (i.get("kind") or "actors").lower()
-        kind_label = {"actors": "actors", "cti": "CTI", "both": "actors + CTI"}.get(kind, kind)
-        kind_cls = {"actors": "badge-secondary", "cti": "badge-info", "both": "badge-success"}.get(kind, "badge-secondary")
-        kind_badge = (
-            f'<span class="badge {kind_cls}" title="kind={escape(kind)}">'
-            f'{escape(kind_label)}</span>'
-        )
-        status_pill = _status_pill_html(i, target_id=f"opencti-status-{iid}")
-        tenant_chips = _tenant_chips_html(i.get("_clients", []))
-        test_btn = _test_button_html("opencti", iid, f"opencti-status-{iid}")
-
-        # Sync CTI button is only meaningful when this row participates in
-        # the new fetcher. Otherwise we omit it to keep the legacy actor
-        # cards unchanged.
-        sync_cti_btn = ""
-        if kind in ("cti", "both"):
-            sync_cti_btn = (
-                f'<button class="btn btn-ghost btn-sm" '
-                f'hx-post="/api/management/opencti/{iid}/sync-cti" '
-                f'hx-target="#opencti-cti-status-{iid}" hx-swap="innerHTML" '
-                f'title="Pull STIX bundle into every linked tenant\'s CTI DB">'
-                f'Sync CTI</button>'
-            )
-
-        cards += f'''
-        <div class="system-card stack">
-            <div class="system-card__title flex items-center justify-between">
-                <div class="flex items-center gap-sm flex-wrap">
-                    <span class="fw-600">{lbl_esc}</span>
-                    {kind_badge}
-                    {status_pill}
-                </div>
-                <div class="flex gap-xs">
-                    {sync_cti_btn}
-                    {test_btn}
-                    <button class="btn btn-ghost btn-sm"
-                            data-click="mgmt.openctiEdit" data-id="{iid}" data-label="{lbl_esc}" data-url="{url_esc}" data-kind="{escape(kind)}"
-                            title="Edit">
-                        {_icon("pencil", "14")}
-                    </button>
-                    <button class="btn btn-ghost btn-sm text-danger"
-                            hx-delete="/api/management/opencti/{iid}"
-                            hx-target="#mgmt-sub-opencti" hx-swap="innerHTML"
-                            hx-confirm="Delete OpenCTI instance '{lbl_esc}'? This will unlink it from all clients."
-                            title="Delete">
-                        {_icon("trash-2", "14")}
-                    </button>
-                </div>
-            </div>
-            <div class="system-card__desc mt-sm">
-                <div class="kv-grid">
-                    <span class="text-secondary">URL</span>
-                    <span class="mono-ellipsis" title="{url_esc}">{url_esc}</span>
-                    <span class="text-secondary">Token</span>
-                    <span class="text-secondary fs-sm">{_icon_text('check', 'configured', '12') if i.get('token_set') else _icon_text('x', 'not set', '12')}</span>
-                </div>
-                <div id="opencti-cti-status-{iid}" class="mt-sm fs-md"></div>
-            </div>
-            <div class="system-card__footer card-footer-wrap">
-                {tenant_chips}
-            </div>
-        </div>'''
-
-    empty = ""
-    if not instances:
-        empty = _empty_state("shield", 'No Threat Intel sources configured yet.')
-
-    return f'''
-    <div class="info-box info-box--warning mb-md fs-base flex items-start gap-sm">
-        {_icon("triangle-alert", "16", "shrink-0")}
-        <div>
-            <strong>Deprecated.</strong> Manage OpenCTI sources on the new <strong>Connectors</strong> tab below — it covers OpenCTI, Mandiant, CrowdStrike and any vendor added in future releases under one consistent surface. Existing instances were copied over automatically; this tab is kept for one release and will be removed in <code>5.0.0</code>.
-        </div>
-    </div>
-    <div class="mgmt-tab-head">
-        <span class="text-secondary">{count} OpenCTI instance{"s" if count != 1 else ""} configured</span>
-        <button class="btn btn-primary" data-click="mgmt.openctiNew">
-            {_icon("plus", "16")}
-            New OpenCTI
-        </button>
-    </div>
-    <div class="systems-grid">{cards}</div>
-    {empty}'''
-
-
 def _gitlab_card(i: dict) -> str:
     """One GitLab instance's card in the Integrations list (``i["_clients"]``: its clients)."""
     from html import escape
     iid = i["id"]
     lbl_esc = escape(i["label"])
     url_esc = escape(i["url"])
-    grp_esc = escape(i.get("default_group") or "—")
     status_pill = _status_pill_html(i, target_id=f"gitlab-status-{iid}")
     tenant_chips = _tenant_chips_html(i.get("_clients", []))
-    test_btn = _test_button_html("gitlab", iid, f"gitlab-status-{iid}")
+    menu = _card_menu(
+        "GitLab", _test_attrs("gitlab", iid, f"gitlab-status-{iid}"),
+        f'data-click="mgmt.gitlabEdit" data-id="{iid}" data-label="{lbl_esc}" data-url="{url_esc}" '
+        f'data-tls-verify="{"true" if i.get("tls_verify") else "false"}"',
+        f'hx-delete="/api/management/gitlab/{iid}" hx-target="#mgmt-integrations" hx-swap="innerHTML" '
+        f'hx-confirm="Delete GitLab instance \'{lbl_esc}\'? Every client&#39;s projects on it are unlinked too."')
 
     return f'''
     <div class="system-card stack" data-integration="gitlab">
@@ -2892,34 +2982,14 @@ def _gitlab_card(i: dict) -> str:
             <div class="flex items-center gap-sm flex-wrap">
                 <span class="fw-600">{lbl_esc}</span>
                 <span class="badge badge-muted">GitLab</span>
-                <span class="badge badge-secondary badge--xs" title="Recorded for report publishing, which is planned">Planned</span>
                 {status_pill}
             </div>
-            <div class="flex gap-xs">
-                {test_btn}
-                <button class="btn btn-ghost btn-sm"
-                        data-click="mgmt.gitlabEdit" data-id="{iid}" data-label="{lbl_esc}" data-url="{url_esc}" data-group="{grp_esc}"
-                        data-tls-verify="{'true' if i.get('tls_verify') else 'false'}"
-                        title="Edit">
-                    {_icon("pencil", "14")}
-                </button>
-                <button class="btn btn-ghost btn-sm text-danger"
-                        hx-delete="/api/management/gitlab/{iid}"
-                        hx-target="#mgmt-integrations" hx-swap="innerHTML"
-                        hx-confirm="Delete GitLab instance '{lbl_esc}'?"
-                        title="Delete">
-                    {_icon("trash-2", "14")}
-                </button>
-            </div>
+            {menu}
         </div>
         <div class="system-card__desc mt-sm">
             <div class="kv-grid">
                 <span class="text-secondary">URL</span>
                 <span class="mono-ellipsis" title="{url_esc}">{url_esc}</span>
-                <span class="text-secondary">Group</span>
-                <span class="mono text-sm">{grp_esc}</span>
-                <span class="text-secondary">Token</span>
-                <span class="text-secondary fs-sm">{_icon_text('check', 'configured', '12') if i.get('token_set') else _icon_text('x', 'not set', '12')}</span>
             </div>
         </div>
         <div class="system-card__footer card-footer-wrap">
@@ -2946,7 +3016,6 @@ def _keycloak_card(i: dict) -> str:
     signin = bool(i.get("used_for_signin"))
     status_pill = _status_pill_html(i, target_id=f"keycloak-status-{iid}")
     tenant_chips = _tenant_chips_html([], all_tenants=True)
-    test_btn = _test_button_html("keycloak", iid, f"keycloak-status-{iid}")
     role_badge = ('<span class="badge badge-info" title="TIDE signs people in with this Keycloak">Sign-in</span>'
                   if signin else
                   '<span class="badge badge-secondary badge--xs" title="Recorded before 6.3.0; TIDE signs in with '
@@ -2954,6 +3023,13 @@ def _keycloak_card(i: dict) -> str:
     confirm = ("Delete the Keycloak integration TIDE signs in with? Sign-in then uses the Keycloak settings in "
                ".env, and TIDE makes this integration again from them at its next start; with none, SSO sign-in stops."
                if signin else f"Delete Keycloak instance &#39;{lbl_esc}&#39;?")
+    menu = _card_menu(
+        "Keycloak", _test_attrs("keycloak", iid, f"keycloak-status-{iid}"),
+        f'data-click="mgmt.keycloakEdit" data-id="{iid}" data-label="{lbl_esc}" data-url="{url_esc}" '
+        f'data-internal-url="{internal_esc}" data-realm="{realm_esc}" data-client-id="{client_esc}" '
+        f'data-pg-client-id="{pg_esc}" data-tls-verify="{"true" if i.get("tls_verify") else "false"}"',
+        f'hx-delete="/api/management/keycloak/{iid}" hx-target="#mgmt-integrations" hx-swap="innerHTML" '
+        f'hx-confirm="{confirm}"')
 
     return f'''
     <div class="system-card stack" data-integration="keycloak">
@@ -2964,23 +3040,7 @@ def _keycloak_card(i: dict) -> str:
                 {role_badge}
                 {status_pill}
             </div>
-            <div class="flex gap-xs">
-                {test_btn}
-                <button class="btn btn-ghost btn-sm"
-                        data-click="mgmt.keycloakEdit" data-id="{iid}" data-label="{lbl_esc}" data-url="{url_esc}"
-                        data-internal-url="{internal_esc}" data-realm="{realm_esc}" data-client-id="{client_esc}"
-                        data-pg-client-id="{pg_esc}" data-tls-verify="{'true' if i.get('tls_verify') else 'false'}"
-                        title="Edit">
-                    {_icon("pencil", "14")}
-                </button>
-                <button class="btn btn-ghost btn-sm text-danger"
-                        hx-delete="/api/management/keycloak/{iid}"
-                        hx-target="#mgmt-integrations" hx-swap="innerHTML"
-                        hx-confirm="{confirm}"
-                        title="Delete">
-                    {_icon("trash-2", "14")}
-                </button>
-            </div>
+            {menu}
         </div>
         <div class="system-card__desc mt-sm">
             <div class="kv-grid">
@@ -3143,37 +3203,6 @@ def _render_client_siems_partial(client_id: str, db, toast: str = None) -> HTMLR
     return HTMLResponse(f"{html}{toast_html}")
 
 
-def _render_client_opencti_partial(client_id: str, db, toast: str = None) -> HTMLResponse:
-    """Re-render the client OpenCTI section using Jinja2 partial."""
-    from html import escape
-    import os
-    from jinja2 import Environment, FileSystemLoader
-
-    client = db.get_client(client_id)
-    client_opencti = db.get_client_opencti_instances(client_id)
-    all_opencti = db.list_opencti_inventory()
-    linked_ids = {o["id"] for o in client_opencti}
-    available_opencti = [o for o in all_opencti if o["id"] not in linked_ids]
-
-    templates_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates")
-    env = Environment(loader=FileSystemLoader(templates_dir), autoescape=True)
-    template = env.get_template("partials/client_opencti.html")
-    html = template.render(
-        client=client,
-        client_opencti=client_opencti,
-        available_opencti=available_opencti,
-    )
-
-    toast_html = ""
-    if toast:
-        toast_html = (
-            f'<div hx-swap-oob="afterbegin:#toast-container">'
-            f'<div class="toast toast-success">{escape(toast)}</div></div>'
-        )
-
-    return HTMLResponse(f"{html}{toast_html}")
-
-
 def _client_connector_rows(client_id: str, db) -> tuple[list, list]:
     """Return ``(linked, available)`` connector dicts for ``client_id``.
 
@@ -3216,7 +3245,7 @@ def _client_connector_rows(client_id: str, db) -> tuple[list, list]:
 def _render_client_connectors_partial(client_id: str, db, toast: str = None) -> HTMLResponse:
     """Re-render the per-tenant ``Linked CTI Connectors`` section.
 
-    Mirrors :func:`_render_client_opencti_partial` so the link / unlink
+    Like the other client sections' renderers, so the link / unlink
     endpoints can swap just the affected section instead of repainting
     the full client detail page.
     """
@@ -4301,26 +4330,11 @@ def _connector_card(c: dict, vendor_by_name: dict) -> str:
         f'<span class="mono-ellipsis" title="{_e(str(v))}">{v}</span>'
         for k, v in summary_pairs
     )
-    test_btn = (
-        f'<button class="btn btn-ghost btn-sm" '
-        f'hx-post="/api/management/connectors/{cid}/test" '
-        f'hx-target="#connector-status-{cid}" hx-swap="outerHTML" '
-        f'title="Test connection now" aria-label="Test connection">'
-        f'{_icon("arrow-right", "14")}</button>'
-    )
-    edit_btn = (
-        f'<button class="btn btn-ghost btn-sm" '
-        f'data-click="mgmt.connectorEdit" data-id="{cid}" title="Edit">'
-        f'{_icon("pencil", "14")}</button>'
-    )
-    del_btn = (
-        f'<button class="btn btn-ghost btn-sm text-danger" '
-        f'hx-delete="/api/management/connectors/{cid}" '
-        f'hx-target="#mgmt-integrations" hx-swap="innerHTML" '
-        f'hx-confirm="Delete connector \'{lbl_esc}\'? This will unlink it from all clients." '
-        f'title="Delete">'
-        f'{_icon("trash-2", "14")}</button>'
-    )
+    menu = _card_menu(
+        "Connector", _test_attrs("connectors", cid, f"connector-status-{cid}"),
+        f'data-click="mgmt.connectorEdit" data-id="{cid}"',
+        f'hx-delete="/api/management/connectors/{cid}" hx-target="#mgmt-integrations" hx-swap="innerHTML" '
+        f'hx-confirm="Delete connector \'{lbl_esc}\'? This will unlink it from all clients."')
     return f'''
     <div class="system-card stack" data-integration="intel">
         <div class="system-card__title flex items-center justify-between">
@@ -4329,11 +4343,7 @@ def _connector_card(c: dict, vendor_by_name: dict) -> str:
                 <span class="badge badge-muted">{vendor_label}</span>
                 {status_pill}
             </div>
-            <div class="flex gap-xs">
-                {test_btn}
-                {edit_btn}
-                {del_btn}
-            </div>
+            {menu}
         </div>
         <div class="system-card__desc mt-sm">
             <div class="kv-grid">
@@ -4394,7 +4404,7 @@ def _integrations_html(request: Request, db, group: Optional[str] = None, banner
          "cards": [_siem_card(s) for s in siems]},
         {"key": "intel", "title": "Threat intel", "icon": "target", "what": "OpenCTI, for the threat actors in Threat Landscape",
          "cards": [_connector_card(c, vendor_by_name) for c in connectors]},
-        {"key": "source", "title": "Source control", "icon": "gitlab", "what": "GitLab, for report publishing (planned)",
+        {"key": "source", "title": "Source control", "icon": "gitlab", "what": "GitLab: each client links its projects, for rule backup and issues",
          "cards": [_gitlab_card(i) for i in gitlabs]},
     ]
     total = sum(len(g["cards"]) for g in groups)

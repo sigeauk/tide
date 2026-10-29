@@ -185,7 +185,7 @@ A rule at a destination the system doesn't count leaves the technique uncovered,
 
 ### Add or edit a device
 
-In a system's **Devices** section, **Add Device** takes a **Device name**, **IP address** and **Operating system**; **Upload Nessus** loads devices from a scan. Click a device to open its page, where you can edit its details, add packages (**Add Package**), and see the known exploited vulnerabilities its packages match.
+In a system's **Devices** section, **Add Device** takes a **Device name**, **IP address** and **Operating system**; **Upload Nessus** loads devices from a scan. Click a device to open its page, where you can edit its details (**Edit device**, in its **⋮**), add packages (**Add package**, in the **⋮** on **Packages**), edit or remove each package from its own **⋮**, and see the known exploited vulnerabilities its packages match.
 
 ### CVEs
 
@@ -193,4 +193,4 @@ In a system's **Devices** section, **Add Device** takes a **Device name**, **IP 
 
 To load the catalogue, use the page's **⋮** menu: **Import CVE** takes CISA's KEV JSON file, and **Upload MITRE Map** takes the mapping from CVEs to ATT&CK techniques.
 
-Open a CVE to see its details, the devices it affects and its ATT&CK techniques. For each affected device, **Apply rule…** records which detection covers it, or **Log Blind Spot** records why nothing can (with a **Reason**). **Detection Rules** lists the rules recorded against the CVE. Its export makes a CVE audit report (PDF or Markdown).
+Open a CVE to see its details, the devices it affects and its ATT&CK techniques. For each affected device, **Apply rule…** records which detection covers it, or **Log Blind Spot** records why nothing can (with a **Reason**). **Detection Rules** lists the rules recorded against the CVE. **Export report**, in the page's **⋮**, makes a CVE audit report (PDF or Markdown).

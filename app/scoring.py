@@ -37,6 +37,9 @@ Versions
      anything but the dynamic default text. Lines the SIEM could not be asked about are left
      out. A timestamp override of event.ingested earns full marks when its patterns match no
      indices (nothing to check it against).
+  4  an indicator match rule's lines include its threat mapping: each entry's field in the rule's
+     indexes and its indicator field in the indicator indexes. A machine learning rule has no
+     timestamp override or query language, so neither is scored for it (not applicable).
 """
 from __future__ import annotations
 
@@ -45,7 +48,7 @@ from datetime import datetime, timezone
 from statistics import median
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-SCORING_VERSION = 3
+SCORING_VERSION = 4
 
 # Facts about one field: state is "found" | "missing" | "unknown".
 #   found    - present in the mapping of at least one of the rule's indexes
@@ -77,7 +80,9 @@ COMPONENTS = (
     ("mapping", "Mapping", "quality", 37,
      "Scored per line of the field mappings: one line for each index pattern and field the rule uses (2 patterns and "
      "5 fields are 10 lines). Each line found in that pattern's mapping earns its share; a field a pattern lacks, or a "
-     "pattern that matches no indices, earns nothing. Lines that could not be checked (SIEM unreachable) are left out."),
+     "pattern that matches no indices, earns nothing. Lines that could not be checked (SIEM unreachable) are left out. "
+     "An indicator match rule's mapping counts too: each field it matches in its own indexes, and each indicator "
+     "field in its indicator indexes."),
     ("field_type", "Field type", "quality", 12,
      "Scored per line of the field mappings: each line whose field is mapped with a set type earns its share. A field "
      "left as the default text type, or not found, earns nothing. Lines that could not be checked are left out."),
@@ -86,7 +91,7 @@ COMPONENTS = (
      "2.5 s 20%, slower 0. Not scored until TIDE has seen the rule run."),
     ("language", "Query language", "quality", 0,
      "Off by default. Scored on the query language: 60% detection strength and 40% performance. "
-     "KQL 78%, Lucene 78%, EQL 88%, ES|QL 82%, Query DSL 86%."),
+     "KQL 78%, Lucene 78%, EQL 88%, ES|QL 82%, Query DSL 86%. Not scored for a machine learning rule, which has no query."),
     ("execution", "Last execution", "operations", 0,
      "Result of the rule's last run in Kibana: succeeded full points, partial failure 50%, failed 0. "
      "Not scored when the rule has not run."),
@@ -98,7 +103,8 @@ COMPONENTS = (
     ("note", "Investigation guide", "meta", 15,
      "Scored on length: none 0, under 100 characters 25%, under 300 50%, under 600 75%, 600 or more full points."),
     ("override", "Timestamp override", "meta", 8,
-     "Full points when the timestamp override is event.ingested and that field exists in the rule's indexes."),
+     "Full points when the timestamp override is event.ingested and that field exists in the rule's indexes. "
+     "Not scored for a machine learning rule, which has none."),
     ("mitre", "MITRE mapping", "meta", 10,
      "30% for at least one MITRE tactic and 70% for at least one technique."),
     ("author", "Author", "meta", 5, "Full points when an author is set."),
@@ -331,6 +337,10 @@ def score_rule(rule_data: Dict[str, Any], weights: Optional[Dict[str, Any]] = No
     if facts is None:
         facts = facts_from_results(rule_data.get("results"))
     aux = rule_data.get("aux_facts") or {}
+    raw = rule_data.get("raw_data") if isinstance(rule_data.get("raw_data"), dict) else {}
+    # A machine learning rule alerts on its job's anomalies: it has no query, so no query language,
+    # and no timestamp override.
+    machine_learning = raw.get("type") == "machine_learning"
     out: Dict[str, Dict[str, Any]] = {}
 
     def put(key: str, fraction: Optional[float], result: str) -> None:
@@ -384,7 +394,9 @@ def score_rule(rule_data: Dict[str, Any], weights: Optional[Dict[str, Any]] = No
 
     # Query language (worth 0 points unless a client turns it on).
     lang_key = str(rule_data.get("language") or "kuery").lower()
-    if lang_key in LANGUAGE_SCORES:
+    if machine_learning:
+        put("language", None, "Not scored: a machine learning rule has no query.")
+    elif lang_key in LANGUAGE_SCORES:
         detection, performance = LANGUAGE_SCORES[lang_key]
         value = detection * 0.6 + performance * 0.4
         put("language", value / 10, f"{LANGUAGE_NAMES[lang_key]}: detection {detection}, performance {performance} = {value:.1f} out of 10.")
@@ -397,7 +409,9 @@ def score_rule(rule_data: Dict[str, Any], weights: Optional[Dict[str, Any]] = No
 
     # Timestamp override.
     override = str(rule_data.get("timestamp_override") or "-")
-    if override == "event.ingested":
+    if machine_learning:
+        put("override", None, "Not scored: a machine learning rule has no timestamp override.")
+    elif override == "event.ingested":
         info = aux.get("event.ingested")
         if info and info["state"] == MISSING and info.get("no_index"):
             # The setting is right; there is simply no index to check it against (a lab SIEM, or a
@@ -431,8 +445,6 @@ def score_rule(rule_data: Dict[str, Any], weights: Optional[Dict[str, Any]] = No
         put("highlights", (len(hl) - len(gone)) / len(hl), text + ".")
     else:
         put("highlights", 0.0, "No custom highlighted fields set.")
-
-    raw = rule_data.get("raw_data") if isinstance(rule_data.get("raw_data"), dict) else {}
 
     # Operations: is the rule healthy in its SIEM?
     last_exec = ((raw.get("execution_summary") or {}).get("last_execution") or {}) if isinstance(raw.get("execution_summary"), dict) else {}

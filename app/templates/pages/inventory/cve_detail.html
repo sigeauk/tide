@@ -7,49 +7,50 @@
 {% from "components/ui/breadcrumb.html" import breadcrumb %}
 {% from "macros/modal.html" import close_button %}
 {% from "macros/help.html" import help_button with context %}
+{% from "macros/menu.html" import more_button %}
 
 {% block content %}
-<div class="p-lg">
-
     {{ breadcrumb(items=[('Home', '/'), ('CVE Catalogue', '/cve-overview'), (cve.cve_id, none)]) }}
 
-    <!-- Header -->
-    <div class="mb-lg">
-        <div class="flex items-center gap-ms flex-wrap mb-sm">
-            <h1 class="m-0 fs-2xl fw-700 text-primary">{{ cve.cve_id }} {{ help_button('cves') }}</h1>
-            {% if cve.known_ransomware %}
-            <span class="badge badge-danger text-sm">{{ icon('zap','14') }} Ransomware</span>
-            {% endif %}
-
-            {# Report button #}
-            <div class="ml-auto">
-                <button name="Export Report" class="btn btn-secondary btn-sm cve-export-btn"
-                        data-click="cvePage.exportOpen"
-                        title="Generate CVE audit report">
-                    {{ icon('download', '14') }}
-                    Export Report
+    {# The header as every page has it (Rule Health's, the System page's): the title with its pill and
+       ?, the vulnerability as the description, what it affects under it, and the ⋮ level with the title. #}
+    <div class="page-header flex items-start justify-between gap-md">
+        <div>
+            <h1 class="page-title-hero">
+                {{ cve.cve_id }}
+                {% if cve.known_ransomware %}
+                <span class="status-pill status-danger sys-header__clf" title="Known to be used in ransomware campaigns">Ransomware</span>
+                {% endif %}
+                {{ help_button('cves') }}
+            </h1>
+            <p class="page-subtitle">{{ cve.vulnerability_name }}</p>
+            <div class="flex items-center gap-sm flex-wrap mt-sm">
+                {% set sys_ids = [] %}
+                {% for h in cve.affected_hosts %}{% if h.system_id not in sys_ids %}{% set _ = sys_ids.append(h.system_id) %}{% endif %}{% endfor %}
+                {% if cve.affected_hosts %}
+                <span class="badge badge-danger text-sm">
+                    {{ icon('triangle-alert','14') }} Affects {{ sys_ids | length }} System{{ 's' if sys_ids | length != 1 }} / {{ cve.affected_hosts | length }} Host{{ 's' if cve.affected_hosts | length != 1 }}
+                </span>
+                {% else %}
+                <span class="badge badge-success text-sm">{{ icon('shield-check','14') }} No Matches</span>
+                {% endif %}
+                {# Rules count: only when the CVE matches inventoried infrastructure #}
+                {% if cve.detections and cve.affected_hosts %}
+                <span class="badge status-chip status-chip--info text-sm">
+                    {{ icon('shield-check','14') }} {{ cve.detections | length }} Rule{{ 's' if cve.detections | length != 1 }} Available
+                </span>
+                {% endif %}
+            </div>
+        </div>
+        <div class="rh-more shrink-0" data-more>
+            {{ more_button('More actions', title='Export a report', attrs='name="CVE Actions"') }}
+            <div class="rh-more__menu" role="menu" hidden>
+                <button name="Export Report" type="button" role="menuitem" class="rh-more__item"
+                        data-click="cvePage.exportOpen" title="Generate a CVE audit report">
+                    {{ icon('download', '15') }}<span>Export report</span>
                 </button>
             </div>
-
-            {# Affected counts #}
-            {% set sys_ids = [] %}
-            {% for h in cve.affected_hosts %}{% if h.system_id not in sys_ids %}{% set _ = sys_ids.append(h.system_id) %}{% endif %}{% endfor %}
-            {% if cve.affected_hosts %}
-            <span class="badge badge-danger text-sm">
-                {{ icon('triangle-alert','14') }} Affects {{ sys_ids | length }} System{{ 's' if sys_ids | length != 1 }} / {{ cve.affected_hosts | length }} Host{{ 's' if cve.affected_hosts | length != 1 }}
-            </span>
-            {% else %}
-            <span class="badge badge-success text-sm">{{ icon('shield-check','14') }} No Matches</span>
-            {% endif %}
-
-            {# Rules count — only show if CVE matches inventoried infrastructure #}
-            {% if cve.detections and cve.affected_hosts %}
-            <span class="badge status-chip status-chip--info text-sm">
-                {{ icon('shield-check','14') }} {{ cve.detections | length }} Rule{{ 's' if cve.detections | length != 1 }} Available
-            </span>
-            {% endif %}
         </div>
-        <p class="m-0 fs-lg text-muted">{{ cve.vulnerability_name }}</p>
     </div>
 
     <!-- Info Card -->
@@ -100,8 +101,6 @@
     <div id="cve-affected-section">
         {% include "partials/cve_affected_hosts.html" %}
     </div>
-
-</div><!-- /container -->
 
 <!-- Required for mitre_pill slide panel -->
 <div id="slide-panel-container"></div>

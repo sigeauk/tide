@@ -204,7 +204,6 @@ class CveMatch(BaseModel):
     matched_software: List[str] = Field(default_factory=list)
     affected_hosts: List["AffectedHost"] = Field(default_factory=list)
     techniques: List[MitreTechnique] = Field(default_factory=list)
-    threat_actors: List[str] = Field(default_factory=list)          # actor names from OpenCTI
     detections: List["VulnDetection"] = Field(default_factory=list)     # detection rules recorded
 
 

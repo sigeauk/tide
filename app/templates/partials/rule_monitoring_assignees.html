@@ -1,0 +1,10 @@
+{# Partial: rule_monitoring_assignees.html -- Raise in GitLab's Assign to (rule_monitoring.gitlab_members),
+   loaded into #rmon-gitlab-assignees for the project chosen. Context: members (gitlab.project_members:
+   id, username, name), error (why they couldn't be read). Nobody is first and chosen. #}
+<select name="assignee_id" id="rmon-gitlab-assignee" class="form-input">
+    <option value="" selected>Nobody</option>
+    {% for m in members %}
+    <option value="{{ m.id }}">{{ m.name }} (@{{ m.username }})</option>
+    {% endfor %}
+</select>
+{% if error %}<span class="form-hint text-danger">The project's members couldn't be read: {{ error }}</span>{% endif %}

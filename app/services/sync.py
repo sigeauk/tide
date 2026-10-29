@@ -340,6 +340,117 @@ def _distribute_rules_to_tenants():
     return
 
 
+MITRE_DIR = "/opt/repos/mitre"     # ATT&CK's STIX bundles (*-attack.json), built into the image
+
+
+def _load_mitre_files(cti_helper, result: dict) -> tuple:
+    """Load every ATT&CK bundle's intrusion sets and their techniques into the shared actors, which
+    every client sees. Returns ``(actors, files)``; a bad file is an error in ``result`` and the
+    others still load."""
+    from app.database import save_threat_data
+    actors = files = 0
+    if not os.path.exists(MITRE_DIR):
+        msg = f"MITRE directory not found: {MITRE_DIR}"
+        logger.warning(msg)
+        result["warnings"].append(msg)
+        return 0, 0
+    for file in sorted(os.listdir(MITRE_DIR)):
+        if not file.endswith('-attack.json'):
+            continue
+        short_name = file.replace('-attack.json', '')
+        try:
+            json_data = cti_helper.fetch_stix_data(os.path.join(MITRE_DIR, file))
+            if not json_data:
+                result["warnings"].append(f"MITRE source '{short_name}' returned no data.")
+                continue
+            df_actors = cti_helper.process_stix_bundle(json_data, source_name=short_name)
+            if not df_actors.empty:
+                count = save_threat_data(df_actors)
+                actors += count
+                logger.info(f"   Loaded {count} actors from {short_name}")
+            files += 1
+        except Exception as exc:
+            msg = f"MITRE source '{short_name}' failed: {exc}"
+            logger.error(msg, exc_info=True)
+            result["errors"].append(msg)
+    return actors, files
+
+
+def _sync_opencti_actors(db, client_id: str, cti_helper, result: dict) -> int:
+    """The intrusion sets of each active OpenCTI connector linked to the client, read over GraphQL,
+    into the client's own database: never the shared actors, which every client sees.
+
+    OpenCTI is the truth. When every connector answered, what they hold now replaces the client's
+    OpenCTI actors, so one deleted in OpenCTI goes, and with no connector linked there are none.
+    When one didn't answer, the client keeps the actors it had and gains those that came in.
+    Returns how many were saved."""
+    import pandas as pd
+    from app.services.cti_connectors.opencti_taxii import graphql_base
+    from app.services.tenant_manager import tenant_context_for
+
+    frames, linked, failed = [], 0, 0
+    for connector in db.list_cti_connectors(only_active=True) or []:
+        if str(connector.get("vendor") or "").strip().lower() != "opencti_taxii":
+            continue
+        if not any(c.get("id") == client_id for c in db.get_cti_connector_clients(connector.get("id")) or []):
+            continue
+        linked += 1
+        label = connector.get("label") or connector.get("id")
+        cfg = connector.get("config") or {}
+        token = (cfg.get("token") or "").strip()
+        base = graphql_base(cfg.get("taxii_root") or "")
+        if not (base and token):
+            failed += 1
+            result["warnings"].append(f"OpenCTI connector '{label}' is missing its address or token.")
+            continue
+        try:
+            df = cti_helper.get_threat_landscape(base, token, verify=tls.verify_arg(cfg.get("verify_tls")))
+        except Exception as exc:
+            failed += 1
+            result["errors"].append(f"OpenCTI connector '{label}' intrusion-set sync failed: {exc}")
+            continue
+        if df is None or df.empty:
+            result["warnings"].append(f"OpenCTI connector '{label}' returned no intrusion sets.")
+            continue
+        frames.append(df)
+    if not linked:
+        result["warnings"].append("No active OpenCTI connector linked to the active client.")
+
+    with tenant_context_for(client_id):
+        if failed:
+            result["warnings"].append("The client keeps the OpenCTI actors it had, as not every OpenCTI connector "
+                                      "answered.")
+        else:
+            db.clear_octi_threat_actors_in_active_db()
+        if not frames:
+            return 0
+        return int(db.save_octi_threat_actors_to_active_db(pd.concat(frames, ignore_index=True)) or 0)
+
+
+def rebuild_shared_actors_if_mixed() -> int:
+    """At start: the shared actors are MITRE's alone. Before 6.3.1 the threat sync merged a client's
+    OpenCTI actors into them, where every client saw them; when any shared actor still carries a
+    source that isn't MITRE's, clear them and load MITRE's files again (each client's OpenCTI actors
+    come back into its own database at its next Sync Threats). Returns how many were loaded, 0 when
+    there was nothing to do."""
+    from app.services.database import get_database_service
+    db = get_database_service()
+    with db.get_shared_connection() as conn:
+        sources = [r[0] for r in conn.execute("SELECT source FROM threat_actors").fetchall()]
+    if all(s and all(db._row_is_mitre([tag]) for tag in (s.tolist() if hasattr(s, "tolist") else s))
+           for s in sources):
+        return 0
+    app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if app_dir not in sys.path:
+        sys.path.insert(0, app_dir)
+    import cti_helper
+    from app.database import clear_threat_actors
+    cleared = clear_threat_actors()
+    loaded, _files = _load_mitre_files(cti_helper, {"warnings": [], "errors": []})
+    logger.info("Shared threat actors held OpenCTI data: rebuilt %d MITRE actor(s) in place of %d.", loaded, cleared)
+    return loaded
+
+
 def run_mitre_sync(client_id: str | None = None):
     """Run the MITRE + OpenCTI threat-actor sync.
 
@@ -393,106 +504,24 @@ def run_mitre_sync(client_id: str | None = None):
             
             db = get_database_service()
             settings = get_settings()
-            
+
             # Clear threat_actors table for a fresh sync (live data)
             from app.database import clear_threat_actors
             cleared = clear_threat_actors()
             logger.info(f"Cleared {cleared} stale threat actors for fresh sync.")
-            
-            # --- Phase 1: Sync from local MITRE JSON files ---
-            mitre_actors = 0
-            mitre_files = 0
+
+            # --- Phase 1: Sync from local MITRE JSON files (the shared actors) ---
             logger.info("Starting MITRE file sync...")
-            mitre_dir = "/opt/repos/mitre"
-
-            if os.path.exists(mitre_dir):
-                for file in os.listdir(mitre_dir):
-                    if not file.endswith('-attack.json'):
-                        continue
-                    source_path = os.path.join(mitre_dir, file)
-                    short_name = file.replace('-attack.json', '')
-                    # Per-file isolation: a malformed STIX bundle in one
-                    # source must not poison the others. The previous loop
-                    # would bubble any parse / save exception out to the
-                    # top-level handler and abort the entire sync, taking
-                    # the OpenCTI phase down with it.
-                    try:
-                        json_data = cti_helper.fetch_stix_data(source_path)
-                        if not json_data:
-                            result["warnings"].append(
-                                f"MITRE source '{short_name}' returned no data."
-                            )
-                            continue
-                        df_actors = cti_helper.process_stix_bundle(
-                            json_data, source_name=short_name
-                        )
-                        if not df_actors.empty:
-                            from app.database import save_threat_data
-                            count = save_threat_data(df_actors)
-                            mitre_actors += count
-                            logger.info(f"   Loaded {count} actors from {short_name}")
-                        mitre_files += 1
-                    except Exception as exc:
-                        msg = f"MITRE source '{short_name}' failed: {exc}"
-                        logger.error(msg, exc_info=True)
-                        result["errors"].append(msg)
-            else:
-                msg = f"MITRE directory not found: {mitre_dir}"
-                logger.warning(msg)
-                result["warnings"].append(msg)
-
+            mitre_actors, mitre_files = _load_mitre_files(cti_helper, result)
             result["mitre_count"] = mitre_actors
             result["mitre_files"] = mitre_files
             logger.info(f"MITRE file sync complete. Updated {mitre_actors} actors across {mitre_files} file(s).")
 
-            # --- Phase 2: linked OpenCTI intrusion-set refresh (GraphQL) ---
-            # Threat Landscape only needs actor/intrusion-set coverage, so
-            # each linked OpenCTI connector is read through GraphQL.
+            # --- Phase 2: the client's OpenCTI intrusion sets (GraphQL), into its own database ---
             octi_actors = 0
-            opencti_runs = 0
             if client_id:
                 try:
-                    from app.database import save_threat_data
-                    from app.services.cti_connectors.opencti_taxii import graphql_base
-
-                    for connector in db.list_cti_connectors(only_active=True) or []:
-                        vendor_name = str(connector.get("vendor") or "").strip().lower()
-                        if vendor_name != "opencti_taxii":
-                            continue
-
-                        linked_clients = db.get_cti_connector_clients(connector.get("id")) or []
-                        if not any(c.get("id") == client_id for c in linked_clients):
-                            continue
-
-                        cfg = connector.get("config") or {}
-                        token = (cfg.get("token") or "").strip()
-                        base = graphql_base(cfg.get("taxii_root") or "")
-                        if not (base and token):
-                            result["warnings"].append(
-                                f"OpenCTI connector '{connector.get('label') or connector.get('id')}' "
-                                "is missing its address or token."
-                            )
-                            continue
-
-                        opencti_runs += 1
-                        try:
-                            df_octi = cti_helper.get_threat_landscape(
-                                base, token, verify=tls.verify_arg(cfg.get("verify_tls")))
-                            if df_octi is None or df_octi.empty:
-                                result["warnings"].append(
-                                    f"OpenCTI connector '{connector.get('label') or connector.get('id')}' returned no intrusion sets."
-                                )
-                                continue
-                            octi_actors += int(save_threat_data(df_octi) or 0)
-                        except Exception as exc:
-                            result["errors"].append(
-                                f"OpenCTI connector '{connector.get('label') or connector.get('id')}' intrusion-set sync failed: {exc}"
-                            )
-
-                    if opencti_runs == 0:
-                        result["warnings"].append(
-                            "No active OpenCTI connector linked to the active client."
-                        )
+                    octi_actors = _sync_opencti_actors(db, client_id, cti_helper, result)
                 except Exception as exc:
                     result["errors"].append(
                         f"OpenCTI intrusion-set sync phase failed: {exc}"
@@ -1057,10 +1086,31 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False, only_siem_id: 
                 if matched:
                     logger.info(f"Matched {matched} rule(s) to their Elastic or Sigma origin for client_id={client_id}")
 
+                # The client's GitLab backup project, for the destinations this sync covered: before
+                # Rule Monitoring's refresh, so a backup file put back to Kibana's version shows now.
+                synced_scopes = {(sid, sp) for sid, sps in client_scope.items() for sp in sps}
+                try:
+                    from app.services import gitlab_backup
+                    backed = gitlab_backup.after_sync(db, client_id, synced_scopes)
+                    if backed and backed["status"] == "failed":
+                        sync_runs.step_failed("Backing up rules to GitLab", backed["message"])
+                    elif backed:
+                        logger.info(f"GitLab backup for client_id={client_id}: {backed['message']}")
+                except Exception as _backup_exc:  # noqa: BLE001 - the sync carries on
+                    logger.error(f"GitLab backup failed for client_id={client_id}: {_backup_exc}")
+                    sync_runs.step_failed("Backing up rules to GitLab", _backup_exc)
+
+                # The GitLab issues raised from Rule Monitoring and still shown there: their state now.
+                # Quiet when GitLab doesn't answer; they keep what TIDE had.
+                try:
+                    from app.services import gitlab_issues
+                    gitlab_issues.after_sync(db, client_id)
+                except Exception:  # noqa: BLE001 - the sync carries on
+                    logger.warning(f"GitLab issues not refreshed for client_id={client_id}", exc_info=True)
+
                 # What needs action in the destinations this sync covered (Rule Monitoring).
                 from app.services import rule_issues
-                rule_issues.refresh_tenant(db, client_id,
-                                           scopes={(sid, sp) for sid, sps in client_scope.items() for sp in sps})
+                rule_issues.refresh_tenant(db, client_id, scopes=synced_scopes)
 
                 logger.info(f"Synced {count} rules from {len(siems)} SIEM(s) into tenant DB for client_id={client_id}")
                 return count

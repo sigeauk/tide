@@ -129,38 +129,6 @@
         testConnection('siem-test-btn', 'siem-test-result', '/api/management/siems/test-connection', fd);
     }
 
-    // ── OpenCTI dialog ──
-    function openOpenCTI(d) {
-        var editing = !!d.id;
-        $('opencti-modal-title').textContent = editing ? 'Edit OpenCTI Instance' : 'New OpenCTI Instance';
-        $('opencti-form-submit').textContent = editing ? 'Save' : 'Create';
-        $('opencti-form-id').value = d.id || '';
-        $('opencti-form-label').value = d.label || '';
-        $('opencti-form-url').value = d.url || '';
-        $('opencti-form-token').value = '';
-        var k = (d.kind || 'actors').toLowerCase();
-        if (k !== 'actors' && k !== 'cti' && k !== 'both') k = 'actors';
-        $('opencti-form-kind').value = k;
-        $('opencti-modal').style.display = 'flex';
-    }
-    function closeOpenCTI() { $('opencti-modal').style.display = 'none'; }
-    function submitOpenCTI(e) {
-        e.preventDefault();
-        var id = $('opencti-form-id').value, fd = new FormData();
-        fd.append('label', $('opencti-form-label').value);
-        fd.append('url', $('opencti-form-url').value);
-        fd.append('token', $('opencti-form-token').value);
-        fd.append('kind', $('opencti-form-kind').value);
-        submitTo(id ? '/api/management/opencti/' + id : '/api/management/opencti', id ? 'PUT' : 'POST', fd, closeOpenCTI, 'mgmt-sub-opencti');
-    }
-    function testOpenCTI() {
-        var fd = new FormData();
-        fd.append('opencti_id', $('opencti-form-id').value);
-        fd.append('url', $('opencti-form-url').value);
-        fd.append('token', $('opencti-form-token').value);
-        testConnection('opencti-test-btn', 'opencti-test-result', '/api/management/opencti/test-connection', fd);
-    }
-
     // ── GitLab dialog ──
     function openGitLab(d) {
         var editing = !!d.id;
@@ -169,8 +137,6 @@
         $('gitlab-form-id').value = d.id || '';
         $('gitlab-form-label').value = d.label || '';
         $('gitlab-form-url').value = d.url || '';
-        $('gitlab-form-token').value = '';
-        $('gitlab-form-group').value = !d.group || d.group === '—' ? '' : d.group;
         $('gitlab-form-tls-verify').checked = d.tlsVerify === 'true';
         $('gitlab-modal').style.display = 'flex';
     }
@@ -180,8 +146,6 @@
         var id = $('gitlab-form-id').value, fd = new FormData();
         fd.append('label', $('gitlab-form-label').value);
         fd.append('url', $('gitlab-form-url').value);
-        fd.append('token', $('gitlab-form-token').value);
-        fd.append('default_group', $('gitlab-form-group').value);
         fd.append('tls_verify', checked('gitlab-form-tls-verify'));
         submitTo(id ? '/api/management/gitlab/' + id : '/api/management/gitlab', id ? 'PUT' : 'POST', fd, closeGitLab, 'mgmt-integrations');
     }
@@ -393,13 +357,17 @@
     }
 
     function initEditor(type) {
-        if (typeof CodeMirror === 'undefined') { setTimeout(function () { initEditor(type); }, 300); return; }
         var a = assets[type], el = $(type + '-yaml-editor');
         if (!el || el._cmInited) return;
         el._cmInited = true;
-        a.cm = CodeMirror.fromTextArea(el, { mode: 'yaml', theme: 'material-darker', lineNumbers: true, tabSize: 2 });
-        a.cm.setSize(null, 300);
-        if (a.pending) { a.cm.setValue(a.pending); a.pending = null; }
+        TIDE.codeMirrorYaml().then(function (CM) {
+            a.cm = CM.fromTextArea(el, { mode: 'yaml', theme: 'material-darker', lineNumbers: true, tabSize: 2 });
+            a.cm.setSize(null, 300);
+            if (a.pending) { a.cm.setValue(a.pending); a.pending = null; }
+        }).catch(function () {
+            el._cmInited = false;
+            status(type, 'The YAML editor could not be loaded. Reload the page to try again.', true);
+        });
     }
 
     function loadAsset(type, filename) {
@@ -561,10 +529,6 @@
         siemEdit: function (e, el) { openSiem(el.dataset); },
         siemClose: closeSiem, siemBackdrop: onBackdrop(closeSiem),
         siemSubmit: submitSiem, siemTest: testSiem, siemType: updateSiemFields,
-        openctiNew: function () { openOpenCTI({}); },
-        openctiEdit: function (e, el) { openOpenCTI(el.dataset); },
-        openctiClose: closeOpenCTI, openctiBackdrop: onBackdrop(closeOpenCTI),
-        openctiSubmit: submitOpenCTI, openctiTest: testOpenCTI,
         gitlabNew: function () { openGitLab({}); },
         gitlabEdit: function (e, el) { openGitLab(el.dataset); },
         gitlabClose: closeGitLab, gitlabBackdrop: onBackdrop(closeGitLab), gitlabSubmit: submitGitLab,

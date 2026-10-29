@@ -1,7 +1,8 @@
 /*
  * A client's page (pages/admin/client_detail.html) and its sections: Edit client, Move a system to
  * another client, Linked SIEMs (partials/client_siems.html: a destination's edit popover, colour
- * swatches, the Add SIEM form's spaces, validation mode).
+ * swatches, the Add SIEM form's spaces, validation mode), GitLab Projects (partials/client_gitlab.html:
+ * the edit popover is the destinations' one; Link a project's fields follow what it is for).
  */
 (function () {
     'use strict';
@@ -45,8 +46,9 @@
 
     // ── Linked SIEMs ──
     // A destination's edit popover ("…"): one open at a time, closed by a click anywhere else.
+    // From a row's ⋮ (Edit) or the box's Cancel. The click goes on, so the ⋮ menu closes; the
+    // listener below leaves the box open for it.
     function toggleEdit(e, btn) {
-        e.stopPropagation();
         var el = $(btn.dataset.target);
         if (!el) return;
         var opening = el.style.display === 'none';
@@ -140,6 +142,16 @@
             });
     }
 
+    // ── GitLab Projects ──
+    // Link a project, or its pencil: only rule backup has a branch, a folder and destinations.
+    function gitlabUses(e, box) {
+        var form = box.closest('form');
+        var backup = form && form.querySelector('input[name="use"][value="backup"]');
+        var fields = form && form.querySelector('[data-gitlab-backup-only]');
+        if (fields && backup) fields.hidden = !backup.checked;
+    }
+
     TIDE.actions('clientDetail', { submitEdit: submitEdit, moveSystem: moveSystem });
     TIDE.actions('clientSiems', { toggleEdit: toggleEdit, pickColor: pickColor, validationMode: validationMode, addSiem: addSiemChange });
+    TIDE.actions('clientGitlab', { uses: gitlabUses });
 })();

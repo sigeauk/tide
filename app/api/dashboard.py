@@ -87,7 +87,16 @@ def _compute(db, client_id: str, card: dict) -> dict:
     if source == "cve_overview":
         return {"stats": eng.get_cve_overview_stats(client_id=client_id)}
     if source == "connected_services":
-        return {"client_siems": db.get_client_siems(client_id) if client_id else []}
+        if not client_id:
+            return {"client_siems": [], "client_opencti": [], "client_gitlab": []}
+        from app.services.cti_connectors.opencti_taxii import graphql_base
+        opencti = [{"label": c.get("label") or "OpenCTI", "url": graphql_base((c.get("config") or {}).get("taxii_root") or ""),
+                    "active": bool(c.get("is_active")), "status": c.get("last_status")}
+                   for c in db.list_cti_connectors() or []
+                   if str(c.get("vendor") or "").lower() == "opencti_taxii"
+                   and any(x.get("id") == client_id for x in db.get_cti_connector_clients(c.get("id")) or [])]
+        return {"client_siems": db.get_client_siems(client_id),
+                "client_opencti": opencti, "client_gitlab": db.list_client_gitlab_projects(client_id)}
     if source == "repositories":
         from app.services import builtin_data
         return {"items": builtin_data.status()}

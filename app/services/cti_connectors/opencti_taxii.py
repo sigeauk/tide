@@ -2,7 +2,9 @@
 
 The threat sync (:mod:`app.services.sync`) reads the intrusion sets of each
 active OpenCTI connector linked to the client through OpenCTI's GraphQL API
-(:func:`app.cti_helper.get_threat_landscape`). A connector holds the
+(:func:`app.cti_helper.get_threat_landscape`) into that client's own database.
+GraphQL rather than TAXII 2.1: it can read, and later write, more than a TAXII
+collection shares. A connector holds the
 address, the API token and whether to verify TLS. The address may be
 OpenCTI's own or the TAXII 2.1 root it shows (``.../taxii2/root/``), which
 connectors made before 6.3.0 hold; :func:`graphql_base` works out the

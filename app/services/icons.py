@@ -26,6 +26,11 @@ def close_button(attrs: str, label: str = "Close") -> str:
     return str(_env().get_template("macros/modal.html").module.close_button(attrs, label)).strip()
 
 
+def more_button(label: str = "More actions", title: str = "", attrs: str = "") -> str:
+    """The ⋮ that opens a menu of more actions, as ``{{ more_button(label, title, attrs) }}`` gives it."""
+    return str(_env().get_template("macros/menu.html").module.more_button(label, title, attrs)).strip()
+
+
 def icon_text(name: str, text: str, size: str = "16") -> str:
     """An icon then its words, as ``{{ icon_text(name, text, size) }}`` gives it."""
     return str(_env().get_template("macros/icons.html").module.icon_text(name, text, size)).strip()

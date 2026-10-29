@@ -1174,6 +1174,7 @@ def _process_rules(session, base_url, all_rules, check_mappings=True, catalogue=
                 indices = esql_indices
 
         clean_indices = [str(i).strip() for i in indices if i and str(i).strip().lower() not in IGNORED_INDICES]
+        threat_indices, threat_fields = [], set()
 
         # Convert data-view-backed rules to concrete index patterns at pull
         # time. ``data_view_id`` is a Kibana-space-scoped object — copying
@@ -1206,11 +1207,22 @@ def _process_rules(session, base_url, all_rules, check_mappings=True, catalogue=
             filter_fields = extract_filter_fields(r.get("filters"))
             if filter_fields:
                 fields = fields | filter_fields
+            # An indicator match rule matches on its threat mapping: each entry's field in the rule's
+            # own indexes, and its indicator field (``value``) in the indicator indexes. Its query is
+            # often only "field.*:*", which names no field at all.
+            if r.get('type') == 'threat_match':
+                entries = [e for m in r.get('threat_mapping') or [] if isinstance(m, dict)
+                           for e in m.get('entries') or [] if isinstance(e, dict)]
+                fields = fields | {str(e['field']) for e in entries if e.get('field')}
+                threat_fields = {str(e['value']) for e in entries if e.get('value')}
+                threat_indices = [str(i).strip() for i in r.get('threat_index') or []
+                                  if i and str(i).strip().lower() not in IGNORED_INDICES]
             wanted_patterns.update(
-                p for p in clean_indices if not p.startswith(('_', '-')) and p.lower() not in IGNORED_INDICES
+                p for p in clean_indices + threat_indices if not p.startswith(('_', '-')) and p.lower() not in IGNORED_INDICES
             )
 
-        rule_meta_list.append({"raw": r, "fields": fields, "indices": clean_indices, "sample": sample})
+        rule_meta_list.append({"raw": r, "fields": fields, "indices": clean_indices, "sample": sample,
+                               "threat_indices": threat_indices, "threat_fields": threat_fields})
 
     if check_mappings and wanted_patterns:
         stats = catalogue.ensure(wanted_patterns, make_field_caps_fetcher(session, base_url, elasticsearch_url),
@@ -1245,6 +1257,10 @@ def _process_rules(session, base_url, all_rules, check_mappings=True, catalogue=
         results, field_facts, aux_facts = [], None, {}
         if check_mappings:
             field_facts, results = catalogue.check(meta["indices"], meta["fields"])
+            if meta["threat_fields"]:
+                threat_facts, threat_rows = catalogue.check(meta["threat_indices"], meta["threat_fields"])
+                results = list(results) + list(threat_rows)
+                field_facts = {**threat_facts, **field_facts}
             aux = set(aggregate_fields) | {str(f) for f in investigation_fields}
             if r.get('timestamp_override') == 'event.ingested':
                 aux.add('event.ingested')
@@ -1404,6 +1420,12 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True, cata
                               # the 60s timeout on slow / large-rule-set
                               # Kibanas. More pages, but each page completes
                               # before the proxy / Kibana stalls.
+    # Unsorted, Kibana lists rules in the order Elasticsearch last wrote their saved objects, and
+    # every run of a rule rewrites its object: a rule that runs while the pages are read moves to
+    # the end, so it comes back twice and the rule after it is skipped (9-59 of ~2,000 per pass with
+    # ~950 rules enabled). A rule's creation time never changes, so sorting by it keeps each rule
+    # on one page.
+    PAGE_ORDER = {"sort_field": "created_at", "sort_order": "asc"}
     MAX_PAGE_RETRIES = 3
     BACKOFF_S = (0.5, 1.0, 2.0)
 
@@ -1457,7 +1479,7 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True, cata
                     try:
                         res = session.get(
                             endpoint,
-                            params={"page": page, "per_page": PAGE_SIZE},
+                            params={"page": page, "per_page": PAGE_SIZE, **PAGE_ORDER},
                             timeout=60,
                         )
                         if res.status_code == 200:
@@ -1542,12 +1564,11 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True, cata
                     hit_empty_page = True
                     break
                 # Stop once the DISTINCT rule count reaches the advertised total, not the raw row
-                # count. A real production bug (large rule sets, e.g. 500 rules over 5 pages of
-                # 100): if Kibana's paging returns the same rule on two pages while a different
-                # rule falls through the gap between them, the raw row count reaches ``total`` one
-                # page early, before the actual missing rule was ever fetched — and TIDE would
-                # deprecate a rule that is genuinely still in Kibana. Continuing until the DISTINCT
-                # count catches up gives that rule a real chance to show up on a later page.
+                # count. Sorted paging (PAGE_ORDER) keeps each rule on one page; this still guards
+                # against a rule seen twice (two rules created in the same millisecond swapping
+                # across a page boundary): the raw row count would reach ``total`` one page early,
+                # before a skipped rule was fetched, and TIDE would deprecate a rule that is still
+                # in Kibana. Continuing until the DISTINCT count catches up gives it a chance.
                 # Rules are counted by saved-object id: two rules sharing a rule_id are two rules.
                 if advertised_total >= 0 and len(seen_objects) >= advertised_total:
                     break
@@ -2013,111 +2034,99 @@ def preview_detection_rule(rule_data, space="default", lookback="24h",
         return 0, [], str(e)
 
 
-def get_exception_list(list_id, source_space, session, base_url):
-    """Get exception list details from source space. Caller must supply session
-    and base_url resolved from the per-tenant ``siem_inventory`` row."""
+def get_exception_list(list_id, source_space, session, base_url, namespace_type="single"):
+    """The exception list ``list_id`` itself (its name, description, type: not its items) in
+    ``source_space``, or None. ``namespace_type`` is the rule's for it: "agnostic" for a list shared
+    by every space."""
     prefix = _space_api_prefix(base_url, source_space)
-    url = f"{prefix}/api/exception_lists/items/_find?list_id={list_id}"
-    
-    response = session.get(url)
+    response = session.get(f"{prefix}/api/exception_lists",
+                           params={"list_id": list_id, "namespace_type": namespace_type or "single"})
     if response.status_code == 200:
-        data = response.json().get("data", [])
-        return data[0] if data else None
-    
+        return response.json()
     log_error(f"Failed to get exception list {list_id}: {response.status_code}")
     return None
 
 
-def get_exception_list_entries(list_id, source_space, session, base_url):
-    """Get all entries from an exception list. Caller must supply session and
-    base_url resolved from the per-tenant ``siem_inventory`` row."""
+def get_exception_list_entries(list_id, source_space, session, base_url, namespace_type="single"):
+    """Every item of the exception list ``list_id``, page by page; None when Kibana didn't give them
+    all, so a copy is never made with some missing."""
     prefix = _space_api_prefix(base_url, source_space)
-    url = f"{prefix}/api/exception_lists/items/_find?list_id={list_id}"
-    
-    response = session.get(url)
-    if response.status_code == 200:
-        return response.json().get("data", [])
-    
-    log_error(f"Failed to get exception entries for {list_id}: {response.status_code}")
-    return []
+    items, page, per_page = [], 1, 100
+    while True:
+        response = session.get(f"{prefix}/api/exception_lists/items/_find", params={
+            "list_id": list_id, "namespace_type": namespace_type or "single", "per_page": per_page, "page": page})
+        if response.status_code != 200:
+            log_error(f"Failed to get exception entries for {list_id}: {response.status_code}")
+            return None
+        data = response.json()
+        items += data.get("data") or []
+        if not data.get("data") or page * per_page >= int(data.get("total") or 0):
+            return items
+        page += 1
 
 
 def create_exception_list_in_target(exc_object, target_space, rule_name, session, base_url):
-    """Create a new exception list in the target space. Caller must supply
-    session and base_url resolved from the per-tenant ``siem_inventory`` row."""
-    exc_object = exc_object.copy()
-    # Remove read-only fields
-    for readonly in ["_version", "version", "created_at", "created_by", "updated_at", "updated_by", "tie_breaker_id", "meta"]:
-        exc_object.pop(readonly, None)
-    
-    # Generate new IDs
-    exc_object["list_id"] = str(uuid.uuid4())
-    exc_object["id"] = str(uuid.uuid4())
-    exc_object["name"] = f"Exception for rule - {rule_name}"
-    exc_object["type"] = "rule_default"
-    exc_object["namespace_type"] = "single"
-    
-    prefix = _space_api_prefix(base_url, target_space)
-    url = f"{prefix}/api/exception_lists"
-    response = session.post(url, json=exc_object)
-    
+    """Create a rule's own (rule_default) exception list in ``target_space`` from the list
+    ``exc_object``, under a new list id. Returns Kibana's list, or None."""
+    body = {k: exc_object[k] for k in ("description", "os_types", "tags") if exc_object.get(k) is not None}
+    body.update({"list_id": str(uuid.uuid4()), "name": f"Exception for rule - {rule_name}", "type": "rule_default",
+                 "namespace_type": "single"})
+    body.setdefault("description", f"Exceptions for rule - {rule_name}")
+    response = session.post(f"{_space_api_prefix(base_url, target_space)}/api/exception_lists", json=body)
     if response.status_code in (200, 201):
         log_info(f"Created exception list for {rule_name}")
         return response.json()
-    
-    log_error(f"Failed to create exception list for {rule_name}: {response.status_code}")
+    log_error(f"Failed to create exception list for {rule_name}: {response.status_code} {response.text[:200]}")
     return None
 
 
+# An exception item as a create takes it: Kibana's own fields left out, and its comments as text only
+# (a stored comment carries the id, author and date Kibana gave it, which a create refuses).
+_ITEM_FIELDS = ("name", "description", "type", "entries", "os_types", "tags", "expire_time")
+
+
 def create_exception_entry_in_target(exc_entry, list_id, target_space, session, base_url):
-    """Create an exception entry in the target list. Caller must supply session
-    and base_url resolved from the per-tenant ``siem_inventory`` row."""
-    exc_entry = exc_entry.copy()
-    exc_entry["list_id"] = list_id
-    exc_entry["namespace_type"] = "single"
-    exc_entry["item_id"] = str(uuid.uuid4())
-    
-    # Remove read-only fields
-    for readonly in ["id", "_version", "created_at", "created_by", "updated_at", "updated_by", "tie_breaker_id", "meta"]:
-        exc_entry.pop(readonly, None)
-    
-    prefix = _space_api_prefix(base_url, target_space)
-    url = f"{prefix}/api/exception_lists/items"
-    response = session.post(url, json=exc_entry)
-    
+    """Create a copy of the exception item ``exc_entry`` in the list ``list_id`` in ``target_space``.
+    Returns Kibana's item, or None."""
+    body = {k: exc_entry[k] for k in _ITEM_FIELDS if exc_entry.get(k) is not None}
+    body.update({"list_id": list_id, "namespace_type": "single", "item_id": str(uuid.uuid4())})
+    comments = [{"comment": c["comment"]} for c in exc_entry.get("comments") or [] if c.get("comment")]
+    if comments:
+        body["comments"] = comments
+    response = session.post(f"{_space_api_prefix(base_url, target_space)}/api/exception_lists/items", json=body)
     if response.status_code in (200, 201):
         return response.json()
-    
-    log_error(f"Failed to create exception entry in {target_space}: {response.status_code}")
+    log_error(f"Failed to create exception entry in {target_space}: {response.status_code} {response.text[:200]}")
     return None
 
 
 def create_exception_list_for_rule(exc_object, rule_name, source_space, target_space,
                                    source_session=None, source_base_url=None,
                                    target_session=None, target_base_url=None):
-    """Create a full exception list with entries for a rule"""
-    old_list_id = exc_object.get("list_id")
+    """Copy the exception list ``exc_object`` (get_exception_list) with every item, as a rule's own
+    list in ``target_space``: the reference for the rule's ``exceptions_list``, or None, leaving
+    nothing behind, when any part of it couldn't be copied."""
     log_info(f"Creating exception list for {rule_name} in {target_space}")
-    
-    created = create_exception_list_in_target(exc_object, target_space, rule_name,
-                                               session=target_session, base_url=target_base_url)
-    if not created:
-        log_error(f"Exception list for {rule_name} not created")
+    items = get_exception_list_entries(exc_object.get("list_id"), source_space, session=source_session,
+                                       base_url=source_base_url, namespace_type=exc_object.get("namespace_type"))
+    if items is None:
         return None
-    
-    # Copy all entries from the old list
-    items = get_exception_list_entries(old_list_id, source_space,
-                                       session=source_session, base_url=source_base_url)
+    created = create_exception_list_in_target(exc_object, target_space, rule_name,
+                                              session=target_session, base_url=target_base_url)
+    if not created:
+        return None
     for item in items:
-        create_exception_entry_in_target(item, created["list_id"], target_space,
-                                          session=target_session, base_url=target_base_url)
-    
-    return {
-        "id": created["id"],
-        "list_id": created["list_id"],
-        "type": created["type"],
-        "namespace_type": "single"
-    }
+        if not create_exception_entry_in_target(item, created["list_id"], target_space,
+                                                session=target_session, base_url=target_base_url):
+            delete_exception_list(created["list_id"], target_space, target_session, target_base_url)
+            return None
+    return {"id": created["id"], "list_id": created["list_id"], "type": created["type"], "namespace_type": "single"}
+
+
+def delete_exception_list(list_id, space, session, base_url):
+    """Delete a rule's own exception list TIDE made (its items go with it)."""
+    session.delete(f"{_space_api_prefix(base_url, space)}/api/exception_lists",
+                   params={"list_id": list_id, "namespace_type": "single"})
 
 
 def create_detection_rule(
@@ -2455,20 +2464,23 @@ def give_rule_own_id(object_id: str, space: str, kibana_url: str, api_key: str) 
             if exc.get("type") != "rule_default":
                 lists.append(exc)
                 continue
-            source = get_exception_list(exc.get("list_id"), space, session=session, base_url=base_url)
+            source = get_exception_list(exc.get("list_id"), space, session=session, base_url=base_url,
+                                        namespace_type=exc.get("namespace_type"))
             copied = source and create_exception_list_for_rule(
                 source, live.get("name"), space, space, source_session=session, source_base_url=base_url,
                 target_session=session, target_base_url=base_url)
             if not copied:
+                for made in lists:
+                    if made not in (live.get("exceptions_list") or []):
+                        delete_exception_list(made.get("list_id"), space, session, base_url)
                 return False, "Its exception list couldn't be copied, so nothing was changed.", None
             lists.append(copied)
         body["exceptions_list"] = lists
         created = session.post(url, json=body)
         if created.status_code not in (200, 201):
-            for exc in lists:
-                if exc not in (live.get("exceptions_list") or []):
-                    session.delete(f"{_space_api_prefix(base_url, space)}/api/exception_lists",
-                                   params={"list_id": exc.get("list_id"), "namespace_type": "single"})
+            for made in lists:
+                if made not in (live.get("exceptions_list") or []):
+                    delete_exception_list(made.get("list_id"), space, session, base_url)
             return False, f"Kibana refused it under a new rule id (HTTP {created.status_code}: {created.text[:200]}).", None
         deleted = session.delete(url, params={"id": object_id})
         if deleted.status_code not in (200, 204, 404):
@@ -2778,6 +2790,17 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
     tgt_base = target_kibana_url.rstrip("/")
     
     rule = rule_data.copy()
+    # A data view belongs to one Kibana space, so the copy takes its index patterns instead and runs
+    # wherever it goes. Sync does the same to TIDE's copy when it can read the data view; when it
+    # couldn't, it is read from the source now.
+    if rule.get("data_view_id") or rule.get("dataViewId"):
+        indices = rule.get("index") or get_data_view_indices(src_session, src_base, source_space, rule)
+        if not indices:
+            return False, (f"its data view couldn't be read from {source_space}, so TIDE can't give the copy its "
+                           "index patterns, and the data view may not exist where the copy goes.")
+        rule["index"] = indices
+        rule.pop("data_view_id", None)
+        rule.pop("dataViewId", None)
     # Kibana payloads use ``id`` as the live Elastic identity. TIDE's
     # logical/source ``rule_id`` may differ after restore or migration.
     source_elastic_id = rule.get("id")
@@ -2836,29 +2859,37 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
             if exact:
                 target_existing_id = exact.get("rule_id") or exact.get("id")
     
-    # Handle exception lists
-    if rule.get("exceptions_list"):
-        exceptions = rule.get("exceptions_list", [])
-        log_debug(f"Rule has {len(exceptions)} exception list(s)")
-        
+    # Exception lists: each is copied, with every item, as the copy's own. A list shared by every space
+    # (agnostic, such as Elastic Defend's) stays as it is while the copy stays on the same Kibana. One
+    # that can't be copied stops here, before anything is created, so no exception is lost.
+    original_lists = list(rule.get("exceptions_list") or [])
+    made_lists = []
+
+    def _drop_made_lists():
+        for made in made_lists:
+            delete_exception_list(made["list_id"], target_space, tgt_session, tgt_base)
+
+    if original_lists:
         new_exceptions = []
-        for exception in exceptions:
-            exception_list_id = exception.get("list_id")
-            exc_obj = get_exception_list(exception_list_id, source_space,
-                                          session=src_session, base_url=src_base)
-            
-            if exc_obj is not None:
-                new_exc = create_exception_list_for_rule(
-                    exc_obj, rule_name, source_space, target_space,
-                    source_session=src_session, source_base_url=src_base,
-                    target_session=tgt_session, target_base_url=tgt_base,
-                )
-                if new_exc:
-                    new_exceptions.append(new_exc)
-        
-        if new_exceptions:
-            rule["exceptions_list"] = new_exceptions
-    
+        for exception in original_lists:
+            if src_base == tgt_base and exception.get("namespace_type") == "agnostic":
+                new_exceptions.append(exception)
+                continue
+            exc_obj = get_exception_list(exception.get("list_id"), source_space, session=src_session,
+                                         base_url=src_base, namespace_type=exception.get("namespace_type"))
+            new_exc = exc_obj and create_exception_list_for_rule(
+                exc_obj, rule_name, source_space, target_space,
+                source_session=src_session, source_base_url=src_base,
+                target_session=tgt_session, target_base_url=tgt_base,
+            )
+            if not new_exc:
+                _drop_made_lists()
+                return False, (f'its exception list "{(exc_obj or {}).get("name") or exception.get("list_id")}" '
+                               f"couldn't be copied to {target_space}, so nothing was changed.")
+            made_lists.append(new_exc)
+            new_exceptions.append(new_exc)
+        rule["exceptions_list"] = new_exceptions
+
     # Actions whose connector the target doesn't have would make Kibana refuse the whole rule.
     rule["actions"], left_behind = _portable_actions(
         rule.get("actions"), src_session, src_base, source_space, tgt_session, tgt_base, target_space)
@@ -2878,8 +2909,10 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
         else:
             response = tgt_session.post(url, json=rule)
         # Kibana names a connector it doesn't have (its connectors couldn't be listed beforehand):
-        # go without that action rather than fail the whole rule.
-        missing = {a or b for a, b in _MISSING_ACTION.findall(response.text or "")} if response.status_code == 400 else set()
+        # go without that action rather than fail the whole rule. A missing connector is a 404
+        # ("Saved object [action/…] not found") as often as a 400.
+        missing = ({a or b for a, b in _MISSING_ACTION.findall(response.text or "")}
+                   if response.status_code in (400, 404) else set())
         refused = [a for a in rule.get("actions") or [] if a.get("id") in missing]
         if not refused:
             break
@@ -2888,6 +2921,7 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
     note = _actions_note(left_behind, target_space)
 
     if response.status_code not in (200, 201):
+        _drop_made_lists()
         error_msg = f"Could not {action.lower()[:-1]} the rule in {target_space}: {response.status_code} - {response.text}"
         log_error(error_msg)
         return False, error_msg

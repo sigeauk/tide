@@ -254,8 +254,17 @@ def attach(conn) -> None:
             logger.warning("Reference DB %s not found; ATT&CK, NIST and Sigma data unavailable", path)
             _attach_warned = True
         return
+    # Look first rather than ATTACH IF NOT EXISTS: in DuckDB 2.0 that can spin forever once a
+    # closed connection's database had this file attached (its address is reused by a new one).
+    attached = "SELECT 1 FROM duckdb_databases() WHERE database_name = 'ref'"
     try:
-        conn.execute(f"ATTACH IF NOT EXISTS '{path.replace(chr(39), chr(39) * 2)}' AS ref (READ_ONLY)")
+        if not conn.execute(attached).fetchone():
+            try:
+                conn.execute(f"ATTACH '{path.replace(chr(39), chr(39) * 2)}' AS ref (READ_ONLY)")
+            except Exception:
+                # Another connection to the same database attached it in the meantime.
+                if not conn.execute(attached).fetchone():
+                    raise
         conn.execute("SET search_path = 'main,ref'")
     except Exception as exc:
         logger.error("Could not attach reference DB %s: %s", path, exc)

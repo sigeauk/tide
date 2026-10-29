@@ -22,6 +22,16 @@ def _in_scope(db, client_id: str, siem_id: str, space: str) -> bool:
     return (siem_id, space) in set(db.get_client_siem_scopes(client_id) or [])
 
 
+def _holds_elastic_id(db, client_id: str, key: tuple) -> bool:
+    """rule_origins.holds_elastic_id for the rule TIDE holds at ``key``: unlinking it also gives it its own."""
+    from app.services import rule_origins
+    rule = db.get_rule_by_id(key[0], key[2], siem_id=key[1], client_id=client_id)
+    if not rule:
+        return False
+    with db.get_connection() as conn:
+        return rule_origins.holds_elastic_id(conn, client_id, key, rule)
+
+
 @router.get("/{rule_id}/upstream", response_class=HTMLResponse)
 def review_update(request: Request, rule_id: str, db: DbDep, user: CurrentUser, client_id: ActiveClient,
                   siem_id: str = Query(...), space: str = Query("default"), back: bool = Query(False)):
@@ -36,31 +46,50 @@ def review_update(request: Request, rule_id: str, db: DbDep, user: CurrentUser, 
                       if s.get("id") == siem_id and str(s.get("space") or "default") == space), space)
     can_apply = not user or user.can_write("page:rules")
     status = info.get("status")
+    can_unlink = can_apply and bool(status and status["origin"] == "elastic" and not status["prebuilt"])
     return request.app.state.templates.TemplateResponse(
         request, "components/rule_update_diff.html",
         {**info, "siem_id": siem_id, "space": space, "dest_name": dest_name, "can_apply": can_apply, "back": back,
-         "can_unlink": can_apply and bool(status and status["origin"] == "elastic" and not status["prebuilt"])},
+         "can_unlink": can_unlink,
+         "holds_elastic_id": can_unlink and _holds_elastic_id(db, client_id, (rule_id, siem_id, space))},
     )
 
 
 @router.post("/{rule_id}/unlink-upstream", response_class=HTMLResponse)
 async def unlink_upstream(request: Request, rule_id: str, db: DbDep, user: RequireUser, client_id: ActiveClient,
                           siem_id: str = Query(...), space: str = Query("default")):
-    """Unlink from Elastic (the rule window's Upstream section): see rule_origins.unlink. The window
-    reopens on the rule, now your own."""
+    """Unlink from Elastic (the rule window's Upstream section, the update dialog, Rule Monitoring): see
+    rule_origins.unlink. The rule is then your own, so one still under Elastic's rule id is also given
+    its own (promotion._own_rule_id_sync), which stays unlinked. The window reopens on the rule, under
+    its new rule id when it has one."""
     import json
-    from app.api.promotion import _run_in_context, _toast
+    from app.api.promotion import _own_rule_id_sync, _run_in_context, _toast
     from app.api.rules import rule_window
     from app.services import rule_origins
 
     if not _in_scope(db, client_id, siem_id, space):
         return _toast("danger", "Rule not found.", 404)
-    status, message = await _run_in_context(
-        rule_origins.unlink, db, client_id, (rule_id, siem_id, space), user.id, user.name or user.username)
+    key = (rule_id, siem_id, space)
+    username = user.name or user.username
+    held = await _run_in_context(_holds_elastic_id, db, client_id, key)
+    status, message = await _run_in_context(rule_origins.unlink, db, client_id, key, user.id, username)
     if status != 200:
         return _toast("danger", f"Could not unlink it from Elastic: {message}", status)
-    response = _toast("success", message, 200, trigger="refreshRules")
-    response.headers["X-Tide-Rule-Window"] = json.dumps(rule_window(rule_id, siem_id, space))
+    kind, shown = "success", rule_id
+    if held:
+        # Unlinked first, so the rule keeps no link to Elastic's rule under its new rule id, even
+        # when TIDE's part is finished later (Finish in TIDE).
+        own_status, own_message, new_id = await _run_in_context(
+            _own_rule_id_sync, db, user.id, username, client_id, rule_id, siem_id, space)
+        if own_status == 200:
+            message, shown = f"{message} {own_message}", new_id
+        elif own_status in (202, 410):
+            message, kind = f"{message} {own_message}", "warning"
+        else:
+            message, kind = (f"{message} It still uses Elastic's rule id, though: TIDE couldn't give it its own "
+                             f"({own_message}). Give it its own rule id, on the rule, to finish."), "warning"
+    response = _toast(kind, message, 200, trigger="refreshRules")
+    response.headers["X-Tide-Rule-Window"] = json.dumps(rule_window(shown, siem_id, space))
     return response
 
 

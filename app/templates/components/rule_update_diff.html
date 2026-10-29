@@ -8,10 +8,11 @@
   differs (Elastic raised the version for something outside the rule), "Move to version N" marks it.
   A custom rule that differs from the Elastic rule TIDE links it to (``unconfirmed``, the sections that
   differ; Rule Monitoring's elastic_link_differs) is said to be so: Keep the link marks it reviewed, and
-  Unlink from Elastic (``can_unlink``) makes it the tenant's own. ``back`` (from the rule window) offers
-  Back to rule rather than Close.
+  Unlink from Elastic (``can_unlink``) makes it the tenant's own, under a rule id of its own when it
+  holds Elastic's (``holds_elastic_id``). ``back`` (from the rule window) offers Back to rule rather
+  than Close.
   Context: rule, status (rule_origins.statuses), diffs, note, sections, unconfirmed, siem_id, space,
-  dest_name, can_apply, can_unlink, back.
+  dest_name, can_apply, can_unlink, holds_elastic_id, back.
 #}
 {% from "macros/icons.html" import icon, icon_text %}
 {% from "macros/rule_diff.html" import diff_fields %}
@@ -98,7 +99,7 @@
         <div class="modal-actions">
           {% if can_unlink %}<button name="Unlink From Elastic" type="button" class="btn btn-secondary mr-auto"
                   hx-post="/api/rules/{{ rule.rule_id }}/unlink-upstream?{{ scope_qs }}" hx-target="body" hx-swap="beforeend"
-                  hx-confirm="Unlink this rule from Elastic's &quot;{{ status.name or status.upstream_id }}&quot;? TIDE then treats it as your own rule and no longer shows Elastic's updates for it. Nothing changes in Kibana.">{{ icon_text('unlink', 'Unlink from Elastic', '13') }}</button>{% endif %}
+                  hx-confirm="Unlink this rule from Elastic's &quot;{{ status.name or status.upstream_id }}&quot;? TIDE then treats it as your own rule and no longer shows Elastic's updates for it.{% if holds_elastic_id %} It also gives it its own rule id, in place of Elastic's: TIDE creates it again in Kibana under a new rule id and deletes this one. Kibana keeps this rule's past alerts and runs with the original.{% else %} Nothing changes in Kibana.{% endif %}">{{ icon_text('unlink', 'Unlink from Elastic', '13') }}</button>{% endif %}
           {{ leave() }}
           {% if status.state == 'update' or unconfirmed %}<button type="button" class="btn btn-secondary" data-update-keep
                   hx-post="/api/rules/{{ rule.rule_id }}/upstream?{{ scope_qs }}" hx-vals='{"take": "none"}'

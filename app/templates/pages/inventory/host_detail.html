@@ -5,10 +5,9 @@
 
 {% from "components/ui/breadcrumb.html" import breadcrumb %}
 {% from "macros/modal.html" import close_button %}
+{% from "macros/menu.html" import more_button %}
 
 {% block content %}
-<div class="p-lg">
-
     {{ breadcrumb(items=[
         ('Home', '/'),
         ('Systems', '/systems'),
@@ -22,12 +21,22 @@
     <!-- Two-column layout -->
     <div class="host-detail-split">
 
-        <!-- Packages Section -->
-        <div class="min-w-0 overflow-hidden">
+        <!-- Packages Section: Add package in its ⋮, as a System page section keeps its own actions.
+             Not clipped: the last package's ⋮ opens below the list (names and CPEs truncate themselves). -->
+        <div class="min-w-0">
             <div class="flex items-center justify-between mb-ms">
                 <h2 class="section-title fs-title">
                     {{ icon('package', '18') }} Packages
                 </h2>
+                <div class="rh-more" data-more>
+                    {{ more_button('Package actions', title='Add a package', attrs='name="Package Actions"') }}
+                    <div class="rh-more__menu" role="menu" hidden>
+                        <button name="Add Package" type="button" role="menuitem" class="rh-more__item"
+                                data-click="el.show" data-target="add-sw-modal">
+                            {{ icon('plus', '15') }}<span>Add package</span>
+                        </button>
+                    </div>
+                </div>
             </div>
             <!-- Package search bar -->
             <input name="Pkg Search" id="pkg-search" class="form-input w-full fs-base mb-sm" type="search"
@@ -59,9 +68,6 @@
         </div>
 
     </div><!-- /grid -->
-
-
-</div><!-- /container -->
 
 <!-- ── Edit Device Modal ────────────────────────────────────────────── -->
 <div name="Edit Host Modal" id="edit-host-modal" class="modal-overlay" style="display:none;"

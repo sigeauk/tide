@@ -1,0 +1,3 @@
+{# One Rule Monitoring group's own body, loaded when it is first opened (rule_monitoring.rows). #}
+{% from "macros/rule_monitoring.html" import group_body with context %}
+{% if node %}{{ group_body(node) }}{% else %}<p class="rm-empty">This group has changed since the list was drawn: change a filter or reload the page to see it now.</p>{% endif %}

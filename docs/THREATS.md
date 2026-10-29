@@ -5,7 +5,7 @@ How to see who might attack you, what they do, and how much of it your rules wou
 ## Where it comes from
 
 - **MITRE ATT&CK**, built into TIDE: the tactics, techniques, groups, software, campaigns and mitigations ATT&CK describes, for Enterprise, ICS and Mobile, and how NIST 800-53 controls map to them.
-- **OpenCTI**, when your administrator links an OpenCTI connector to the client: its intrusion sets join ATT&CK's groups on Threat Landscape.
+- **OpenCTI**, when your administrator links an OpenCTI connector to the client: its intrusion sets join ATT&CK's groups on Threat Landscape, for that client only. One that is an ATT&CK group, by name or alias, is shown as that group, with its techniques from both.
 
 **Coverage** here always means: does an *enabled* rule of yours carry the ATT&CK technique? It is worked out from your rules' ATT&CK tags, across all your destinations. It is not a system's coverage, which also needs the rule mapped to a baseline technique (see [Systems & baselines](SYSTEMS.md)).
 

@@ -12,20 +12,6 @@
 
     function $(id) { return document.getElementById(id); }
 
-    // On hx-boost navigation, head-support does not run <script defer> tags added to <head>, so
-    // the vendor scripts are loaded here when missing.
-    function loadScript(src) {
-        return new Promise(function (resolve, reject) {
-            if (document.querySelector('script[data-tide-loaded="' + src + '"]')) { resolve(); return; }
-            var s = document.createElement('script');
-            s.src = src;
-            s.setAttribute('data-tide-loaded', src);
-            s.onload = resolve;
-            s.onerror = function () { reject(new Error('Failed to load ' + src)); };
-            document.head.appendChild(s);
-        });
-    }
-
     var selection = { pipeline: [], template: [] };   // ordered selections in the two pickers
     var ownYaml = '';                                  // the rule of your own on show, if any
 
@@ -140,10 +126,7 @@
     // ── Add your own Sigma rule ──
     function editor() {
         if (window.sigmaYamlEditor) return Promise.resolve(window.sigmaYamlEditor);
-        var ready = (typeof CodeMirror === 'undefined')
-            ? loadScript('/static/js/vendor/codemirror.min.js').then(function () { return loadScript('/static/js/vendor/codemirror-yaml.min.js'); })
-            : (CodeMirror.modes && CodeMirror.modes.yaml ? Promise.resolve() : loadScript('/static/js/vendor/codemirror-yaml.min.js'));
-        return ready.then(function () {
+        return TIDE.codeMirrorYaml().then(function () {
             var ta = $('yaml-editor');
             var cm = CodeMirror.fromTextArea(ta, {
                 mode: 'yaml', theme: 'material-darker', lineNumbers: true, lineWrapping: true,

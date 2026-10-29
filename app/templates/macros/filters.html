@@ -7,7 +7,7 @@
   data-change, ...), so forms, hx-include and page scripts read and set it as before; the radio
   rows only choose (app.js: picking one sets the select and fires its change). A script that sets
   the select itself calls tideFilterSync(), or leaves it to the next htmx request.
-  filter_multi's checkboxes carry the name themselves.
+  filter_multi / check_rows' checkboxes carry the name themselves.
 
   wrap: "filter-group" in a filters bar, "browser-filter" in a rule library's browser,
   "sigma-select-group" in a rule library's settings row.
@@ -62,11 +62,9 @@
 {% endcall %}
 {%- endmacro %}
 
-{# Any number of choices; none ticked shows all_text. input_attrs go on every checkbox. #}
-{% macro filter_multi(id, name, label, options, selected=[], all_text='All', counts=none, input_attrs='', titles=none, wrap='filter-group') -%}
-{% set picked = [] %}
-{% for value, text in options %}{% if value in selected %}{% set _ = picked.append(text) %}{% endif %}{% endfor %}
-{% call filter_dropdown(id, label, picked | join(', ') or all_text, 'multi', wrap, all_text) %}
+{# Checkbox rows for any number of choices, each carrying ``name``; counts and titles as choice_rows.
+   input_attrs go on every checkbox. #}
+{% macro check_rows(name, options, selected=[], counts=none, input_attrs='', titles=none) -%}
 {% for value, text in options %}
 <label class="rh-checkbox-row"{% if titles and titles.get(value) %} title="{{ titles.get(value) }}"{% endif %}>
     <input type="checkbox" name="{{ name }}" value="{{ value }}" {% if value in selected %}checked{% endif %} {{ input_attrs | safe }}>
@@ -74,5 +72,13 @@
     {% if counts is not none %}<span class="rh-checkbox-count">{{ counts.get(value, 0) }}</span>{% endif %}
 </label>
 {% endfor %}
+{%- endmacro %}
+
+{# Any number of choices; none ticked shows all_text. #}
+{% macro filter_multi(id, name, label, options, selected=[], all_text='All', counts=none, input_attrs='', titles=none, wrap='filter-group') -%}
+{% set picked = [] %}
+{% for value, text in options %}{% if value in selected %}{% set _ = picked.append(text) %}{% endif %}{% endfor %}
+{% call filter_dropdown(id, label, picked | join(', ') or all_text, 'multi', wrap, all_text) %}
+{{ check_rows(name, options, selected, counts, input_attrs, titles) }}
 {% endcall %}
 {%- endmacro %}

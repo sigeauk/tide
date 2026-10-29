@@ -140,6 +140,11 @@ KNOWN: Dict[str, Issue] = {i.id: i for i in (
           "Kibana made a change TIDE asked for (giving the rule its own rule id, moving or copying it, or restoring "
           "it), but TIDE couldn't record it, so TIDE still shows the rule as it was before.",
           "Use Finish in TIDE on the rule. The next sync that reads the rule also finishes it."),
+    Issue("backup_overwritten", "Backup changed in GitLab", "tide", "warning", "rule",
+          "Someone changed or removed this rule's file in the client's GitLab backup project. Kibana holds the rule, "
+          "so TIDE's backup put Kibana's version back; the change is still in the project's history.",
+          "If the change was meant for the rule, make it in Kibana or in the rule's window in TIDE. Otherwise nothing "
+          "is needed: this goes after 7 days."),
     Issue("other", "Other Kibana errors", "platform", "warning", "rule",
           "Kibana reported a problem with the rule's last run that TIDE doesn't recognise.",
           "Read Kibana's message on the rule, in Kibana's rule details or TIDE's rule window."),
@@ -324,6 +329,29 @@ def _json(text, default):
         return default
 
 
+def _among(keys: List[Tuple[str, str, str]]) -> Tuple[str, List[List[str]]]:
+    """A condition (" AND …") and its parameters picking the detection_rules rows ``keys`` name."""
+    return (" AND EXISTS (SELECT 1 FROM (SELECT unnest(?::VARCHAR[]) AS k, unnest(?::VARCHAR[]) AS s, "
+            "unnest(?::VARCHAR[]) AS sp) x WHERE x.k = rule_id AND x.s = siem_id AND x.sp = space)",
+            [[k[0] for k in keys], [k[1] for k in keys], [k[2] for k in keys]])
+
+
+def rule_patterns(conn, keys: Iterable[Tuple[str, str, str]]) -> Dict[Tuple[str, str, str], List[str]]:
+    """The index patterns each rule searches, as ``detect`` reads them: its own, else those its fields
+    were checked in (an ES|QL rule's FROM). ``{(rule_id, siem_id, space): [pattern]}``."""
+    keys = sorted(set(keys))
+    out: Dict[Tuple[str, str, str], List[str]] = {}
+    for at in range(0, len(keys), _BATCH):
+        where, params = _among(keys[at:at + _BATCH])
+        for rule_id, siem_id, space, idx, results in conn.execute(
+                "SELECT rule_id, siem_id, space, json_extract(raw_data, '$.index')::VARCHAR, "
+                "json_extract(raw_data, '$.results')::VARCHAR FROM detection_rules WHERE true" + where, params).fetchall():
+            rows = [r for r in _json(results, []) or [] if isinstance(r, list) and r]
+            out[(rule_id, siem_id, space)] = ([str(p) for p in _json(idx, []) or [] if p]
+                                              or sorted({str(r[0]) for r in rows}))
+    return out
+
+
 def detect(db, conn, scopes: Optional[Set[Tuple[str, str]]] = None,
            rule_keys: Optional[Set[Tuple[str, str, str]]] = None,
            catalogue_for: Optional[Callable[[str], Any]] = None) -> Dict[Key, Tuple[str, str]]:
@@ -352,11 +380,8 @@ def detect(db, conn, scopes: Optional[Set[Tuple[str, str]]] = None,
                 if scopes is None or (k[1], k[2]) in scopes]
     rules = []
     for at in range(0, len(keys), _BATCH):
-        batch = keys[at:at + _BATCH]
-        rules += conn.execute(
-            _RULES_SQL + " AND EXISTS (SELECT 1 FROM (SELECT unnest(?::VARCHAR[]) AS k, unnest(?::VARCHAR[]) AS s, "
-            "unnest(?::VARCHAR[]) AS sp) x WHERE x.k = rule_id AND x.s = siem_id AND x.sp = space)",
-            [[k[0] for k in batch], [k[1] for k in batch], [k[2] for k in batch]]).fetchall()
+        where, params = _among(keys[at:at + _BATCH])
+        rules += conn.execute(_RULES_SQL + where, params).fetchall()
     by_siem: Dict[str, List[tuple]] = {}
     for r in rules:
         by_siem.setdefault(r[1], []).append(r)
@@ -368,8 +393,9 @@ def detect(db, conn, scopes: Optional[Set[Tuple[str, str]]] = None,
             parsed.append((rule_id, space, enabled, _json(last, {}), rule, updated_at, last_updated))
             for issue, cause, severity, detail in schedule_findings(run_interval, lookback_from):
                 add(issue, cause, siem_id, space, rule_id, severity, detail)
+        # Its own patterns and every pattern its lines name (an indicator match rule's indicator indexes).
         patterns = {p for *_x, rule, _u, _l in parsed
-                    for p in (rule["index"] or [row[0] for row in rule["results"] if isinstance(row, list) and row])}
+                    for p in list(rule["index"] or []) + [row[0] for row in rule["results"] if isinstance(row, list) and row]}
         try:
             entries = catalogue_for(siem_id).entries([str(p) for p in patterns if p])
         except Exception:
@@ -429,6 +455,17 @@ def detect(db, conn, scopes: Optional[Set[Tuple[str, str]]] = None,
                     add("sync_incomplete", "", siem_id, space, "", KNOWN["sync_incomplete"].severity,
                         f"Kibana said it holds {total} rules and returned {returned}; TIDE holds {held} that it "
                         "didn't return.")
+    # Backed-up rule files changed in GitLab, which the backup put back to Kibana's (gitlab_backup).
+    if "gitlab_backup_files" in tables:
+        from app.services.gitlab_backup import OVERWRITE_DAYS
+        for rule_id, siem_id, space, by, commit in conn.execute(
+                "SELECT rule_id, siem_id, space, overwritten_by, overwritten_commit FROM gitlab_backup_files "
+                f"WHERE rule_id IS NOT NULL AND overwritten_at >= now() - INTERVAL {int(OVERWRITE_DAYS)} DAY").fetchall():
+            if wanted(siem_id, space, rule_id):
+                who = f" by {by}" if by else ""
+                where = f" in commit {commit}" if commit else ""
+                add("backup_overwritten", "", siem_id, space, rule_id, KNOWN["backup_overwritten"].severity,
+                    f"Its backup file was changed in GitLab{who}{where}; TIDE put Kibana's version back.")
     if rule_keys is None and "siem_space_status" in tables:
         for siem_id, space, reason in conn.execute(
                 "SELECT siem_id, space, reason FROM siem_space_status WHERE NOT reachable").fetchall():
@@ -662,8 +699,8 @@ def _item(f: Dict[str, Any]) -> Tuple[str, str, str]:
 def view(conn, destinations: List[Dict[str, Any]], filters: Dict[str, Any],
          now: Optional[datetime] = None, client_id: Optional[str] = None) -> Dict[str, Any]:
     """Everything the Rule Monitoring page shows for one client: ``rows`` (each finding, filtered),
-    ``groups`` (as ``filters["group"]`` asks), ``metrics``, and ``counts`` per filter choice (before
-    the choice's own filter). ``destinations`` are the client's linked ones, ``[{id, space, name}]``;
+    ``groups`` (as ``filters["group"]`` asks), ``metrics``, and ``counts`` per filter choice (with
+    every other filter, not its own). ``destinations`` are the client's linked ones, ``[{id, space, name}]``;
     findings anywhere else are left out. Stale destinations come in as ``stale_data``, and with
     ``client_id``, steps its last sync failed as ``sync_step_failed``."""
     now = now or datetime.now()
@@ -687,11 +724,13 @@ def view(conn, destinations: List[Dict[str, Any]], filters: Dict[str, Any],
     found += failed_steps(client_id, names)
     found += pending_changes(client_id)
     copies = _shared_copies(conn)
+    linked = _linked_to_elastic(conn, [_item(f) for f in found if f["issue"] == "custom_elastic_id"])
     for f in found:
         f["destination"] = names.get((f["siem_id"], f["space"]))
         known = KNOWN.get(f["issue"], KNOWN["other"])
         f.update(title=known.title, fixer=known.fixer, fixer_label=FIXERS[known.fixer], age=_age(f["first_seen"], now),
                  copies=copies.get(_item(f), []) if f["issue"] == "shared_rule_id" else [],
+                 unlinkable=f["issue"] == "custom_elastic_id" and _item(f) in linked,
                  cluster=clusters.get(f["siem_id"], f["siem_id"]))
     every = [f for f in found if f["destination"] is not None]
     all_rules = (filters.get("rules") or "enabled") == "all"
@@ -703,13 +742,13 @@ def view(conn, destinations: List[Dict[str, Any]], filters: Dict[str, Any],
         return [f for f in every if (f["resolved_at"] is None) == (show == "open")
                 and (all_rules or not f["rule_id"] or f["enabled"] or f["fixer"] == "tide")]
 
-    def narrowed(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """The filter bar's other choices."""
-        if scope:
+    def narrowed(rows: List[Dict[str, Any]], skip: str = "") -> List[Dict[str, Any]]:
+        """The filter bar's other choices, all but ``skip`` (a filter's counts leave out its own choice)."""
+        if scope and skip != "scope":
             rows = [f for f in rows if f"{f['siem_id']}|{f['space']}" == scope]
         for field in ("severity", "fixer", "issue"):
             wanted = set(filters.get(field) or [])
-            if wanted:
+            if wanted and field != skip:
                 rows = [f for f in rows if f[field] in wanted]
         search = str(filters.get("search") or "").strip().lower()
         if search:
@@ -736,8 +775,10 @@ def view(conn, destinations: List[Dict[str, Any]], filters: Dict[str, Any],
 
     show = filters.get("show") or "open"
     before = shown(show)
-    counts = {"severity": tally(before, lambda f: f["severity"]), "fixer": tally(before, lambda f: f["fixer"]),
-              "issue": tally(before, lambda f: f["issue"]), "scope": tally(before, lambda f: f"{f['siem_id']}|{f['space']}")}
+    # Each choice's count is what the list holds once it is picked, with the other filters as they are.
+    counts = {field: tally(narrowed(before, field), key) for field, key in (
+        ("severity", lambda f: f["severity"]), ("fixer", lambda f: f["fixer"]), ("issue", lambda f: f["issue"]),
+        ("scope", lambda f: f"{f['siem_id']}|{f['space']}"))}
     found = narrowed(before)
     group = filters.get("group") or "issue"
     open_rows = found if show == "open" else narrowed(shown("open"))
@@ -748,7 +789,8 @@ def view(conn, destinations: List[Dict[str, Any]], filters: Dict[str, Any],
     if show == "open":
         groups = _group([f for f in found if not f["ack"]], group)
         if muted:
-            groups.append(_node("acknowledged", "acknowledged", "Acknowledged", muted, children=_group(muted, group)))
+            groups.append(_node("acknowledged", "acknowledged", "Acknowledged", muted,
+                                children=_group(muted, group, ("acknowledged",))))
     else:
         groups = _group(found, group)
     return {"rows": found, "groups": groups, "metrics": metrics, "counts": counts, "now": now}
@@ -769,6 +811,20 @@ def _shared_copies(conn) -> Dict[Tuple[str, str, str], List[Dict[str, Any]]]:
                                                         for r in dup.get("rules", [])
                                                         if not r.get("kept") and not r.get("prebuilt")]
     return out
+
+
+def _linked_to_elastic(conn, keys: List[Tuple[str, str, str]]) -> Set[Tuple[str, str, str]]:
+    """Of ``keys``, the rules linked to one of Elastic's rules that can be unlinked from it
+    (rule_origins.unlink_refused)."""
+    if not keys:
+        return set()
+    from app.services import rule_origins
+    try:
+        origins = rule_origins.get_bulk(conn, keys)
+    except Exception:
+        logger.debug("Could not read rule origins", exc_info=True)
+        return set()
+    return {k for k, row in origins.items() if not rule_origins.unlink_refused(row)}
 
 
 def _cause_key(f: Dict[str, Any]) -> Tuple[str, str, str, str]:
@@ -861,45 +917,164 @@ def _md(text: Any) -> str:
     return re.sub(r"\s+", " ", str(text or "")).replace("|", "\\|").strip()
 
 
-def markdown(nodes: List[Dict[str, Any]], siem_labels: Dict[str, str], now: datetime) -> str:
-    """Causes as Markdown for a ticket or a chat: ``nodes`` are cause nodes (``view`` groups)."""
-    parts = []
+# What an issue hands over depends on who fixes it. An index or field problem is handed over as the fix
+# itself: each field, in which index, on which SIEM, with how many rules it holds back. Where the rule
+# may be the one at fault (``_EITHER_SIDE``), its rules follow, for their author. Every other issue is
+# a table of its rules (or destinations), with what was found on each.
+_FIELD_ISSUES = {"field_missing", "field_conflict", "override_missing", "unknown_field"}   # cause: a field
+# issue: (who else may fix it, when, the data side's table heading, the rule author's)
+_EITHER_SIDE = {
+    "field_missing": ("author", "if a field name is wrong",
+                      "**For data / ingest:** the fields, and the indexes that don't map them.",
+                      "**For the rule author:** the rules using them. Where a name is wrong, correct the rule's query."),
+    "override_missing": ("author", "if the rule's timestamp override is wrong",
+                         "**For data / ingest:** the indexes that don't map the timestamp override field.",
+                         "**For the rule author:** the rules using it as their timestamp override. Or change "
+                         "their timestamp override."),
+    "unknown_field": ("data", "if the field name is right",
+                      "**For data / ingest:** the fields, and the indexes the rules search.",
+                      "**For the rule author:** the rules using them. Where a name is wrong, correct the rule's query."),
+}
+
+
+def _cut(text: Any, size: int = 300) -> str:
+    """``_md`` text, no longer than ``size``."""
+    text = _md(text)
+    return text if len(text) <= size else text[:size - 1].rstrip() + "…"
+
+
+def _field_index(cause: str) -> Tuple[str, str]:
+    """A field issue's cause, "<field> in <index>", as (field, index); the index is "" when it names none."""
+    field, _, index = cause.partition(" in ")
+    return field, index
+
+
+def _state(f: Dict[str, Any]) -> str:
+    return "Enabled" if f["enabled"] else "Disabled"
+
+
+def _since(when: Optional[datetime]) -> str:
+    return f"{when:%Y-%m-%d}" if when else "—"
+
+
+def _rules_count(rules: Dict[Tuple[str, str, str], Dict[str, Any]]) -> str:
+    disabled = sum(1 for f in rules.values() if not f["enabled"])
+    return f"{len(rules)}" + (f" ({disabled} disabled)" if disabled else "")
+
+
+def _by_rule(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return sorted(rows, key=lambda f: (str(f["name"] or f["rule_id"]).lower(), str(f["destination"])))
+
+
+def _fixes(issue: str, nodes: List[Dict[str, Any]], labels: Dict[str, str],
+           patterns: Dict[Tuple[str, str, str], List[str]]) -> List[str]:
+    """The data side's table: a row per field and index (or per index pattern) on each SIEM, by SIEM,
+    index and field, with how many rules it holds back and since when. A cause listed in several
+    groups is one row."""
+    slots: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
     for node in nodes:
-        rows = node["rows"]
-        first = rows[0]
-        known = KNOWN.get(first["issue"], KNOWN["other"])
-        siem = ", ".join(siem_labels.get(s, s) for s in node.get("siem_ids") or [first["siem_id"]])
-        title = (f"### {known.title}: `{node['cause']}` on {siem}" if node.get("cause")
-                 else f"### {known.title}: {node['where']}")
-        rules = [f for f in rows if f["rule_id"]]
-        disabled = sum(1 for f in rules if not f["enabled"])
-        since = node["first_seen"]
-        lines = [title,
-                 f"- **Who fixes:** {FIXERS[known.fixer]} · **Severity:** {node['severity'].title()}",
-                 f"- **Failing since:** {since:%Y-%m-%d} ({_age(since, now)})" if since else "- **Failing since:** unknown",
-                 f"- **Rules affected:** {len(rules)}" + (f" ({disabled} disabled)" if disabled else "")
-                 if rules else "- **Affects:** the whole destination",
-                 f"- **What it means:** {_md(known.meaning)}",
-                 f"- **To fix:** {_md(known.check)}"]
-        detail = next((f["detail"] for f in rows if f["detail"]), "")
-        if detail:
-            lines.append(f"- **{'Kibana says' if first['issue'] not in _TIDE_FOUND else 'Found'}:** {_md(detail)[:600]}")
+        siem = ", ".join(sorted(labels.get(s, s) for s in node["siem_ids"]))
+        for f in node["rows"]:
+            if issue == "no_index":
+                places = [("", node["cause"])]
+            elif issue == "unknown_field":           # Kibana names the field; the rule names where it searched
+                places = [(node["cause"], p) for p in patterns.get(_item(f)) or [""]]
+            else:
+                places = [_field_index(node["cause"])]
+            for field, index in places:
+                slot = slots.setdefault((field, index, siem), {"rules": {}, "since": None})
+                if f["rule_id"]:
+                    slot["rules"][_item(f)] = f
+                if f["first_seen"] and (slot["since"] is None or f["first_seen"] < slot["since"]):
+                    slot["since"] = f["first_seen"]
+    ordered = sorted(slots.items(), key=lambda kv: (kv[0][2].lower(), kv[0][1].lower(), kv[0][0].lower()))
+    if issue == "no_index":
+        return ["| Index pattern | SIEM | Rules | Since |", "|---|---|---|---|"] + [
+            f"| {_md(index)} | {_md(siem)} | {_rules_count(s['rules'])} | {_since(s['since'])} |"
+            for (_field, index, siem), s in ordered]
+    return ["| Field | Index | SIEM | Rules | Since |", "|---|---|---|---|---|"] + [
+        f"| {_md(field)} | {_md(index) or '—'} | {_md(siem)} | {_rules_count(s['rules'])} | {_since(s['since'])} |"
+        for (field, index, siem), s in ordered]
+
+
+def _rules_using(issue: str, nodes: List[Dict[str, Any]]) -> List[str]:
+    """The rule author's table, for an issue either side may fix: each rule and the fields it uses."""
+    by_rule: Dict[Tuple[str, str, str], Tuple[Dict[str, Any], Set[str]]] = {}
+    for node in nodes:
+        field = node["cause"] if issue == "unknown_field" else _field_index(node["cause"])[0]
+        for f in node["rows"]:
+            if f["rule_id"]:
+                by_rule.setdefault(_item(f), (f, set()))[1].add(field)
+    return ["| Rule | Destination | State | Fields |", "|---|---|---|---|"] + [
+        f"| {_md(f['name'] or f['rule_id'])} | {_md(f['destination'])} | {_state(f)} | "
+        f"{_md(', '.join(sorted(by_rule[_item(f)][1])))} |" for f in _by_rule(f for f, _n in by_rule.values())]
+
+
+def _found(nodes: List[Dict[str, Any]]) -> List[str]:
+    """Every other issue's table: each rule, or whole destination, with what was found on it (a
+    query's error is each rule's own)."""
+    rows = [f for node in nodes for f in node["rows"]]
+    if not any(f["rule_id"] for f in rows):
+        return ["| Destination | Since | What was found |", "|---|---|---|"] + [
+            f"| {_md(f['destination'])} | {_since(f['first_seen'])} | {_cut(f['detail'])} |"
+            for f in sorted(rows, key=lambda f: str(f["destination"]).lower())]
+    return ["| Rule | Destination | State | Since | What was found |", "|---|---|---|---|---|"] + [
+        f"| {_md(f['name'] or f['rule_id'])} | {_md(f['destination'])} | {_state(f)} | {_since(f['first_seen'])} | "
+        f"{_cut(f['detail'])} |" for f in _by_rule(f for f in rows if f["rule_id"])]
+
+
+def _issue_markdown(issue: str, nodes: List[Dict[str, Any]], labels: Dict[str, str], now: datetime,
+                    patterns: Dict[Tuple[str, str, str], List[str]]) -> str:
+    """One issue's causes: what it is, who fixes it, and the table that person needs."""
+    known = KNOWN.get(issue, KNOWN["other"])
+    rows = [f for node in nodes for f in node["rows"]]
+    rules = {_item(f): f for f in rows if f["rule_id"]}
+    firsts = [n["first_seen"] for n in nodes if n["first_seen"]]
+    since = min(firsts) if firsts else None
+    if len(nodes) == 1:
+        node = nodes[0]
+        siem = ", ".join(labels.get(s, s) for s in node["siem_ids"])
+        title = f"### {known.title}: `{node['cause']}` on {siem}" if node["cause"] else f"### {known.title}: {node['where']}"
+    else:
+        title = f"### {known.title}"
+    either = _EITHER_SIDE.get(issue)
+    places = {(f["siem_id"], f["space"]) for f in rows}
+    affects = (f"- **Rules affected:** {_rules_count(rules)}" if rules
+               else "- **Affects:** the whole destination" if len(places) == 1
+               else f"- **Affects:** {len(places)} destinations, as a whole")
+    lines = [title,
+             f"- **Who fixes:** {FIXERS[known.fixer]}" + (f", or {FIXERS[either[0]]} {either[1]}" if either else "")
+             + f" · **Severity:** {min((n['severity'] for n in nodes), key=_SEVERITY_ORDER.get).title()}",
+             f"- **Failing since:** {since:%Y-%m-%d} ({_age(since, now)})" if since else "- **Failing since:** unknown",
+             affects,
+             f"- **What it means:** {_md(known.meaning)}",
+             f"- **To fix:** {_md(known.check)}"]
+    for node in nodes:
         if node.get("ack"):
             a = node["ack"]
-            lines.append(f"- **Acknowledged:** by {_md(a['by'])} on {a['at']:%Y-%m-%d}" + (f": {_md(a['note'])}" if a["note"] else ""))
-        if rules:
-            lines += ["", "| Rule | Destination | State | Since |", "|---|---|---|---|"]
-            lines += [f"| {_md(f['name'] or f['rule_id'])} | {_md(f['destination'])} | "
-                      f"{'Enabled' if f['enabled'] else 'Disabled'} | {f['first_seen']:%Y-%m-%d} |"
-                      for f in sorted(rules, key=lambda f: str(f["name"] or "").lower()) if f["first_seen"]]
-        parts.append("\n".join(lines))
-    return "\n\n".join(parts) + "\n"
+            what = f"`{node['cause'] or node['where']}` " if len(nodes) > 1 else ""
+            lines.append(f"- **Acknowledged:** {what}by {_md(a['by'])} on {a['at']:%Y-%m-%d}"
+                         + (f": {_md(a['note'])}" if a["note"] else ""))
+    if issue == "no_index" or issue in _FIELD_ISSUES:
+        lines += ["", either[2], ""] if either else [""]
+        lines += _fixes(issue, nodes, labels, patterns)
+        if either:
+            lines += ["", either[3], ""] + _rules_using(issue, nodes)
+    else:
+        lines += [""] + _found(nodes)
+    return "\n".join(lines)
 
 
-# Issues TIDE finds itself (its message is TIDE's, not Kibana's).
-_TIDE_FOUND = {"stale_data", "field_missing", "field_conflict", "never_run", "siem_offline", "sync_incomplete",
-               "sync_step_failed", "shared_rule_id", "custom_elastic_id", "elastic_link_differs", "change_pending",
-               "schedule_gap", "short_lookback"}
+def markdown(nodes: List[Dict[str, Any]], siem_labels: Dict[str, str], now: datetime,
+             patterns: Optional[Dict[Tuple[str, str, str], List[str]]] = None) -> str:
+    """Causes as Markdown for a ticket or a chat, one section per issue in the order given: ``nodes``
+    are cause nodes (``view`` groups); ``patterns`` the index patterns of the rules a field
+    Elasticsearch can't find is on (``rule_patterns``)."""
+    by_issue: Dict[str, List[Dict[str, Any]]] = {}
+    for node in nodes:
+        by_issue.setdefault(node["issue"], []).append(node)
+    return "\n\n".join(_issue_markdown(issue, part, siem_labels, now, patterns or {})
+                       for issue, part in by_issue.items()) + "\n"
 
 
 def _metrics(conn, open_rows, resolved_rows, names, scope: str, all_rules: bool, now: datetime) -> Dict[str, Any]:
@@ -995,18 +1170,41 @@ def _causes(rows) -> List[Dict[str, Any]]:
     return _ordered(nodes)
 
 
-def _issues(rows) -> List[Dict[str, Any]]:
+def _issues(rows, within: Tuple[str, ...] = ()) -> List[Dict[str, Any]]:
+    """An issue node's ``path`` is where it is listed (the groups it is in, then its issue), so Copy
+    for engineers can find it again (``node_at``)."""
     nodes = []
     for issue, part in _split(rows, lambda f: f["issue"]).items():
         known = KNOWN.get(issue, KNOWN["other"])
         node = _node("issue", issue, known.title, part, fixer=FIXERS[known.fixer], meaning=known.meaning,
-                     check=known.check)
+                     check=known.check, path=[*within, issue])
         node["children"] = _causes(part)
         nodes.append(node)
     return _ordered(nodes)
 
 
-def _group(rows: List[Dict[str, Any]], group: str) -> List[Dict[str, Any]]:
+def node_at(groups: List[Dict[str, Any]], path: Any, field: str = "path") -> Optional[Dict[str, Any]]:
+    """The issue node listed at ``path`` (its ``path``), or the group whose ``field`` is ``path``; None
+    when there is none."""
+    for node in groups:
+        if node.get(field) == path:
+            return node
+        found = node_at(node["children"], path, field)
+        if found:
+            return found
+    return None
+
+
+def remember_keys(groups: List[Dict[str, Any]], trail: str) -> None:
+    """Each group's ``mem``: the groups it is in, then its own kind and key. The list remembers a group
+    open or closed by it (data-remember), and finds the group again by it when it is opened."""
+    for node in groups:
+        key = node["key"]
+        node["mem"] = f"{trail}/{node['kind']}:{key if isinstance(key, str) else '|'.join(map(str, key))}"
+        remember_keys(node["children"], node["mem"])
+
+
+def _group(rows: List[Dict[str, Any]], group: str, within: Tuple[str, ...] = ()) -> List[Dict[str, Any]]:
     """issue → cause → rules (the default); who fixes → issue → cause → rules; destination →
     issue → cause → rules; or rule → its findings."""
     if group in ("fixer", "destination"):
@@ -1014,7 +1212,7 @@ def _group(rows: List[Dict[str, Any]], group: str) -> List[Dict[str, Any]]:
         nodes = []
         for key, part in _split(rows, by).items():
             node = _node(group, key, FIXERS[key] if group == "fixer" else part[0]["destination"], part)
-            node["children"] = _issues(part)
+            node["children"] = _issues(part, (*within, key if group == "fixer" else "|".join(key)))
             nodes.append(node)
         return _ordered(nodes)
     if group == "rule":
@@ -1023,4 +1221,4 @@ def _group(rows: List[Dict[str, Any]], group: str) -> List[Dict[str, Any]]:
                   (part[0]["name"] or rule_id) if rule_id else part[0]["destination"], part,
                   where=part[0]["destination"], rule_id=rule_id, siem_id=siem_id, space=space)
             for (rule_id, siem_id, space), part in _split(rows, _item).items()])
-    return _issues(rows)
+    return _issues(rows, within)

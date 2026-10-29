@@ -3,16 +3,13 @@
 #}
 {% from "macros/icons.html" import icon %}
 {% from "macros/modal.html" import close_button, empty_state %}
+{% from "macros/menu.html" import more_button, manage_menu %}
 
 <div  name="Linked SIEMs Edit" class="client-section-toggle" data-click="section.toggle" data-body="siems-body" data-chev="siems-chev">
     <span class="client-list-item__icon">{{ icon('server', '14') }}</span>
     <h2 class="client-section-toggle__title">Linked SIEMs</h2>
     <span class="badge badge-neutral badge--xs">{{ client_siems | length }}</span>
-    <div   name="Edit Item" class="client-section-toggle__actions" data-stop-click>
-        <button  name="Open Edit Siems Modal" class="btn btn-info btn-sm" data-click="el.show" data-target="edit-siems-modal">
-            {{ icon('pencil', '14') }} Edit
-        </button>
-    </div>
+    {{ manage_menu('Linked SIEMs', 'Manage SIEMs', 'edit-siems-modal', 'Link SIEM destinations, or remove them') }}
     <span id="siems-chev" class="client-section-toggle__chevron" style="transform:rotate(90deg);">{{ icon('chevron-right', '16') }}</span>
 </div>
 
@@ -44,10 +41,15 @@
             {% endif %}
         </div>
         <div class="relative flex-none">
-            <button type="button" class="rm-iconbtn rm-iconbtn--boxed" aria-label="Edit destination" title="Edit this destination's name, default index and card colour"
-                    data-click="clientSiems.toggleEdit" data-target="{{ edit_id }}">
-                {{ icon('pencil', '16') }}
-            </button>
+            <div class="rh-more" data-more>
+                {{ more_button('Destination actions', title="Edit this destination's name, default index and card colour", attrs='name="Destination Actions"') }}
+                <div class="rh-more__menu" role="menu" hidden>
+                    <button name="Edit Destination" type="button" role="menuitem" class="rh-more__item"
+                            data-click="clientSiems.toggleEdit" data-target="{{ edit_id }}">
+                        {{ icon('pencil', '15') }}<span>Edit</span>
+                    </button>
+                </div>
+            </div>
             <div id="{{ edit_id }}" class="client-siem-edit-popover" style="display:none;" data-stop-click>
                 <form hx-post="/api/management/clients/{{ client.id }}/siems/{{ s.id }}/edit-destination"
                       hx-target="#client-siems-section" hx-swap="innerHTML">

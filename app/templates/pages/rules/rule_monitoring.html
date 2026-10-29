@@ -73,7 +73,7 @@
 </div>
 
 <div class="rule-scroll-region">
-<div id="rmon-list" class="rmon-list" data-rule-list hx-get="/api/rule-monitoring/list" hx-trigger="refreshRules from:body, rmonChanged from:body"
+<div id="rmon-list" class="rmon-list" data-rule-list data-keep-url="/rule-monitoring" hx-get="/api/rule-monitoring/list" hx-trigger="refreshRules from:body, rmonChanged from:body"
      hx-swap="innerHTML" hx-include="{{ rmon_include }}">
     {% include "partials/rule_monitoring_list.html" %}
 </div>

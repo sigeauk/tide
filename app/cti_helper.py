@@ -500,11 +500,12 @@ def get_threat_landscape(api_url, api_token, *, verify):
     """
     Fetches Intrusion Sets and their TTPs from OpenCTI via GraphQL.
     Paginates through all results.
-    Returns a DataFrame compatible with database.save_threat_data().
+    Returns a DataFrame compatible with database.save_threat_data() (empty when OpenCTI has
+    none). Raises RuntimeError, saying why, when OpenCTI doesn't answer or refuses: the threat
+    sync then keeps the client's actors rather than taking the failure for an empty OpenCTI.
     """
     if not api_url or not api_token:
-        log_error("OpenCTI Config missing")
-        return pd.DataFrame()
+        raise RuntimeError("the OpenCTI address and API token are both needed")
 
     headers = {
         "Authorization": f"Bearer {api_token}",
@@ -565,13 +566,17 @@ def get_threat_landscape(api_url, api_token, *, verify):
             )
             
             if response.status_code != 200:
-                log_error(f"OpenCTI API Error {response.status_code}: {response.text}")
-                break
+                log_error(f"OpenCTI API Error {response.status_code}: {response.text[:500]}")
+                raise RuntimeError(f"OpenCTI answered HTTP {response.status_code} at {base_url}/graphql")
 
-            data = response.json()
-            if "errors" in data:
+            try:
+                data = response.json()
+            except ValueError:
+                raise RuntimeError(f"{base_url}/graphql didn't answer with JSON: is this OpenCTI?")
+            if data.get("errors"):
                 log_error(f"GraphQL Error: {data['errors']}")
-                break
+                first = data["errors"][0]
+                raise RuntimeError(f"OpenCTI refused the query: {str(first.get('message') if isinstance(first, dict) else first)[:200]}")
 
             intrusion_data = data.get("data", {}).get("intrusionSets", {})
             edges = intrusion_data.get("edges", [])
@@ -615,6 +620,9 @@ def get_threat_landscape(api_url, api_token, *, verify):
         log_info(f"Fetched {len(actors)} Threat Actors from OpenCTI")
         return pd.DataFrame(actors)
 
-    except Exception as e:
+    except RuntimeError:
+        raise
+    except requests.RequestException as e:
         log_error(f"OpenCTI Sync Failed: {e}")
-        return pd.DataFrame()
+        from app.services import tls
+        raise RuntimeError(tls.describe_error(e) or f"OpenCTI didn't answer: {str(e)[:200]}") from e

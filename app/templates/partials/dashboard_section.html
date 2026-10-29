@@ -63,18 +63,40 @@
     {% endfor %}
     {% endif %}
     {% if 'opencti' in metric_keys %}
+    {# The client's OpenCTI connectors (Linked CTI Connectors), as their last Test found them. #}
+    {% for o in view.client_opencti %}
+    <div class="integration-card">
+        <div class="integration-card-name">OpenCTI &middot; {{ o.label }}</div>
+        <div class="integration-card-url">{{ o.url }}</div>
+        <span class="integration-card-status status-{{ 'active' if o.active and o.status == 'pass' else 'inactive' }}">
+            {{- 'Inactive' if not o.active else 'Connected' if o.status == 'pass' else 'Test failed' if o.status == 'fail' else 'Untested' -}}
+        </span>
+    </div>
+    {% else %}
     <div class="integration-card">
         <div class="integration-card-name">OpenCTI</div>
-        <div class="integration-card-url">{{ env.opencti_url }}</div>
-        <span class="integration-card-status status-{{ 'active' if env.opencti_token else 'inactive' }}">{{ 'Connected' if env.opencti_token else 'No Token' }}</span>
+        <div class="integration-card-url">No OpenCTI linked to this client</div>
+        <span class="integration-card-status status-inactive">Not configured</span>
     </div>
+    {% endfor %}
     {% endif %}
     {% if 'gitlab' in metric_keys %}
+    {# The client's GitLab projects, as their last Test found them (the client page's words). #}
+    {% for p in view.client_gitlab %}
+    <div class="integration-card">
+        <div class="integration-card-name">GitLab &middot; {{ p.name or p.project }}</div>
+        <div class="integration-card-url">{{ p.project_url or p.project }}</div>
+        <span class="integration-card-status status-{{ 'active' if p.last_status in ('ok', 'warn') else 'inactive' }}">
+            {{- 'Ready' if p.last_status == 'ok' else 'Needs attention' if p.last_status == 'warn' else "Can't use" if p.last_status == 'fail' else 'Untested' -}}
+        </span>
+    </div>
+    {% else %}
     <div class="integration-card">
         <div class="integration-card-name">GitLab</div>
-        <div class="integration-card-url">{{ env.gitlab_url }}</div>
-        <span class="integration-card-status status-{{ 'active' if env.gitlab_token else 'inactive' }}">{{ 'Connected' if env.gitlab_token else 'No Token' }}</span>
+        <div class="integration-card-url">No GitLab project linked to this client</div>
+        <span class="integration-card-status status-inactive">Not configured</span>
     </div>
+    {% endfor %}
     {% endif %}
     {% if 'logging' in metric_keys %}
     {% set logging_on = app_settings.get('rule_log_enabled', 'false') == 'true' %}

@@ -15,11 +15,9 @@
 {% block title %}Sigma Rules | TIDE{% endblock %}
 
 {% block head %}
-<!-- CodeMirror for the YAML of a rule of your own (bundled locally) -->
+<!-- CodeMirror's styles for the YAML of a rule of your own; sigma.js loads its scripts (TIDE.codeMirrorYaml) -->
 <link rel="stylesheet" href="/static/css/vendor/codemirror.min.css">
 <link rel="stylesheet" href="/static/css/vendor/codemirror-material-darker.min.css">
-<script defer src="/static/js/vendor/codemirror.min.js"></script>
-<script defer src="/static/js/vendor/codemirror-yaml.min.js"></script>
 {% endblock %}
 
 {% block content %}

@@ -373,6 +373,8 @@
                     {# A succeeded run's message only repeats its status; a warning or failure says why. #}
                     {% if not last_run %}<p class="rm-run-message rm-run-message--note">Kibana has no run for this rule{% if not rule.enabled %}: it is disabled{% endif %}.</p>
                     {% elif last_run.message and last_run.tone != 'success' %}<pre class="rm-run-message rm-run-message--{{ last_run.tone }}">{{ last_run.message }}</pre>{% endif %}
+                    {# Test runs the rule's query through Kibana's preview: a machine learning rule has none. #}
+                    {% if not (rule.raw_data is mapping and rule.raw_data.type == 'machine_learning') %}
                     <div class="rm-test">
                         <label for="rm-test-lookback" class="rm-label">Test against last</label>
                         <select id="rm-test-lookback" name="test-lookback" class="form-input form-select">
@@ -386,6 +388,7 @@
                                 hx-post="/api/rules/{{ rule.rule_id }}/test?{{ scope_qs }}"
                                 hx-target="body" hx-swap="beforeend" hx-include="#rm-test-lookback">Test</button>
                     </div>
+                    {% endif %}
                     </div>
                 </details>
 
@@ -568,7 +571,7 @@
                         <button name="Unlink From Elastic" type="button" class="btn btn-secondary btn-sm"
                                 hx-post="/api/rules/{{ rule.rule_id }}/unlink-upstream?{{ scope_qs }}"
                                 hx-target="body" hx-swap="beforeend" hx-include="unset"
-                                hx-confirm="Unlink this rule from Elastic's &quot;{{ upstream.name or upstream.upstream_id }}&quot;? TIDE then treats it as your own rule and no longer shows Elastic's updates for it. Nothing changes in Kibana.">{{ icon_text('unlink', 'Unlink from Elastic', '13') }}</button>
+                                hx-confirm="Unlink this rule from Elastic's &quot;{{ upstream.name or upstream.upstream_id }}&quot;? TIDE then treats it as your own rule and no longer shows Elastic's updates for it.{% if holds_elastic_id %} It also gives it its own rule id, in place of Elastic's: TIDE creates it again in Kibana under a new rule id and deletes this one. Kibana keeps this rule's past alerts and runs with the original.{% else %} Nothing changes in Kibana.{% endif %}">{{ icon_text('unlink', 'Unlink from Elastic', '13') }}</button>
                         {% endif %}
                     </div>
                     {% else %}

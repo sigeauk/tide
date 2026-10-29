@@ -310,6 +310,32 @@ console.debug('TIDE app.js loading...');
         var svg = TIDE.icon(name, size);
         return svg ? svg.outerHTML : '';
     };
+    // A vendor script, loaded once; chain the promises to load several in order. On hx-boost
+    // navigation head-support runs a page's <head> scripts in whatever order they arrive, so a
+    // script that needs another (CodeMirror's YAML mode) is loaded with this, not in <head>.
+    var scriptsLoading = {};
+    TIDE.loadScript = function (src) {
+        if (!scriptsLoading[src]) {
+            scriptsLoading[src] = new Promise(function (resolve, reject) {
+                var s = document.createElement('script');
+                s.src = src;
+                s.onload = resolve;
+                s.onerror = function () { delete scriptsLoading[src]; reject(new Error('Failed to load ' + src)); };
+                document.head.appendChild(s);
+            });
+        }
+        return scriptsLoading[src];
+    };
+    // CodeMirror with its YAML mode, for the YAML editors (Sigma's own rule, Management's Sigma assets).
+    TIDE.codeMirrorYaml = function () {
+        var core = typeof CodeMirror !== 'undefined' ? Promise.resolve()
+            : TIDE.loadScript('/static/js/vendor/codemirror.min.js');
+        return core.then(function () {
+            return CodeMirror.modes && CodeMirror.modes.yaml ? null
+                : TIDE.loadScript('/static/js/vendor/codemirror-yaml.min.js');
+        }).then(function () { return CodeMirror; });
+    };
+
     // The inline loading state (loading_state(label, inline=true) in components/ui/loading_state.html).
     TIDE.loadingHtml = function (label) {
         var svg = TIDE.icon('loader', 14);
@@ -487,6 +513,34 @@ console.debug('TIDE app.js loading...');
     document.addEventListener('htmx:beforeRequest', function () { window.tideFilterSync(); });
     document.addEventListener('reset', function (e) { setTimeout(function () { window.tideFilterSync(e.target); }, 0); }, true);
 
+    // A filter bar's counts once its filters change: the server's "filterCounts" event (HX-Trigger),
+    // {field name: {choice: n}}, puts each number beside its choice. The bar itself isn't redrawn.
+    document.addEventListener('filterCounts', function (e) {
+        var counts = e.detail || {};
+        Object.keys(counts).forEach(function (name) {
+            var of = counts[name];
+            if (!of || typeof of !== 'object' || of.nodeType) return;
+            document.querySelectorAll('.filters-bar [name="' + name + '"]').forEach(function (field) {
+                var group = field.matches('select[data-filter-choice]') && field.closest('[data-filter-choices]');
+                var picks = group ? group.querySelectorAll('input[data-filter-pick]') : field.type === 'checkbox' ? [field] : [];
+                Array.prototype.forEach.call(picks, function (input) {
+                    var n = input.parentElement.querySelector('.rh-checkbox-count');
+                    if (n) n.textContent = of[input.value] || 0;
+                });
+            });
+        });
+    });
+
+    // A list whose filters are kept in the address ([data-keep-url], the page's path): after a request
+    // to its own hx-get fills it, the address takes that request's query, so a refresh, or a reload
+    // after an action, shows the same.
+    document.addEventListener('htmx:afterRequest', function (e) {
+        var t = e.detail && e.detail.target, page = t && t.getAttribute && t.getAttribute('data-keep-url');
+        var path = (e.detail.pathInfo && (e.detail.pathInfo.finalRequestPath || e.detail.pathInfo.requestPath)) || '';
+        if (!e.detail.successful || !page || path.split('?')[0] !== t.getAttribute('hx-get')) return;
+        window.history.replaceState(null, '', page + (path.indexOf('?') >= 0 ? path.slice(path.indexOf('?')) : ''));
+    });
+
     // A select follows itself: its options or state changing (a script filling it, disabling or
     // hiding it), or a script setting its value, redraws its rows and button.
     var VALUE = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value');
@@ -546,7 +600,9 @@ console.debug('TIDE app.js loading...');
         if (select.hasAttribute('data-native') || !select.parentNode) return;
         var id = 'ts-' + (++enhanced);
         var wrap = document.createElement('div');
-        var keep = Array.prototype.filter.call(select.classList, function (c) { return LOOKS.indexOf(c) === -1; });
+        var keep = Array.prototype.filter.call(select.classList, function (c) {
+            return LOOKS.indexOf(c) === -1 && c !== 'tide-select__native';
+        });
         var block = LOOKS.some(function (c) { return select.classList.contains(c); });
         wrap.className = ['tide-select', block ? 'tide-select--block' : ''].concat(keep).join(' ').trim();
         wrap.setAttribute('data-filter-choices', '');
@@ -578,6 +634,28 @@ console.debug('TIDE app.js loading...');
         watchSelect(select);
         syncGroup(wrap);
     };
+
+    // A swap keeps an element with an id by giving the new one the old one's attributes until the swap
+    // settles (htmx's attribute settling): a select redrawn in place is enhanced while it wears the old,
+    // enhanced attributes, then gets its own back and shows beside its button. Once settled, make each
+    // select in the swap enhanced again, its button the only one seen.
+    document.addEventListener('htmx:afterSettle', function (e) {
+        var root = (e.detail && e.detail.target) || document;
+        if (!root.querySelectorAll) return;
+        root.querySelectorAll('select:not([data-native])').forEach(function (select) {
+            var wrap = select.parentElement;
+            if (wrap && wrap.classList.contains('tide-select')) {
+                wrap.classList.remove('tide-select__native');
+                if (select.classList.contains('tide-select__native')) return;
+                select.classList.add('tide-select__native');
+                select.setAttribute('data-filter-choice', '');
+                select.tabIndex = -1;
+                syncGroup(wrap);
+            } else if (!select.hasAttribute('data-filter-choice')) {
+                window.tideEnhanceSelect(select);
+            }
+        });
+    });
 
     window.tideInitInfiniteScroll = function(root) {
         var scope = root && root.querySelectorAll ? root : document;
@@ -1918,25 +1996,32 @@ console.debug('TIDE app.js loading...');
     }
 
     // <details data-remember="key"> keeps its open/closed state per browser. A panel rendered open on purpose
-    // (data-keep-open, e.g. right after a save) is left alone.
+    // (data-keep-open, e.g. right after a save) is left alone. A panel drawn open fires a toggle as it is
+    // added, before its saved state is applied: only toggles after that are saved, or a list redrawn by
+    // htmx would save its defaults over what was chosen.
     function applyRemembered(root) {
         if (!root || !root.querySelectorAll) return;
         var panels = Array.prototype.slice.call(root.querySelectorAll('details[data-remember]'));
         if (root.matches && root.matches('details[data-remember]')) panels.push(root);
         panels.forEach(function (d) {
-            if (d.hasAttribute('data-keep-open')) return;
+            if (d.hasAttribute('data-keep-open')) { d.__tideRemembered = true; return; }
             try {
                 var saved = localStorage.getItem('tide.open.' + d.getAttribute('data-remember'));
                 if (saved !== null) d.open = saved === '1';
             } catch (_) { /* storage unavailable: keep the default */ }
+            // After the toggle that setting it fires, if any, so that one isn't taken for a choice either.
+            setTimeout(function () { d.__tideRemembered = true; }, 0);
         });
     }
     document.addEventListener('toggle', function (e) {
         var d = e.target;
-        if (!d.matches || !d.matches('details[data-remember]')) return;
+        if (!d.matches || !d.matches('details[data-remember]') || !d.__tideRemembered) return;
         try { localStorage.setItem('tide.open.' + d.getAttribute('data-remember'), d.open ? '1' : '0'); } catch (_) { /* ignore */ }
     }, true);
     document.addEventListener('htmx:load', function (e) { applyRemembered(e.target); });
+    // Straight after a swap too, before it is painted: htmx:load comes only once the swap has settled,
+    // so a panel drawn open would show open for a moment before closing.
+    document.addEventListener('htmx:afterSwap', function (e) { applyRemembered(e.detail && e.detail.target); });
 
     // Management > client > Rule scoring: live total of the points allocated (delegated, so it survives htmx swaps).
     document.addEventListener('input', function (e) {

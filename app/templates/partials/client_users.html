@@ -6,6 +6,7 @@
 #}
 {% from "macros/icons.html" import icon %}
 {% from "macros/modal.html" import close_button, empty_state %}
+{% from "macros/menu.html" import more_button, manage_menu %}
 {% set who = viewer if viewer is defined and viewer else user %}
 {% set may_support = who is defined and who and who.is_superadmin %}
 {% macro role_boxes(checked_roles, may_support) %}
@@ -22,11 +23,7 @@
     <span class="client-list-item__icon">{{ icon('users', '14') }}</span>
     <h2 class="client-section-toggle__title">Assigned Users</h2>
     <span class="badge badge-neutral badge--xs">{{ client_users | length }}</span>
-    <div   name="Edit Item" class="client-section-toggle__actions" data-stop-click>
-        <button  name="Open Edit Users Modal" class="btn btn-info btn-sm" data-click="el.show" data-target="edit-users-modal">
-            {{ icon('pencil', '14') }} Edit
-        </button>
-    </div>
+    {{ manage_menu('Assigned Users', 'Manage users', 'edit-users-modal', 'Assign users and their roles, or remove them') }}
     <span id="users-chev" class="client-section-toggle__chevron" style="transform:rotate(90deg);">{{ icon('chevron-right', '16') }}</span>
 </div>
 
@@ -55,15 +52,16 @@
             </form>
             {% endif %}
         </div>
-        <div  name="Remove" class="flex items-center gap-xs ml-auto" data-stop-click>
-            <button name="Remove" class="btn btn-ghost btn-sm text-danger btn-xs"
-                    hx-delete="/api/management/clients/{{ client.id }}/users/{{ u.id }}"
-                    hx-target="#client-users-section" hx-swap="innerHTML"
-                    hx-confirm="Remove '{{ u.username }}' from this client?"
-                    title="Remove user from this client"
-                   >
-                {{ icon('x', '12') }} Remove
-            </button>
+        <div class="rh-more ml-auto flex-none" data-more>
+            {{ more_button('User actions', title='Remove this user from this client', attrs='name="User Actions"') }}
+            <div class="rh-more__menu" role="menu" hidden>
+                <button name="Remove" type="button" role="menuitem" class="rh-more__item rh-more__item--danger"
+                        hx-delete="/api/management/clients/{{ client.id }}/users/{{ u.id }}"
+                        hx-target="#client-users-section" hx-swap="innerHTML"
+                        hx-confirm="Remove '{{ u.username }}' from this client?">
+                    {{ icon('x', '15') }}<span>Remove from client</span>
+                </button>
+            </div>
         </div>
     </div>
     {% endfor %}

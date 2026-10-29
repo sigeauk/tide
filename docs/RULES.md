@@ -6,7 +6,7 @@ How to keep your detection rules healthy: syncing them from your SIEMs, reading 
 
 TIDE reads your detection rules from each **SIEM destination** linked to the client: one space of one Elastic SIEM, with a name and colour your administrator chose (for example *DM3-Prod*). The same rule can live at several destinations; each copy is its own rule in TIDE, shown with its destination's tag.
 
-TIDE gives each rule a **score** (0 to 100) for how well it is likely to work: whether its fields exist in the SIEM, how it is written, whether it has an investigation guide and ATT&CK techniques, and so on. Your administrator decides how many points each check is worth for the client.
+TIDE gives each rule a **score** (0 to 100) for how well it is likely to work: whether its fields exist in the SIEM, how it is written, whether it has an investigation guide and ATT&CK techniques, and so on. Your administrator decides how many points each check is worth for the client. A check that doesn't fit the rule isn't counted: a machine learning rule has no query or timestamp override to judge. For an indicator match rule, the fields checked include its indicator mapping: each field in its own indexes, and each indicator field in its indicator indexes.
 
 ## Rule Health
 
@@ -27,7 +27,7 @@ A SIEM that can't be reached is skipped: its rules keep showing, marked **SIEM o
 
 ### Find rules
 
-Filter by **Search** (name, author, ID or ATT&CK technique), **SIEM**, **Status** (enabled or disabled), **State**, **Upstream**, **Score** (with a range) and **Validate** (with a date range), and sort by score, validation date or **Name**. The number beside each choice is how many rules it holds.
+Filter by **Search** (name, author, ID or ATT&CK technique), **SIEM**, **Status** (enabled or disabled), **State**, **Upstream**, **Score** (with a range) and **Validate** (with a date range), and sort by score, validation date or **Name**. The number beside each choice is how many rules you would see by picking it, with your other filters as they are.
 
 **State** is the badge each rule shows:
 
@@ -38,6 +38,8 @@ Filter by **Search** (name, author, ID or ATT&CK technique), **SIEM**, **Status*
 
 Tick **Unlinked** and **Linked** together for every rule found at the last sync.
 
+Under **Linked to**, pick a SIEM to narrow **Linked** to the rules linked to a copy there; picking one ticks **Linked** for you. For example, choose your production destination in **SIEM**, then your staging one under **Linked to**, to see the production rules that have a copy in staging.
+
 The page's **⋮** menu switches between **Show as cards** and **Show as table**. In the table, click a heading to sort by it, drag a column's edge to resize it, and choose which columns show; **Reset table columns** puts them back.
 
 ## Rule Monitoring
@@ -47,7 +49,7 @@ The page's **⋮** menu switches between **Show as cards** and **Show as table**
 - **What it finds:** an index pattern that matches no index, indexes missing the rule's timestamp override field (such as `event.ingested`), fields no index has or that have conflicting types, queries Kibana can't parse or Elasticsearch refuses, missing privileges, missed runs, schedules that leave part of each interval unsearched or too little look-back for late events, rules sharing a rule id, custom rules using one of Elastic's rule ids, custom rules linked to an Elastic rule they don't match, changes TIDE made in Kibana but couldn't finish recording (a new rule id, a move, a restore), SIEMs that didn't answer, syncs that couldn't read every rule, a step of the last sync that failed (such as cleaning up score history), and destinations not synced for 7 days. Anything else Kibana reports goes under **Other Kibana errors**, in Kibana's words.
 - **Who fixes** says who acts: **Data / ingest** (the indexes and pipelines, usually the Elastic engineers), **Rule author** (the rule's query), **Kibana / platform** (the SIEM itself) or **TIDE** (something TIDE can fix, or a sync).
 - Each issue opens to its causes, such as an index pattern or a field in a data stream, with how many rules each affects and for how long. Open a cause for its rules; click a rule to open its window.
-- Filter by **Search**, **SIEM**, **Severity**, **Who fixes** and **Issue**. **Rules** shows enabled rules, or **Include disabled** for what would fail if they were switched on. **Show** lists what is open, or what was fixed in the last 14 days. **Group by** lists by **Issue**, **Who fixes**, **SIEM / destination** or **Rule**.
+- Filter by **Search**, **SIEM**, **Severity**, **Who fixes** and **Issue**; the number beside each choice is how many rules (or whole destinations) you would see by picking it, with your other filters as they are. **Rules** shows enabled rules, or **Include disabled** for what would fail if they were switched on. **Show** lists what is open, or what was fixed in the last 14 days. **Group by** lists by **Issue**, **Who fixes**, **SIEM / destination** or **Rule**. The page keeps your filters when it reloads, and each group stays open or closed as you left it.
 - The cards count the rules needing action (beneath: how many of the enabled rules, and any disabled ones counted because of a rule id problem TIDE can fix), errors and warnings (and how many began in the last 7 days, once Rule Monitoring has a week of history; until then, the day it began), the **Things to Fix** by who fixes them, what was **Resolved** in the last 14 days, and when the client was **Last Synced**.
 - The page's **⋮** menu holds **Sync**, as on Rule Health; what a sync finds fixed moves to **Resolved recently**.
 
@@ -55,12 +57,13 @@ The page's **⋮** menu switches between **Show as cards** and **Show as table**
 
 Open a cause for its actions. Anyone who can edit Rule Health can use them.
 
-- **Copy for engineers** gives the cause as Markdown, ready to paste into a ticket or a chat: what is wrong, who fixes it, since when, what to check, Kibana's message and a table of the rules. **⋮ › Copy shown for engineers** does the same for every cause the filters show.
+- **Copy for engineers** gives the cause as Markdown, ready to paste into a ticket or a chat: what is wrong, who fixes it, since when and what to check, then what the person fixing it needs. An index or field problem is a table of each field and index to fix on each SIEM, with how many rules it affects; where the rule may be the one at fault instead (a field no index maps, a missing timestamp override field, a field Elasticsearch can't find), a table of the rules and the fields each uses follows, for the rule's author. Any other issue is a table of its rules, with what was found on each. An open issue has its own **Copy for engineers**, for all its causes at once, and **⋮ › Copy shown for engineers** does the same for every issue the filters show.
+- **Raise in GitLab**, in the same dialog, opens it as an issue in one of the client's GitLab issues projects (see [Link GitLab projects](CLIENTS.md#link-gitlab-projects)): pick the project each time, optionally **Assign to** one of its members (it starts on **Nobody**), change the title or labels if you like, and **Raise issue**. The issue's description is the Markdown shown, with who raised it from TIDE and when. Each cause then shows a link to its issue, green while it's open in GitLab. Opening the dialog for a cause already raised lists its issues with their state in GitLab now, and **Add as a comment** adds what TIDE finds now to one of them instead of raising another. Raising needs the same right as fixing (changing Rule Health).
 - **Sync these rules** reads the cause's rules again from their SIEM, to see whether it is fixed; for a whole destination, **Sync this destination**.
 - **Give them their own rule ids**, on **Custom rule using one of Elastic's rule ids**, gives every rule of the cause its own rule id in one go; **Finish them in TIDE**, on **Change not finished in TIDE**, finishes them all. Each shows what it will do first, then its progress, with any rule that failed and why.
 - **Compare them one by one**, on **Rules sharing a rule id in Kibana**, opens **Compare with the copy** for each rule of the cause in turn. Choose for each, or **Skip** it; what each choice did shows at the top of the next.
 - **Acknowledge…** mutes a cause you know about, with a note (for example, an index not onboarded yet). It moves to **Acknowledged** at the bottom of the list and isn't counted, until it affects more rules than when it was acknowledged; then it comes back, saying so. **Unmute** puts it back at once.
-- Where TIDE can fix it, the rule's row has the fix: **Give it its own rule id** for a custom rule using one of Elastic's rule ids, **Compare with the copy** where Kibana holds a custom copy beside Elastic's rule, **Compare with *Elastic*** for a rule linked to an Elastic rule it doesn't match (both below), and **Finish in TIDE** where Kibana made a change (a new rule id, a move, a restore) but TIDE couldn't record it.
+- Where TIDE can fix it, the rule's row has the fix: **Give it its own rule id** for a custom rule using one of Elastic's rule ids (TIDE still shows Elastic's updates for it), or **Unlink from Elastic** if it isn't Elastic's rule (which also gives it its own rule id), **Compare with the copy** where Kibana holds a custom copy beside Elastic's rule, **Compare with *Elastic*** for a rule linked to an Elastic rule it doesn't match (both below), and **Finish in TIDE** where Kibana made a change (a new rule id, a move, a restore) but TIDE couldn't record it.
 
 ## The rule window
 
@@ -90,7 +93,7 @@ To record many validations at once, use the page's **⋮ › Import validation f
 
 ### Test a rule
 
-In **Last run**, choose a time window in **Test against last** and click **Test**. TIDE runs the rule against that window in Kibana and shows what it would have found. The time it took is recorded as the rule's search time, which counts toward its score.
+In **Last run**, choose a time window in **Test against last** and click **Test**. TIDE runs the rule against that window in Kibana and shows what it would have found. The time it took is recorded as the rule's search time, which counts toward its score. A machine learning rule has no query to run, so it has no **Test**.
 
 ### Edit a rule
 
@@ -127,6 +130,8 @@ Who can: anyone who can edit Rule Health.
 A true move takes the rule's baseline mappings with it, so the techniques it covers stay covered.
 
 The copy keeps the rule's actions (notifications and the like) only where the target has the same connector, or one of the same type and name. Any it couldn't take are named afterwards, so you can add them to the rule in Kibana.
+
+The copy takes the rule's exceptions with it, every one with its comments, in an exception list of its own; a list shared by every space, such as Elastic Defend's, stays shared when the copy stays on the same SIEM. A rule that searches a data view is copied with the data view's index patterns (for example `logs-*`), since a data view belongs to one space and the target may not have it. If TIDE can't copy an exception list or read the data view, nothing is changed and it says why.
 
 A rule under one of Elastic's rule ids, such as one of Elastic's prebuilt rules, is copied under a new rule id. Kibana can then still install Elastic's own rule in the target, and TIDE still shows Elastic's updates for the copy.
 
@@ -175,13 +180,14 @@ TIDE links a custom rule to one of Elastic's rules when it uses that rule's id, 
 
 - **Compare with Elastic**, on the rule's row or in its window's **Upstream** section, shows the two side by side.
 - **Keep the link** if it is a copy you changed on purpose: TIDE goes on showing Elastic's updates for it, and doesn't ask again.
-- **Unlink from Elastic** if it isn't Elastic's rule: it becomes your own rule, and TIDE no longer shows Elastic's updates for it. This works for any custom rule linked to an Elastic rule, from its window's **Upstream** section too, and holds even while it still uses Elastic's rule id. Nothing changes in Kibana.
+- **Unlink from Elastic** if it isn't Elastic's rule: it becomes your own rule, and TIDE no longer shows Elastic's updates for it. This works for any custom rule linked to an Elastic rule, from its window's **Upstream** section too. A rule that uses Elastic's rule id is also given its own (below), since your own rule shouldn't hold Elastic's; otherwise nothing changes in Kibana.
 
 ### A custom rule using one of Elastic's rule ids
 
 Rules moved, copied or restored by earlier versions of TIDE can be custom rules under the rule id of one of Elastic's prebuilt rules. While one is, Kibana can't install Elastic's own rule in that space, or installs it beside the custom one under the same rule id. **Settings → Diagnostics** lists them.
 
 - In the rule's window, **Upstream** says so. **Give it its own rule id** creates the rule again in Kibana under a new rule id and deletes the original. TIDE keeps its history, links and baseline mappings, and still shows Elastic's updates for it.
+- If it isn't Elastic's rule, **Unlink from Elastic** gives it its own rule id the same way, and TIDE no longer shows Elastic's updates for it. If Kibana can't give it one, the rule is still unlinked, and **Give it its own rule id** finishes the job.
 - If Kibana made the change but TIDE couldn't record it, TIDE says so, and the rule's window offers **Finish in TIDE**, which completes it without changing Kibana again. The next sync of that destination also completes it.
 - If Kibana no longer has the rule, TIDE marks it deprecated rather than changing it.
 

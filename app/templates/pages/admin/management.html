@@ -7,8 +7,6 @@
 {% block head %}
 <link rel="stylesheet" href="/static/css/vendor/codemirror.min.css">
 <link rel="stylesheet" href="/static/css/vendor/codemirror-material-darker.min.css">
-<script defer src="/static/js/vendor/codemirror.min.js"></script>
-<script defer src="/static/js/vendor/codemirror-yaml.min.js"></script>
 {% endblock %}
 
 {% block settings_subtitle %}Tenants, users, integrations, Sigma assets and classifications.{% endblock %}
@@ -398,55 +396,6 @@
     </div>
 </div>
 
-<!-- ── Create / Edit OpenCTI Modal ───────────────────────────────── -->
-<div name="Opencti Modal" class="modal-overlay" id="opencti-modal" style="display:none;"
-     data-click="mgmt.openctiBackdrop">
-    <div class="modal-content modal-md">
-        <div class="modal-header">
-            <h3 class="modal-title" id="opencti-modal-title">New OpenCTI Instance</h3>
-            {{ close_button('name="Close Modal"
-                    data-click="mgmt.openctiClose"') }}
-        </div>
-        <form id="opencti-form" data-submit="mgmt.openctiSubmit" class="form-stack">
-            <input name="Opencti Form Id" type="hidden" id="opencti-form-id" value="">
-            <div>
-                <label for="opencti-form-label" class="form-label">Label <span class="req">*</span></label>
-                <input name="Opencti Form Label" type="text" id="opencti-form-label" class="form-input" required maxlength="200" placeholder="Production OpenCTI">
-            </div>
-            <div>
-                <label for="opencti-form-url" class="form-label">URL <span class="req">*</span></label>
-                <input name="Opencti Form Url" type="text" id="opencti-form-url" class="form-input" required placeholder="https://opencti.example.com">
-            </div>
-            <div>
-                <label for="opencti-form-token" class="form-label">API token</label>
-                <input name="Opencti Form Token" type="password" id="opencti-form-token" class="form-input"
-                       placeholder="Leave blank to keep existing" autocomplete="new-password">
-            </div>
-            <div>
-                <label for="opencti-form-kind" class="form-label">Kind</label>
-                <select  name="CTI Source Row" id="opencti-form-kind" class="form-input">
-                    <option value="actors">actors &mdash; legacy intrusion-set sync</option>
-                    <option value="cti">CTI &mdash; STIX bundle pull into per-tenant CTI DB</option>
-                    <option value="both">both &mdash; actors + CTI</option>
-                </select>
-                <span class="form-hint">
-                    <strong>actors</strong> keeps the existing intrusion-set behavior unchanged.
-                    <strong>CTI</strong>/<strong>both</strong> enables the Sync CTI button on the card.
-                </span>
-            </div>
-            <div id="opencti-test-result" class="form-result"></div>
-            <div class="form-footer">
-                <button name="Test Connection" type="button" class="btn btn-secondary btn-sm" data-click="mgmt.openctiTest"
-                        id="opencti-test-btn">Test Connection</button>
-                <div class="modal-actions">
-                    <button name="Cancel" type="button" class="btn btn-secondary" data-click="mgmt.openctiClose">Cancel</button>
-                    <button name="Create" type="submit" class="btn btn-primary" id="opencti-form-submit">Create</button>
-                </div>
-            </div>
-        </form>
-    </div>
-</div>
-
 <!-- ── Create / Edit GitLab Modal ─────────────────────────────────── -->
 <div name="Gitlab Modal" class="modal-overlay" id="gitlab-modal" style="display:none;"
      data-click="mgmt.gitlabBackdrop">
@@ -465,17 +414,7 @@
             <div>
                 <label for="gitlab-form-url" class="form-label">URL <span class="req">*</span></label>
                 <input name="Gitlab Form Url" type="text" id="gitlab-form-url" class="form-input" required placeholder="https://gitlab.example.com">
-            </div>
-            <div>
-                <label for="gitlab-form-token" class="form-label">Access token</label>
-                <input name="Gitlab Form Token" type="password" id="gitlab-form-token" class="form-input"
-                       placeholder="Leave blank to keep existing" autocomplete="new-password">
-            </div>
-            <div>
-                <label for="gitlab-form-group" class="form-label">Default group / namespace</label>
-                <input name="Gitlab Form Group" type="text" id="gitlab-form-group" class="form-input" maxlength="200"
-                       placeholder="security-team">
-                <span class="form-hint">GitLab group where reports will be pushed.</span>
+                <span class="form-hint">Only its address: each client links its projects, each with its own token, on the client's page.</span>
             </div>
             {{ tls_verify_row('gitlab-form-tls-verify') }}
             <div class="modal-actions">

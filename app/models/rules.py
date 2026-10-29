@@ -195,6 +195,9 @@ class RuleFilters(BaseModel):
     # Lifecycle state checklist: any of "unlinked", "linked", "offline", "deprecated"
     # (database.normalize_rule_states; an old "live" means both of the first two). Empty = all.
     state: List[str] = Field(default_factory=list)
+    # Linked to: narrows Linked to the rules linked to a copy at one destination, "<siem_id>|<space>"
+    # as the SIEM filter sends it. Ignored unless Linked is picked.
+    linked_to: Optional[str] = None
     # Upstream checklist: any of "update", "current", "retired", "removed" (rule_origins.STATES) or
     # "own" (did not come from Elastic's or the Sigma rules). Empty = all.
     upstream: List[str] = Field(default_factory=list)

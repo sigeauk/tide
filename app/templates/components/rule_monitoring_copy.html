@@ -1,9 +1,19 @@
 {#
-  Rule Monitoring: Copy for engineers. Context: text (Markdown, rule_issues.markdown), count (causes),
-  every (all shown causes, not one). Copy uses app.js's [data-rm-copy] (as the rule window's query).
+  Rule Monitoring: Copy for engineers. Context: text (Markdown, rule_issues.markdown), causes and
+  issues (how many), every (all shown), issue (the issue's title, when one issue was copied). Copy
+  uses app.js's [data-rm-copy] (as the rule window's query).
+  ``gitlab`` (who can fix, with something to copy): Raise in GitLab. projects (the client's issues
+  projects TIDE can use), raised (issues already raised for any of these causes, with GitLab's state
+  now), title and labels to start from, selection (this dialog's query, posted back so the issue
+  holds exactly what is shown). Assign to loads the chosen project's members
+  (partials/rule_monitoring_assignees.html), Nobody chosen. Raise and Add as a comment answer into
+  #rmon-gitlab-result.
 #}
-{% from "macros/icons.html" import icon_text %}
+{% from "macros/icons.html" import icon, icon_text %}
 {% from "macros/modal.html" import close_button, empty_state %}
+{% macro selection_fields() -%}
+{% for name, value in gitlab.selection %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+{%- endmacro %}
 <div class="modal-overlay" data-click="backdrop.remove">
     <div class="modal-content modal-md" data-stop-click role="dialog" aria-modal="true" aria-labelledby="rmon-copy-title">
         <div class="modal-header">
@@ -11,8 +21,78 @@
             {{ close_button() }}
         </div>
         {% if text %}
-        <p class="text-secondary mb-md">Markdown for {{ count }} {{ 'cause' if count == 1 else 'causes' }}{{ ' shown' if every }}, ready to paste into a ticket or a chat.</p>
+        <p class="text-secondary mb-md">Markdown for
+            {%- if every %} the {{ issues }} {{ 'issue' if issues == 1 else 'issues' }} shown
+            {%- elif issue %} {{ issue }}, {{ causes }} {{ 'cause' if causes == 1 else 'causes' }}
+            {%- else %} this cause{% endif %}, ready to paste into a ticket or a chat.</p>
         <pre class="rmon-md" id="rmon-md">{{ text }}</pre>
+        {% if gitlab %}
+        <section class="rmon-gitlab" aria-labelledby="rmon-gitlab-title">
+            <h4 class="rmon-gitlab__title" id="rmon-gitlab-title">{{ icon('gitlab', '14') }} Raise in GitLab</h4>
+            {% if gitlab.raised %}
+            <p class="text-secondary fs-sm">Already raised for this:</p>
+            <ul class="rmon-gitlab__raised">
+                {% for r in gitlab.raised %}
+                <li>
+                    <a href="{{ r.web_url }}" target="_blank" rel="noopener" class="text-primary">{{ r.project }}#{{ r.iid }}</a>
+                    <span>{{ r.title }}</span>
+                    {% if r.state == 'opened' %}<span class="badge badge-success badge--xs">Open</span>
+                    {% elif r.state == 'closed' %}<span class="badge badge-grey badge--xs">Closed</span>
+                    {% else %}<span class="badge badge-warning badge--xs">Gone from GitLab</span>{% endif %}
+                    <span class="text-muted fs-xs">raised {{ r.created_at.strftime('%Y-%m-%d') }} by {{ r.created_by }}{% if r.assignee %}, assigned to {{ r.assignee_name or r.assignee }}{% endif %}</span>
+                    {% if r.usable %}
+                    <form hx-post="/api/rule-monitoring/gitlab-comment" hx-target="#rmon-gitlab-result" hx-swap="innerHTML"
+                          hx-disabled-elt="find button" class="rmon-gitlab__comment">
+                        {{ selection_fields() }}<input type="hidden" name="raised_id" value="{{ r.id }}">
+                        <button name="Add GitLab Comment" type="submit" class="btn btn-secondary btn-xs"
+                                title="Comment on it with the Markdown above: what TIDE finds now">{{ icon_text('plus', 'Add as a comment', '12') }}</button>
+                    </form>
+                    {% endif %}
+                </li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+            {% if gitlab.projects %}
+            <form hx-post="/api/rule-monitoring/gitlab-issue" hx-target="#rmon-gitlab-result" hx-swap="innerHTML"
+                  hx-disabled-elt="find button[type='submit']" class="rmon-gitlab__form">
+                {{ selection_fields() }}
+                <div>
+                    <label class="form-label" for="rmon-gitlab-project">Project</label>
+                    <select name="link_id" id="rmon-gitlab-project" class="form-input" required>
+                        {% for p in gitlab.projects %}
+                        <option value="{{ p.id }}">{{ p.name ~ ' — ' if p.name else '' }}{{ p.project }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="form-label" for="rmon-gitlab-assignee">Assign to</label>
+                    <div id="rmon-gitlab-assignees" hx-get="/api/rule-monitoring/gitlab-members"
+                         hx-trigger="load, change from:#rmon-gitlab-project" hx-include="#rmon-gitlab-project"
+                         hx-target="this" hx-swap="innerHTML">
+                        <select name="assignee_id" id="rmon-gitlab-assignee" class="form-input"><option value="" selected>Nobody</option></select>
+                    </div>
+                </div>
+                <div>
+                    <label class="form-label" for="rmon-gitlab-issue-title">Title</label>
+                    <input type="text" name="title" id="rmon-gitlab-issue-title" class="form-input" maxlength="255" value="{{ gitlab.title }}" required>
+                </div>
+                <div>
+                    <label class="form-label" for="rmon-gitlab-labels">Labels</label>
+                    <input type="text" name="labels" id="rmon-gitlab-labels" class="form-input" value="{{ gitlab.labels }}">
+                    <span class="form-hint">Comma-separated. GitLab makes any the project doesn't have yet.</span>
+                </div>
+                <p class="text-secondary fs-sm">The issue's description is the Markdown above, with who raised it from TIDE and when.</p>
+                <div class="flex justify-end">
+                    <button name="Raise GitLab Issue" type="submit" class="btn btn-primary btn-sm">{{ icon_text('gitlab', gitlab.raised and 'Raise another issue' or 'Raise issue', '13') }}</button>
+                </div>
+            </form>
+            {% else %}
+            <p class="text-muted fs-sm">To raise it as an issue, link a GitLab issues project on the client's page
+                (<a name="Client GitLab Projects" href="/settings/management?tab=clients" class="text-primary">Management &rsaquo; Clients</a>), and Test it there.</p>
+            {% endif %}
+            <div id="rmon-gitlab-result" aria-live="polite"></div>
+        </section>
+        {% endif %}
         <div class="modal-actions">
             <button name="Close" type="button" class="btn btn-secondary" data-click="modal.remove">Close</button>
             <button name="Copy Markdown" type="button" class="btn btn-primary" data-rm-copy="#rmon-md"

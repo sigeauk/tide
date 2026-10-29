@@ -1,7 +1,8 @@
 /*
  * Rule Health (pages/rules/rule_health.html): the filter bar (dropdown labels, "last selected wins"
- * sorts, cards / table view), the address bar kept in step with the grid, the table view's columns
- * (resize, choose, arrange), the "…" menu, gutter alignment and bulk edit.
+ * sorts, cards / table view), the table view's columns (resize, choose, arrange), the "…" menu,
+ * gutter alignment and bulk edit. The address bar and the filter counts follow the grid (app.js:
+ * data-keep-url, filterCounts).
  */
 (function () {
     'use strict';
@@ -34,7 +35,8 @@
         window.tideFilterSync();
     }, true);
 
-    // Score, Validate and Name are named by what they sort and narrow (the other filter buttons by app.js).
+    // Score, Validate and Name are named by what they sort and narrow, State below (the other filter
+    // buttons by app.js).
     function updateScoreLabel() {
         var label = $('rh-score-label');
         if (!label) return;
@@ -72,6 +74,26 @@
         // Picking one sort clears the others (above), so every sort button follows.
         if (SORT_IDS.indexOf(e.target.id) !== -1) { updateScoreLabel(); updateValidatedLabel(); updateNameLabel(); }
     });
+
+    // State is named by its ticks, Linked by where it is linked to ("Linked to DM3-Staging"). Linked to
+    // narrows Linked: picking a destination ticks Linked, and unticking Linked sets it back to Any SIEM.
+    // In the CAPTURE phase, like the sorts above, so the request htmx sends for the change carries both.
+    function updateStateLabel() {
+        var label = $('rh-state-label'), to = $('rh-linked-to');
+        if (!label) return;
+        var texts = Array.prototype.map.call(document.querySelectorAll("#rh-state-dropdown input[name='state']:checked"), function (cb) {
+            var text = cb.nextElementSibling.textContent.trim();
+            return cb.value === 'linked' && to && to.value ? text + ' to ' + to.selectedOptions[0].textContent.trim() : text;
+        });
+        label.textContent = texts.length ? texts.join(', ') : 'All states';
+    }
+    document.addEventListener('change', function (e) {
+        var to = $('rh-linked-to'), linked = document.querySelector("#rh-state-dropdown input[name='state'][value='linked']");
+        if (!to || !linked || !e.target.closest || !e.target.closest('#rh-state-dropdown')) return;
+        if (e.target === to && to.value) linked.checked = true;
+        if (e.target === linked && !linked.checked) to.value = '';
+        updateStateLabel();
+    }, true);
 
     // A rule card's own actions (validate, edit, sync, archive, restore) swap only that card, so
     // they don't get the grid's "rulesFiltered" trigger: refresh the metrics here (they carry their
@@ -128,24 +150,11 @@
         select.dispatchEvent(new Event('change', { bubbles: true }));   // the capture handler clears sort_col + siblings
     });
 
-    // A sync finished (HX-Trigger from /api/sync/status): the metrics too (the grid has refreshRules).
-    document.addEventListener('syncComplete', function () {
-        if ($('metrics-container')) htmx.ajax('GET', '/api/rules/metrics', { target: '#metrics-container', swap: 'innerHTML' });
-    });
     // Import validation file finished (HX-Trigger): close and clear its dialog.
     document.addEventListener('validationImported', function () {
         var modal = $('import-validation-modal'), form = $('import-validation-form');
         if (modal) modal.style.display = 'none';
         if (form) form.reset();
-    });
-
-    // Keep the address bar (so a refresh) in step with the grid's last filters and page.
-    document.addEventListener('htmx:afterRequest', function (event) {
-        if (!event.detail.successful || !event.detail.target || event.detail.target.id !== 'rules-grid') return;
-        var reqPath = event.detail.pathInfo && (event.detail.pathInfo.finalRequestPath || event.detail.pathInfo.requestPath);
-        if (reqPath && reqPath.indexOf('/api/rules') === 0) {
-            window.history.replaceState(null, '', '/rules' + reqPath.slice('/api/rules'.length));
-        }
     });
 
     // Toasts swapped into the toast container fade after 5 s.

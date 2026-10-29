@@ -1043,6 +1043,7 @@ def list_rules(
     space: Optional[str] = Query(None),
     enabled: Optional[str] = Query(None),
     state: list[str] = Query([]),
+    linked_to: Optional[str] = Query(None),
     upstream: list[str] = Query([]),
     min_score: Optional[str] = Query(None),
     max_score: Optional[str] = Query(None),
@@ -1073,6 +1074,7 @@ def list_rules(
             space=space if space else None,
             enabled=None if not enabled else (enabled.lower() == 'true'),
             state=[s for s in state if s],
+            linked_to=linked_to or None,
             upstream=[u for u in upstream if u],
             min_score=min_score_int,
             max_score=max_score_int,
@@ -1132,6 +1134,8 @@ def list_rules(
             "space": space or "",
             "enabled": enabled or "",
             "state": [s for s in state if s],
+            "linked_to": linked_to or "",
+            "upstream": [u for u in upstream if u],
             "min_score": min_score if min_score is not None else "",
             "max_score": max_score if max_score is not None else "",
             "validated_from": validated_from or "",
@@ -1149,8 +1153,10 @@ def list_rules(
         response = templates.TemplateResponse(request, "partials/rules_grid.html", context)
         # Lets the stats cards re-fetch with the same active filters (see
         # #metrics-container in rule_health.html) so they never drift from
-        # what the grid is currently showing.
-        if not append:
+        # what the grid is currently showing. Not when the grid loads itself (the page has just
+        # drawn the cards, and they refresh on refreshRules of their own): working them and the
+        # filter counts out twice made every visit to Rule Health load every rule twice more.
+        if not append and request.headers.get("HX-Trigger") != "rules-grid":
             response.headers["HX-Trigger"] = "rulesFiltered"
         return response
     except Exception as e:
@@ -1168,44 +1174,58 @@ def get_metrics(
     space: Optional[str] = Query(None),
     enabled: Optional[str] = Query(None),
     state: list[str] = Query([]),
+    linked_to: Optional[str] = Query(None),
     upstream: list[str] = Query([]),
     min_score: Optional[str] = Query(None),
     max_score: Optional[str] = Query(None),
     validated_from: Optional[str] = Query(None),
     validated_to: Optional[str] = Query(None),
 ):
-    """Get rule health metrics, scoped to the same filters as the rules grid."""
-    ctx = filtered_rule_metrics(db, client_id, {
-        "search": search, "space": space, "enabled": enabled, "state": state, "upstream": upstream,
-        "min_score": min_score,
+    """Get rule health metrics, scoped to the same filters as the rules grid. The number beside each
+    filter choice follows the filters too: they come along as the ``filterCounts`` event, by filter
+    field (app.js puts them in the filter bar, which isn't redrawn)."""
+    params = {
+        "search": search, "space": space, "enabled": enabled, "state": state, "linked_to": linked_to,
+        "upstream": upstream, "min_score": min_score,
         "max_score": max_score, "validated_from": validated_from, "validated_to": validated_to,
-    })
-    return request.app.state.templates.TemplateResponse(request, "partials/metrics_row.html", ctx)
+    }
+    ctx = filtered_rule_metrics(db, client_id, params)
+    response = request.app.state.templates.TemplateResponse(request, "partials/metrics_row.html", ctx)
+    counts = db.rule_filter_counts(rule_filters_from(params), client_id=client_id)
+    response.headers["HX-Trigger"] = json.dumps({"filterCounts": {
+        "space": counts["scope"], **{k: counts[k] for k in ("enabled", "state", "linked_to", "upstream")}}})
+    return response
 
 
-def filtered_rule_metrics(db, client_id: str, params: dict, keep_rules: bool = False) -> dict:
-    """Rule Health's metric strip for these filters, given as the page takes them (``space`` is
-    "<siem_id>|<space>"): the context partials/metrics_row.html needs. The page's metrics and a
-    Dashboard section built from it both come from here, so they always agree. ``keep_rules`` adds
-    the rules counted (``rules``), for a section working out the same figures on an earlier day."""
-    from app.main import get_last_sync_time
-
+def rule_filters_from(params: dict) -> RuleFilters:
+    """Rule Health's filters, given as the page takes them (``space`` is "<siem_id>|<space>")."""
     def _int(value):
         value = "" if value is None else str(value)
         return int(value) if value.strip().lstrip('-').isdigit() else None
 
     enabled = str(params.get("enabled") or "")
-    filters = RuleFilters(
+    return RuleFilters(
         search=params.get("search") or None,
         space=params.get("space") or None,
         enabled=None if not enabled else (enabled.lower() == 'true'),
         state=[s for s in (params.get("state") or []) if s],
+        linked_to=params.get("linked_to") or None,
         upstream=[u for u in (params.get("upstream") or []) if u],
         min_score=_int(params.get("min_score")),
         max_score=_int(params.get("max_score")),
         validated_from=_parse_date_bound(params.get("validated_from"), end_of_day=False),
         validated_to=_parse_date_bound(params.get("validated_to"), end_of_day=True),
     )
+
+
+def filtered_rule_metrics(db, client_id: str, params: dict, keep_rules: bool = False) -> dict:
+    """Rule Health's metric strip for these filters (:func:`rule_filters_from`): the context
+    partials/metrics_row.html needs. The page's metrics and a Dashboard section built from it both
+    come from here, so they always agree. ``keep_rules`` adds the rules counted (``rules``), for a
+    section working out the same figures on an earlier day."""
+    from app.main import get_last_sync_time
+
+    filters = rule_filters_from(params)
 
     # Per-tenant since 4.1.13 — tenant context is pinned by the caller.
     # Computed from the deduplicated rule list (matching what the grid
@@ -1325,7 +1345,12 @@ async def test_rule(
             '<div class="test-result test-error">Rule data not available for testing</div>',
             status_code=400
         )
-    
+    if rule.raw_data.get("type") == "machine_learning":
+        return HTMLResponse(
+            '<div class="test-result test-error">A machine learning rule can\'t be tested: it has no query to run.</div>',
+            status_code=400
+        )
+
     # Resolve the SIEM for this rule. The PREFERRED path (4.0.13+) is to use
     # the explicit siem_id query param — either passed by the rule modal
     # template (which knows rule.siem_id) or inferred from rule.siem_id below.
@@ -2327,16 +2352,13 @@ def _build_rule_modal_context(
     ]
     from app.services import pending_actions, rule_origins
     key = (rule.rule_id, actual_siem, space)
-    raw = rule.raw_data or {}
     # Changes Kibana made but TIDE couldn't record (a new rule id, a move, a restore): Finish in TIDE.
     pending = pending_actions.for_rule(client_id, key)
     own_pending = [e for e in pending if e["kind"] == "own_rule_id"]
     with db.get_connection() as conn:
         upstream = rule_origins.statuses(conn, [key]).get(key)
-        held = rule_origins.elastic_id_held(conn, raw, rule.rule_id)
         # A custom rule under one of Elastic's rule ids can be given its own (promotion.own_rule_id).
-        holds_elastic_id = (not rule.deprecated and not is_prebuilt(raw) and not any(not e.get("copy_id") for e in own_pending)
-                            and bool(held))
+        holds_elastic_id = rule_origins.holds_elastic_id(conn, client_id, key, rule)
         # A custom rule linked to an Elastic rule can be unlinked, and is flagged when it doesn't match it.
         origin = rule_origins.get(conn, key)
         can_unlink = not rule.deprecated and not rule_origins.unlink_refused(origin)

@@ -294,6 +294,18 @@ CHECKS: List[Check] = [
         _keycloak_env_differs,
     ),
     Check(
+        "gitlab_projects", "GitLab projects that need attention", "install", "warning",
+        "A client's GitLab project failed its last test, or its access token has expired or expires within "
+        "14 days, so backing up rules or raising issues there has stopped or will stop.",
+        "Open the client's page: GitLab Projects says what's wrong with each. For a token, make a new one in the "
+        "project (Settings → Access tokens), put it in the project's edit box (the pencil) and save.",
+        _query("SELECT c.name AS client, p.project, replace(p.purpose, ',', ' and ') AS purpose, "
+               "p.last_status AS status, p.token_expires_at AS expires, "
+               "p.last_message AS found FROM client_gitlab_projects p JOIN clients c ON c.id = p.client_id "
+               "WHERE p.last_status IN ('fail', 'warn') OR p.token_expires_at <= current_date + INTERVAL 14 DAY "
+               "ORDER BY 1, 2", needs=("client_gitlab_projects", "clients")),
+    ),
+    Check(
         "database_fatal", "A database stopped after a DuckDB fatal error", "install", "error",
         "DuckDB stopped one of TIDE's databases after a fatal error (in the last 7 days), which makes that "
         "client's pages fail until TIDE restarts. TIDE restarts itself once for it, and the restart repairs "

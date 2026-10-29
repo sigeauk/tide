@@ -367,17 +367,12 @@ def should_include_match(
     Pipeline (fail-safe — include whenever data is insufficient):
       1. Collect host CPEs.  If empty → include.
       2. NVD local JSON → recursive CPE-identity + version-range evaluation.
-      3. OpenCTI live → secondary source using same CPE evaluation.
-      4. Default → include (never suppress without proof).
+      3. Default → include (never suppress without proof).
 
     Zero string heuristics.  Zero OS knowledge.  Zero version normalisation.
     """
     # Lazy import to break circular dependency with sync_manager
-    from app.engine.sync_manager import (
-        load_nvd_entry,
-        fetch_cve_opencti,
-        evaluate_opencti_ranges,
-    )
+    from app.engine.sync_manager import load_nvd_entry
 
     host_cpes: List[str] = [c for c in (host_sw_cpes or []) if c]
     if not host_cpes:
@@ -397,14 +392,5 @@ def should_include_match(
                 logger.debug("[vgate] %s: NVD local → NOT affected", cve_id)
             return result
 
-    # Step 3: OpenCTI live
-    octi = fetch_cve_opencti(cve_id)
-    if octi and octi.get("cpe_ranges"):
-        result = evaluate_opencti_ranges(octi["cpe_ranges"], host_cpes)
-        if result is not None:
-            if not result:
-                logger.debug("[vgate] %s: OpenCTI → NOT affected", cve_id)
-            return result
-
-    # Step 4: Default — include
+    # Step 3: Default — include
     return True

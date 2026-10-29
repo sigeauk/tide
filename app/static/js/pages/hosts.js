@@ -71,10 +71,12 @@
         }
     }
 
-    // Clicking a package card picks it (again: drops it) and shows its CVEs.
+    // Clicking a package card picks it (again: drops it) and shows its CVEs. Its ⋮ and its edit
+    // form are for the package, not for picking it.
     TIDE.page('#software-section .sw-card', function (card) {
         card.classList.add('cursor-pointer');
-        card.addEventListener('click', function () {
+        card.addEventListener('click', function (e) {
+            if (e.target.closest('[data-more], form')) return;
             var wasSelected = card.classList.contains('sw-card--selected');
             document.querySelectorAll('#software-section .sw-card').forEach(function (c) { c.classList.remove('sw-card--selected'); });
             if (!wasSelected) card.classList.add('sw-card--selected');

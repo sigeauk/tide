@@ -116,8 +116,26 @@ def rule_state(rule, offline_scopes) -> str:
     return "live"
 
 
+def destination_key(siem_id, space) -> str:
+    """A destination as the SIEM filter names it: "siem_id|space", the space lowercased."""
+    return f"{siem_id}|{str(space).lower()}"
+
+
+def rule_badge(rule, offline_scopes, links, linked_to: Optional[str] = None) -> str:
+    """A rule's State badge, which the State filter matches: "deprecated", "offline", "linked" or
+    "unlinked" (``links``: :meth:`DatabaseService.rule_link_destinations`). With ``linked_to``
+    ("siem_id|space"), Linked to narrows Linked: a rule linked only elsewhere is "linked_elsewhere"."""
+    state = rule_state(rule, offline_scopes)
+    if state != "live":
+        return state
+    dests = links.get((rule.rule_id, rule.siem_id, rule.space))
+    if not dests:
+        return "unlinked"
+    return "linked" if not linked_to or destination_key(*linked_to.partition("|")[::2]) in dests else "linked_elsewhere"
+
+
 # Schema version for migrations
-SCHEMA_VERSION = 93
+SCHEMA_VERSION = 96
 
 # The per-client role that opens Diagnostics for that client. Only a super admin can grant or
 # revoke it (set_user_roles(grant_support=...)).
@@ -3986,6 +4004,62 @@ class DatabaseService:
             self._set_schema_version(conn, 93)
             logger.info("Migration 93: keycloak_inventory can hold TIDE's sign-in Keycloak.")
 
+        # ── Migration 94: a client's GitLab projects (6.3.1) ──
+        # Each row is one project of one GitLab instance that a client uses: for rule backup (one per
+        # client) or for issues (any number), with that project's own access token (sealed like every
+        # credential) and what the last Test found (app.services.gitlab.check). client_gitlab_map
+        # keeps saying which instances a client uses. Additive only.
+        if current_version < 94:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS client_gitlab_projects (
+                    id VARCHAR PRIMARY KEY DEFAULT (gen_random_uuid()::VARCHAR),
+                    client_id VARCHAR NOT NULL,
+                    gitlab_id VARCHAR NOT NULL,
+                    purpose VARCHAR NOT NULL,
+                    project VARCHAR NOT NULL,
+                    name VARCHAR,
+                    branch VARCHAR,
+                    folder VARCHAR,
+                    token_enc VARCHAR,
+                    project_id BIGINT,
+                    project_url VARCHAR,
+                    token_expires_at DATE,
+                    last_status VARCHAR,
+                    last_message VARCHAR,
+                    last_checked_at TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT now(),
+                    updated_at TIMESTAMP DEFAULT now()
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_client_gitlab_projects_client "
+                         "ON client_gitlab_projects(client_id)")
+            self._set_schema_version(conn, 94)
+            logger.info("Migration 94: created client_gitlab_projects.")
+
+        # ── Migration 95: a GitLab integration holds no token (6.3.1) ──
+        # Its token was only ever used by its Test connection; every token TIDE uses now belongs to a
+        # project a client links (migration 94). A token saved on an integration is removed rather
+        # than kept unused. Nothing to roll back to: no feature read it.
+        if current_version < 95:
+            cleared = conn.execute("UPDATE gitlab_inventory SET token_enc = NULL "
+                                   "WHERE COALESCE(token_enc, '') <> '' RETURNING id").fetchall()
+            self._set_schema_version(conn, 95)
+            logger.info("Migration 95: removed %d unused token(s) from GitLab integrations.", len(cleared))
+
+        # ── Migration 96: one GitLab project for both uses; choosing what is backed up (6.3.1) ──
+        # purpose may now hold both uses, comma-separated ("backup,issues": app.services.gitlab.uses).
+        # backup_paused stops the backup project's backups without unlinking it; backup_skip lists the
+        # destinations it doesn't back up (JSON [[siem_id, space], ...]), so a destination linked
+        # later is backed up. Migration 94's index on client_id goes first: DuckDB can fail to delete
+        # rows written under a secondary index before a column was added (migration 85), and a client
+        # has a handful of projects. Additive only.
+        if current_version < 96:
+            conn.execute("DROP INDEX IF EXISTS idx_client_gitlab_projects_client")
+            conn.execute("ALTER TABLE client_gitlab_projects ADD COLUMN IF NOT EXISTS backup_paused BOOLEAN DEFAULT false")
+            conn.execute("ALTER TABLE client_gitlab_projects ADD COLUMN IF NOT EXISTS backup_skip VARCHAR")
+            self._set_schema_version(conn, 96)
+            logger.info("Migration 96: client_gitlab_projects can pause backups and skip destinations.")
+
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
 
     @staticmethod
@@ -5355,17 +5429,12 @@ class DatabaseService:
                 # Deprecated (not found at the last good sync), else offline (its SIEM failed the
                 # reachability check before the last sync, so the row is kept from cache), else live.
                 # A live rule is "linked" when it has a copy linked in rule_links, else "unlinked":
-                # the four match the card's badge, so each rule is in exactly one.
+                # the four match the card's badge, so each rule is in exactly one. Linked to narrows Linked.
                 wanted_states = set(normalize_rule_states(filters.state))
                 offline = self.get_offline_scopes()
-                linked = self.linked_rule_keys() if wanted_states & {"linked", "unlinked"} else set()
-
-                def _badge(r):
-                    s = rule_state(r, offline)
-                    if s != "live":
-                        return s
-                    return "linked" if (r.rule_id, r.siem_id, r.space) in linked else "unlinked"
-                rules = [r for r in rules if _badge(r) in wanted_states]
+                links = self.rule_link_destinations() if wanted_states & {"linked", "unlinked"} else {}
+                linked_to = filters.linked_to if "linked" in wanted_states else None
+                rules = [r for r in rules if rule_badge(r, offline, links, linked_to) in wanted_states]
             if needs_upstream_filter:
                 # Against the Elastic or Sigma rule each came from (rule_origins); "own" = neither.
                 from app.services.rule_origins import filter_value, filter_values
@@ -6268,43 +6337,61 @@ class DatabaseService:
         keys = list(keys)
         return [[k[0] for k in keys], [k[1] for k in keys], [k[2] for k in keys]]
 
-    def linked_rule_keys(self) -> Set[Tuple[str, str, str]]:
-        """Every (rule_id, siem_id, space) on either side of a rule link, in the active tenant."""
+    def rule_link_destinations(self) -> Dict[Tuple[str, str, str], Set[str]]:
+        """Every (rule_id, siem_id, space) on either side of a rule link, in the active tenant, and the
+        destinations of the rules it is linked to (:func:`destination_key`)."""
         with self.get_connection() as conn:
             try:
                 rows = conn.execute(
-                    "SELECT rule_a_id, siem_a_id, space_a FROM rule_links "
-                    "UNION SELECT rule_b_id, siem_b_id, space_b FROM rule_links").fetchall()
+                    "SELECT rule_a_id, siem_a_id, space_a, siem_b_id, space_b FROM rule_links "
+                    "UNION ALL SELECT rule_b_id, siem_b_id, space_b, siem_a_id, space_a FROM rule_links").fetchall()
             except duckdb.CatalogException:
-                return set()   # a tenant DB Migration 74 has not reached yet: nothing is linked
-        return {(str(r), str(si), str(sp)) for r, si, sp in rows}
+                return {}      # a tenant DB Migration 74 has not reached yet: nothing is linked
+        out: Dict[Tuple[str, str, str], Set[str]] = {}
+        for r, si, sp, other_siem, other_space in rows:
+            out.setdefault((str(r), str(si), str(sp)), set()).add(destination_key(other_siem, other_space))
+        return out
 
-    def rule_filter_counts(self) -> Dict[str, Counter]:
-        """How many of the active tenant's rules each Rule Health filter choice holds, whatever the
-        other filters, matched as ``get_rules`` matches them: ``scope`` by ``"siem_id|space"``
-        (space lowercased; deprecated rules left out, as the SIEM filter leaves them out unless a
-        State is picked), ``enabled`` by ``"true"``/``"false"``, ``state`` by the card's badge and
-        ``upstream`` by ``rule_origins.filter_value`` (``own`` when the rule has no origin)."""
-        from app.services.rule_origins import filter_value
-        counts = {"scope": Counter(), "enabled": Counter(), "state": Counter(), "upstream": Counter()}
-        with self.get_connection() as conn:
-            try:
-                rows = conn.execute(
-                    "SELECT rule_id, siem_id, space, COALESCE(enabled, 0) = 1, COALESCE(deprecated, false) "
-                    "FROM detection_rules").fetchall()
-            except duckdb.CatalogException:
-                return counts
-        offline = self.get_offline_scopes()
-        linked = self.linked_rule_keys()
-        upstream = self.upstream_statuses()
-        for rule_id, siem_id, space, enabled, deprecated in rows:
-            key = (rule_id, siem_id, space)
-            if not deprecated:
-                counts["scope"][f"{siem_id}|{str(space).lower()}"] += 1
-            counts["enabled"]["true" if enabled else "false"] += 1
-            counts["state"]["deprecated" if deprecated else "offline" if (siem_id, space) in offline
-                            else "linked" if key in linked else "unlinked"] += 1
-            counts["upstream"][filter_value(upstream.get(key))] += 1
+    def rule_filter_counts(self, filters: Optional[RuleFilters] = None,
+                           client_id: Optional[str] = None) -> Dict[str, Counter]:
+        """How many rules each Rule Health filter choice would show, with the other filters as they
+        are: a filter's own choice never narrows its counts, so each count is what the grid holds once
+        that choice is picked. ``scope`` by :func:`destination_key` (a deprecated rule only when a
+        State is picked, as the SIEM filter shows it), ``enabled`` by ``"true"``/``"false"``,
+        ``state`` by the card's badge, ``upstream`` by ``rule_origins.filter_value`` (``own`` when the
+        rule has no origin), and ``linked_to`` by destination: how many of the Linked rules are linked
+        to a copy there."""
+        from app.services.rule_origins import filter_value, filter_values
+        f = filters or RuleFilters()
+        counts = {k: Counter() for k in ("scope", "enabled", "state", "upstream", "linked_to")}
+        # Search, score and validation date narrow every count; the counted filters are applied here.
+        rules = self.get_rules(f.model_copy(update={
+            "siem_id": None, "space": None, "enabled": None, "state": [], "upstream": [], "linked_to": None,
+            "page": 1, "page_size": 1_000_000}), client_id=client_id, slim=True)[0]
+        offline, links, upstream = self.get_offline_scopes(), self.rule_link_destinations(), self.upstream_statuses()
+        states, wanted_upstream = set(normalize_rule_states(f.state)), set(filter_values(f.upstream))
+        siem = destination_key(f.siem_id or "", f.space) if f.space else ""
+        linked_to = f.linked_to if "linked" in states else None
+        for r in rules:
+            key = (r.rule_id, r.siem_id, r.space)
+            dest = destination_key(r.siem_id, r.space)
+            badge, up = rule_badge(r, offline, links), filter_value(upstream.get(key))
+            at_siem = not siem or dest == siem
+            # Each filter as it is now. With no State picked, a SIEM leaves deprecated rules out.
+            in_siem = not siem or (dest == siem and (bool(states) or not r.deprecated))
+            in_status = f.enabled is None or r.enabled == f.enabled
+            in_state = not states or rule_badge(r, offline, links, linked_to) in states
+            in_upstream = not wanted_upstream or up in wanted_upstream
+            if in_status and in_state and in_upstream and (states or not r.deprecated):
+                counts["scope"][dest] += 1
+            if in_siem and in_state and in_upstream:
+                counts["enabled"]["true" if r.enabled else "false"] += 1
+            if at_siem and in_status and in_upstream:
+                counts["state"][rule_badge(r, offline, links, f.linked_to)] += 1
+            if in_siem and in_status and in_state:
+                counts["upstream"][up] += 1
+            if badge == "linked" and at_siem and in_status and in_upstream:
+                counts["linked_to"].update(links[key])
         return counts
 
     def get_rule_links_bulk(
@@ -7805,22 +7892,29 @@ class DatabaseService:
                         updated_at,
                     ])
 
-            if events:
-                # DataFrame bulk insert: ~50x faster than executemany, which
-                # DuckDB runs row-by-row (with index maintenance) per call.
-                cols = ["id", "rule_id", "siem_id", "space", "client_id", "action",
-                        "actor_user_id", "actor_name", "detail", "created_at"]
-                events_df = pd.DataFrame(events, columns=cols)
-                events_df["actor_user_id"] = events_df["actor_user_id"].astype("object")
-                conn.register("lifecycle_events_src", events_df)
-                try:
-                    conn.execute(
-                        f"INSERT INTO rule_lifecycle_history ({', '.join(cols)}) "
-                        f"SELECT {', '.join(cols)} FROM lifecycle_events_src"
-                    )
-                finally:
-                    conn.unregister("lifecycle_events_src")
+            self._insert_history_rows(conn, events)
         return len(events)
+
+    @staticmethod
+    def _insert_history_rows(conn, events: List[List[Any]]) -> None:
+        """Insert lifecycle history rows ``[id, rule_id, siem_id, space, client_id, action,
+        actor_user_id, actor_name, detail, created_at]`` at once."""
+        if not events:
+            return
+        # DataFrame bulk insert: ~50x faster than executemany, which
+        # DuckDB runs row-by-row (with index maintenance) per call.
+        cols = ["id", "rule_id", "siem_id", "space", "client_id", "action",
+                "actor_user_id", "actor_name", "detail", "created_at"]
+        events_df = pd.DataFrame(events, columns=cols)
+        events_df["actor_user_id"] = events_df["actor_user_id"].astype("object")
+        conn.register("lifecycle_events_src", events_df)
+        try:
+            conn.execute(
+                f"INSERT INTO rule_lifecycle_history ({', '.join(cols)}) "
+                f"SELECT {', '.join(cols)} FROM lifecycle_events_src"
+            )
+        finally:
+            conn.unregister("lifecycle_events_src")
     
     # --- THREAT ACTOR OPERATIONS ---
 
@@ -7879,16 +7973,18 @@ class DatabaseService:
     def clear_octi_threat_actors_in_active_db(self) -> int:
         """Delete OpenCTI-sourced threat_actors rows from the active DB context.
 
-        4.1.5 isolation: keeps any MITRE-sourced rows untouched so the shared
-        DB does not lose its baseline when this is invoked without a tenant
-        context. In a tenant DB the table holds OpenCTI rows only, so this
-        effectively wipes it.
+        In a tenant DB the table is the client's OpenCTI actors alone, so this
+        wipes it, a copy of MITRE's an earlier version left there included.
+        Without a tenant context it keeps any MITRE-sourced rows, so the shared
+        DB does not lose its baseline.
         """
+        from app.services.tenant_manager import get_tenant_db_path
+        in_tenant = get_tenant_db_path() is not None
         try:
             with self.get_connection() as conn:
                 # Count first (DuckDB rowcount on bulk DELETE is unreliable).
                 rows = conn.execute("SELECT name, source FROM threat_actors").fetchall()
-                victims = [r[0] for r in rows if not self._row_is_mitre(r[1])]
+                victims = [r[0] for r in rows if in_tenant or not self._row_is_mitre(r[1])]
                 if not victims:
                     return 0
                 conn.executemany(
@@ -8105,8 +8201,13 @@ class DatabaseService:
                              origin, source, last_updated)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT (name) DO UPDATE SET
-                            ttps = EXCLUDED.ttps,
-                            ttp_count = EXCLUDED.ttp_count,
+                            -- Two OpenCTI intrusion sets that are one actor (APT28 and Fancy
+                            -- Bear) keep both their techniques; the sync clears the client's
+                            -- OpenCTI actors first, so none is left from before.
+                            ttps = list_distinct(list_concat(COALESCE(threat_actors.ttps, []),
+                                                             COALESCE(EXCLUDED.ttps, []))),
+                            ttp_count = len(list_distinct(list_concat(COALESCE(threat_actors.ttps, []),
+                                                                      COALESCE(EXCLUDED.ttps, [])))),
                             source = list_distinct(
                                 list_concat(
                                     COALESCE(threat_actors.source, []),
@@ -8140,19 +8241,19 @@ class DatabaseService:
     def get_threat_actors(self, client_id: Optional[str] = None) -> List[ThreatActor]:
         """Get all threat actors ordered by TTP count.
 
-        4.1.5 isolation rules:
+        Isolation rules:
         * MITRE-sourced actors live in the **shared** DB and are visible to
-          every client (they were loaded at build / by the MITRE sync phase).
+          every client (loaded by the threat sync's MITRE phase). Only those
+          are read from it, and only their MITRE sources: OpenCTI data an
+          earlier version merged in there never reaches a client
+          (sync.rebuild_shared_actors_if_mixed clears it at start).
         * OpenCTI-sourced actors live in the **tenant** DB and are only
-          returned when the request is in that tenant's context.
-        * For backwards compatibility the shared DB may still contain
-          OpenCTI rows for the primary/legacy client (which has no dedicated
-          tenant DB); those rows are filtered out unless ``client_id``
-          actually links to an OpenCTI instance.
-        * ``client_id=None`` returns everything (background jobs, exports).
+          returned when the request is in that tenant's context. One that is
+          a MITRE actor (by name, as the OpenCTI save resolves aliases to
+          MITRE's name) merges into it: MITRE's techniques plus OpenCTI's.
+        ``client_id`` is kept for callers; the tenant context decides.
         """
         from app.services.tenant_manager import get_tenant_db_path
-        include_opencti_shared = client_id is None or self._client_has_opencti(client_id)
         in_tenant_ctx = get_tenant_db_path() is not None
 
         with self.get_shared_connection() as conn:
@@ -8184,6 +8285,10 @@ class DatabaseService:
                 if aliases_val is None or (isinstance(aliases_val, float) and math.isnan(aliases_val)):
                     aliases_val = None
                 
+                # MITRE's actors only, with their MITRE sources only.
+                source = [s for s in (source if isinstance(source, list) else []) if self._row_is_mitre([s])]
+                if not source:
+                    continue
                 actors.append(ThreatActor(
                     name=row.get('name', ''),
                     description=description_val,
@@ -8191,15 +8296,9 @@ class DatabaseService:
                     ttp_count=row.get('ttp_count', 0),
                     aliases=aliases_val,
                     origin=origin_val,
-                    source=source if isinstance(source, list) else [],
+                    source=source,
                     last_updated=row.get('last_updated'),
                 ))
-
-            if not include_opencti_shared:
-                # Tenant has no OpenCTI link — keep only MITRE-baseline rows
-                # from the shared DB. Anything sourced solely from another
-                # tenant's OpenCTI feed (legacy data) is hidden.
-                actors = [a for a in actors if self._row_is_mitre(a.source)]
 
         # Tenant DB OpenCTI rows (4.1.5 isolation). Only attempt this when a
         # tenant context is active AND the tenant DB is registered, so the
@@ -8229,6 +8328,13 @@ class DatabaseService:
                     source = row.get("source", [])
                     if hasattr(source, "tolist"):
                         source = source.tolist()
+                    # The client's table holds its OpenCTI actors: a copy of MITRE's or a removed
+                    # vendor's left there by an earlier version is not one, and shows nowhere.
+                    from app.services.cti_source_labels import display_label
+                    if not any(display_label(str(s or "")) == "OpenCTI"
+                               for s in (source if isinstance(source, list) else [])):
+                        continue
+                    source = ["OCTI"]
                     origin_val = row.get("origin")
                     if origin_val is None or (isinstance(origin_val, float)
                                               and _math.isnan(origin_val)):
@@ -8244,9 +8350,16 @@ class DatabaseService:
 
                     existing = by_name.get(name)
                     if existing is not None:
-                        # Merge: union source markers, union aliases string,
-                        # prefer shared description (MITRE-curated) but fall
-                        # back to OCTI's if shared is empty.
+                        # Merge: MITRE's techniques plus OpenCTI's, union
+                        # source markers, union aliases string, prefer shared
+                        # description (MITRE-curated) but fall back to OCTI's
+                        # if shared is empty.
+                        merged_ttps = list(existing.ttps or [])
+                        for t in (ttps or []):
+                            if t and t not in merged_ttps:
+                                merged_ttps.append(t)
+                        existing.ttps = merged_ttps
+                        existing.ttp_count = len(merged_ttps)
                         merged_src = list(existing.source or [])
                         for s in (source or []):
                             if s and s not in merged_src:
@@ -8339,33 +8452,17 @@ class DatabaseService:
         if client_id:
             prod_scopes = self.get_client_siem_scopes(client_id, "production")
         
+        # The actors are exactly those Threat Landscape lists (get_threat_actors): MITRE's, which
+        # every client sees, and the client's own OpenCTI actors merged in. Only rule *coverage*
+        # is scoped to the active client's production SIEM spaces below.
+        import pandas as pd
+        actors = self.get_threat_actors(client_id=client_id)
+        if not actors:
+            return ThreatLandscapeMetrics()
+        df = pd.DataFrame([{"name": a.name, "ttp_count": a.ttp_count or 0, "ttps": list(a.ttps or []),
+                            "origin": a.origin, "source": list(a.source or [])} for a in actors])
+
         with self.get_connection() as conn:
-            # Threat actors are intentionally global (MITRE ATT&CK / OpenCTI
-            # reference data shared across all clients).  Only rule *coverage*
-            # is scoped to the active client's production SIEM spaces below.
-            # NOTE: when the tenant has NO OpenCTI link, OpenCTI-only actors
-            # are filtered out post-fetch so the landscape totals match what
-            # the operator actually sees on /threats and /heatmap.
-            df = conn.execute(
-                "SELECT name, ttp_count, ttps, origin, source FROM threat_actors"
-            ).df()
-
-            if df.empty:
-                return ThreatLandscapeMetrics()
-
-            include_opencti_only = client_id is None or self._client_has_opencti(client_id)
-            if not include_opencti_only and 'source' in df.columns:
-                # 4.1.5 — delegate to the central MITRE detector so any source
-                # string starting with ``mitre`` (case-insensitive, any
-                # separator) is preserved. Previously this used a stale
-                # frozenset that didn't match the ``"MITRE: <matrix>"`` strings
-                # written by ``cti_helper.process_stix_bundle``, so for
-                # tenants without an OpenCTI link this filter dropped every
-                # row and the landscape cards rendered as zeros.
-                df = df[df['source'].apply(self._row_is_mitre)].reset_index(drop=True)
-                if df.empty:
-                    return ThreatLandscapeMetrics()
-            
             # Get covered TTPs inline (avoid nested connection)
             if prod_scopes is not None:
                 if prod_scopes:
@@ -10810,14 +10907,34 @@ class DatabaseService:
                 )
             return out
 
+        def _recent_edits(conn, keys: List[Tuple[str, str, str]], since: datetime) -> Dict[Tuple[str, str, str], list]:
+            """The rules' 'edited' history since ``since``, newest first: one query for every rule."""
+            try:
+                rows = conn.execute(
+                    """
+                    WITH k AS (SELECT unnest(?::VARCHAR[]) AS r, unnest(?::VARCHAR[]) AS s, unnest(?::VARCHAR[]) AS sp)
+                    SELECT h.rule_id, h.siem_id, h.space, h.actor_name, h.detail, h.created_at
+                    FROM rule_lifecycle_history h
+                    JOIN k ON h.rule_id = k.r AND h.siem_id = k.s AND h.space = k.sp
+                    WHERE h.action = 'edited' AND h.created_at >= ?
+                    ORDER BY h.created_at DESC
+                    """,
+                    [[k[0] for k in keys], [k[1] for k in keys], [k[2] for k in keys], since],
+                ).fetchall()
+            except Exception:
+                return {}
+            out: Dict[Tuple[str, str, str], list] = {}
+            for rule_id, siem_id, space, actor_name, detail, created_at in rows:
+                out.setdefault((rule_id, siem_id, space), []).append((actor_name, detail, created_at))
+            return out
+
         def _is_recent_local_edit_echo(
-            conn,
-            rule_id: str,
-            siem_id: str,
-            space: str,
+            history: list,
             field_diffs: List[Dict[str, str]],
             sync_ts: Optional[datetime],
         ) -> bool:
+            """Whether the sync's changes are a TIDE edit coming back: ``history`` is the rule's
+            ``_recent_edits``."""
             if not field_diffs:
                 return False
 
@@ -10827,24 +10944,7 @@ class DatabaseService:
             if not signature:
                 return False
             sync_map = _field_diff_map(field_diffs)
-
-            try:
-                rows = conn.execute(
-                    """
-                    SELECT actor_name, detail, created_at
-                    FROM rule_lifecycle_history
-                    WHERE rule_id = ?
-                      AND siem_id = ?
-                      AND space = ?
-                      AND action = 'edited'
-                      AND created_at >= ?
-                    ORDER BY created_at DESC
-                    LIMIT 20
-                    """,
-                    [rule_id, siem_id, space, window_start],
-                ).fetchall()
-            except Exception:
-                return False
+            rows = [h for h in history if isinstance(h[2], datetime) and h[2] >= window_start][:20]
 
             for actor_name, detail_raw, _created_at in rows:
                 actor_norm = str(actor_name or '').strip().lower()
@@ -10925,39 +11025,32 @@ class DatabaseService:
                         )
                         del existing_by_key[(old_rule_id, old_siem_id, old_space)]
 
-                # Insert fresh rules
+                # Replace the fetched rows: delete them and insert the fresh ones. An
+                # ON CONFLICT DO UPDATE rewriting every rule's JSON in place took ~20 s for 2,500
+                # rules on a compact file, this ~0.3 s. A rule already stored keeps its client_id
+                # and source_rule_id (the sync never sets them) and is no longer deprecated.
                 self._ensure_rule_key_columns(conn)
                 conn.register('rules_source', df_final)
                 col_list = ', '.join(target_cols + ['kibana_rule_id', 'rule_language'])
-                conn.execute(f"""
-                    INSERT INTO detection_rules ({col_list})
-                    SELECT {col_list} FROM rules_source
-                    ON CONFLICT (rule_id, siem_id, space) DO UPDATE SET
-                        name = EXCLUDED.name,
-                        severity = EXCLUDED.severity,
-                        author = EXCLUDED.author,
-                        enabled = EXCLUDED.enabled,
-                        score = EXCLUDED.score,
-                        quality_score = EXCLUDED.quality_score,
-                        meta_score = EXCLUDED.meta_score,
-                        score_mapping = EXCLUDED.score_mapping,
-                        score_field_type = EXCLUDED.score_field_type,
-                        score_search_time = EXCLUDED.score_search_time,
-                        score_language = EXCLUDED.score_language,
-                        score_note = EXCLUDED.score_note,
-                        score_override = EXCLUDED.score_override,
-                        score_tactics = EXCLUDED.score_tactics,
-                        score_techniques = EXCLUDED.score_techniques,
-                        score_author = EXCLUDED.score_author,
-                        score_highlights = EXCLUDED.score_highlights,
-                        last_updated = EXCLUDED.last_updated,
-                        mitre_ids = EXCLUDED.mitre_ids,
-                        raw_data = EXCLUDED.raw_data,
-                        kibana_rule_id = EXCLUDED.kibana_rule_id,
-                        rule_language = EXCLUDED.rule_language,
-                        deprecated = false
+                conn.execute("""
+                    CREATE OR REPLACE TEMP TABLE sync_rules AS
+                    SELECT s.* REPLACE (
+                               CASE WHEN d.rule_id IS NULL THEN s.source_rule_id ELSE d.source_rule_id END AS source_rule_id,
+                               CASE WHEN d.rule_id IS NULL THEN s.deprecated ELSE false END AS deprecated),
+                           d.client_id
+                    FROM rules_source s
+                    LEFT JOIN detection_rules d
+                      ON d.rule_id = s.rule_id AND d.siem_id = s.siem_id AND d.space = s.space
                 """)
-                
+                conn.execute("""
+                    DELETE FROM detection_rules d USING sync_rules s
+                    WHERE d.rule_id = s.rule_id AND d.siem_id = s.siem_id AND d.space = s.space
+                """)
+                conn.execute(f"INSERT INTO detection_rules ({col_list}, client_id) "
+                             f"SELECT {col_list}, client_id FROM sync_rules")
+                conn.execute("DROP TABLE sync_rules")
+                conn.unregister('rules_source')
+
                 conn.execute("COMMIT")
                 _mark("upsert")
                 
@@ -10968,6 +11061,7 @@ class DatabaseService:
                 )
 
                 if client_id and existing_by_key:
+                    changed = []
                     for new_row in df_final.to_dict(orient='records'):
                         key = (
                             new_row.get('rule_id'),
@@ -10984,15 +11078,12 @@ class DatabaseService:
 
                         raw_data = _parse_raw(new_row.get('raw_data'))
                         sync_utc = kibana_utc(raw_data.get('updated_at'))
-                        sync_ts = utc_to_local(sync_utc)
-                        if _is_recent_local_edit_echo(
-                            conn,
-                            key[0],
-                            key[1],
-                            key[2],
-                            field_diffs,
-                            sync_ts,
-                        ):
+                        changed.append((key, field_diffs, sync_utc, utc_to_local(sync_utc)))
+
+                    since = min(((ts or datetime.now()) for _, _, _, ts in changed), default=datetime.now())
+                    history = _recent_edits(conn, [c[0] for c in changed], since - timedelta(minutes=10)) if changed else {}
+                    for key, field_diffs, sync_utc, sync_ts in changed:
+                        if _is_recent_local_edit_echo(history.get(key, []), field_diffs, sync_ts):
                             continue
 
                         pending_sync_edit_events.append(
@@ -11049,25 +11140,17 @@ class DatabaseService:
             pass  # Auto-checkpoint will handle it
 
         _mark("checkpoint")
-        for event in pending_sync_edit_events:
+        if pending_sync_edit_events:
             try:
-                self.record_rule_history(
-                    rule_id=event['rule_id'],
-                    siem_id=event['siem_id'],
-                    space=event['space'],
-                    client_id=event['client_id'],
-                    action='edited',
-                    actor_user_id=None,
-                    actor_name='elastic',
-                    detail=event['detail'],
-                    created_at=event.get('created_at') or datetime.now(),
-                )
+                with self.get_connection() as conn:
+                    self._ensure_rule_lifecycle_history_table(conn)
+                    self._insert_history_rows(conn, [
+                        [str(uuid.uuid4()), e['rule_id'], e['siem_id'], e['space'], e['client_id'], 'edited',
+                         None, 'elastic', json.dumps(e['detail']), e.get('created_at') or datetime.now()]
+                        for e in pending_sync_edit_events])
             except Exception:
-                logger.exception(
-                    'Failed to record elastic sync edit history for rule_id=%s siem_id=%s space=%s',
-                    event.get('rule_id'), event.get('siem_id'), event.get('space'),
-                )
-        
+                logger.exception('Failed to record the edits Elastic sync found for client_id=%s', client_id)
+
         _mark("events")
         logger.info("[perf] save_audit_results stages: " + " ".join(_stages))
         return count
@@ -11582,7 +11665,8 @@ class DatabaseService:
             # Everything keyed to this client only. Other clients, users, SIEM
             # inventory and the tenant database file are left alone.
             for table in ("user_clients", "user_roles", "role_permissions",
-                          "client_siem_map", "client_siem_configs"):
+                          "client_siem_map", "client_siem_configs",
+                          "client_gitlab_projects", "client_gitlab_map"):
                 try:
                     conn.execute(f"DELETE FROM {table} WHERE client_id = ?", [client_id])
                 except Exception as exc:
@@ -11741,6 +11825,7 @@ class DatabaseService:
         ("client_siem_configs", "id", "api_token_enc"),
         ("opencti_inventory", "id", "token_enc"),
         ("gitlab_inventory", "id", "token_enc"),
+        ("client_gitlab_projects", "id", "token_enc"),
         ("keycloak_inventory", "id", "client_secret_enc"),
         ("keycloak_inventory", "id", "pg_client_secret_enc"),
         ("cti_connectors", "id", "config_json"),
@@ -12046,59 +12131,6 @@ class DatabaseService:
             )
         return None
 
-    # --- OpenCTI Inventory ---
-
-    # ------------------------------------------------------------------
-    # Legacy OpenCTI GraphQL inventory (retired in 5.0.0 by migration 50)
-    #
-    # These methods used to read/write ``opencti_inventory`` and
-    # ``client_opencti_map``. Both tables are dropped by migration 50,
-    # so every method below is now a safe no-op that returns the
-    # equivalent empty value. They are kept here only so any orphan
-    # caller (e.g. an older diag script, an unfinished refactor in a
-    # template renderer) does not raise ``AttributeError`` while the
-    # last legacy import sites are being torn out. New code MUST use
-    # ``cti_connectors`` / ``cti_connector_clients`` and the
-    # multi-vendor framework in ``app.services.cti_connectors``.
-    # ------------------------------------------------------------------
-
-    def list_opencti_inventory(self) -> List[Dict]:
-        return []
-
-    def get_opencti_active_instances(self) -> List[Dict]:
-        return []
-
-    def create_opencti_inventory_item(self, label: str, url: str,
-                                      token_enc: str = None,
-                                      kind: str = "actors") -> Dict:
-        raise RuntimeError(
-            "Legacy OpenCTI GraphQL inventory was retired in 5.0.0. "
-            "Register an 'opencti_taxii' connector under Management → "
-            "Connectors instead."
-        )
-
-    def update_opencti_inventory_item(self, opencti_id: str, **fields) -> bool:
-        return False
-
-    def delete_opencti_inventory_item(self, opencti_id: str) -> bool:
-        return False
-
-    def get_opencti_clients(self, opencti_id: str) -> List[Dict]:
-        return []
-
-    def get_client_opencti_instances(self, client_id: str) -> List[Dict]:
-        return []
-
-    def get_client_opencti_config(self, client_id: str) -> Optional[Dict]:
-        return None
-
-    def link_client_opencti(self, client_id: str, opencti_id: str):
-        return None
-
-    def unlink_client_opencti(self, client_id: str, opencti_id: str):
-        return None
-
-
     # --- CTI Connectors (generic per-vendor framework, Migration 47) ---
 
     _CONNECTOR_COLS = (
@@ -12263,15 +12295,13 @@ class DatabaseService:
                     "created_at", "updated_at", "token_set"]
             return [dict(zip(cols, r)) for r in rows]
 
-    def create_gitlab_inventory_item(self, label: str, url: str,
-                                     token_enc: str = None,
-                                     default_group: str = None, tls_verify: bool = False) -> Dict:
-        """Create a GitLab instance in the inventory."""
+    def create_gitlab_inventory_item(self, label: str, url: str, tls_verify: bool = False) -> Dict:
+        """Create a GitLab instance in the inventory: its address and TLS setting. It holds no token
+        and no group: those are its projects' (``create_client_gitlab_project``)."""
         with self.get_shared_connection() as conn:
             conn.execute(
-                "INSERT INTO gitlab_inventory (label, url, token_enc, default_group, tls_verify) "
-                "VALUES (?, ?, ?, ?, ?)",
-                [label, url, seal(token_enc), default_group, bool(tls_verify)],
+                "INSERT INTO gitlab_inventory (label, url, tls_verify) VALUES (?, ?, ?)",
+                [label, url, bool(tls_verify)],
             )
             row = conn.execute(
                 "SELECT id, label, url, default_group, is_active, created_at, updated_at "
@@ -12283,12 +12313,10 @@ class DatabaseService:
 
     def update_gitlab_inventory_item(self, gitlab_id: str, **fields) -> bool:
         """Update a GitLab instance in the inventory."""
-        allowed = {"label", "url", "token_enc", "default_group", "is_active", "tls_verify"}
+        allowed = {"label", "url", "is_active", "tls_verify"}
         updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
         if not updates:
             return False
-        if "token_enc" in updates:
-            updates["token_enc"] = seal(updates["token_enc"])
         set_clause = ", ".join(f"{k} = ?" for k in updates)
         values = list(updates.values()) + [gitlab_id]
         with self.get_shared_connection() as conn:
@@ -12299,8 +12327,9 @@ class DatabaseService:
         return True
 
     def delete_gitlab_inventory_item(self, gitlab_id: str) -> bool:
-        """Delete a GitLab instance from the inventory and remove all client mappings."""
+        """Delete a GitLab instance from the inventory and remove all client mappings and projects."""
         with self.get_shared_connection() as conn:
+            conn.execute("DELETE FROM client_gitlab_projects WHERE gitlab_id = ?", [gitlab_id])
             conn.execute("DELETE FROM client_gitlab_map WHERE gitlab_id = ?", [gitlab_id])
             deleted = conn.execute(
                 "DELETE FROM gitlab_inventory WHERE id = ? RETURNING id", [gitlab_id]
@@ -12346,6 +12375,95 @@ class DatabaseService:
                 "DELETE FROM client_gitlab_map WHERE client_id = ? AND gitlab_id = ?",
                 [client_id, gitlab_id],
             )
+
+    # --- A client's GitLab projects (app.services.gitlab) ---
+
+    _GITLAB_PROJECT_COLS = ("id", "client_id", "gitlab_id", "purpose", "project", "name", "branch", "folder",
+                            "project_id", "project_url", "token_expires_at", "last_status", "last_message",
+                            "last_checked_at", "created_at", "backup_paused", "backup_skip")
+
+    def list_client_gitlab_projects(self, client_id: str) -> List[Dict]:
+        """The client's GitLab projects, rule backup first, each with its instance's label, address and
+        TLS setting and ``token_set``; never the token itself. ``uses`` is what it is used for
+        (gitlab.uses), ``backup`` and ``issues`` say whether each is one of them, and ``skip`` is
+        the set of ``(siem_id, space)`` destinations it doesn't back up."""
+        from app.services.gitlab import uses
+        cols = ", ".join(f"p.{c}" for c in self._GITLAB_PROJECT_COLS)
+        with self.get_shared_connection() as conn:
+            rows = conn.execute(
+                f"SELECT {cols}, COALESCE(p.token_enc, '') <> '', g.label, g.url, g.tls_verify "
+                "FROM client_gitlab_projects p LEFT JOIN gitlab_inventory g ON g.id = p.gitlab_id "
+                "WHERE p.client_id = ? ORDER BY NOT contains(p.purpose, 'backup'), lower(COALESCE(p.name, p.project))",
+                [client_id],
+            ).fetchall()
+        keys = self._GITLAB_PROJECT_COLS + ("token_set", "gitlab_label", "gitlab_url", "tls_verify")
+        out = []
+        for r in rows:
+            row = dict(zip(keys, r))
+            row["uses"] = uses(row)
+            row["backup"], row["issues"] = "backup" in row["uses"], "issues" in row["uses"]
+            row["backup_paused"] = bool(row["backup_paused"])
+            try:
+                row["skip"] = {(str(s), str(sp)) for s, sp in json.loads(row["backup_skip"] or "[]")}
+            except (TypeError, ValueError):
+                row["skip"] = set()
+            out.append(row)
+        return out
+
+    def get_client_gitlab_project(self, client_id: str, link_id: str, with_token: bool = False) -> Optional[Dict]:
+        """One of the client's GitLab projects (None when ``link_id`` is another client's); with
+        ``with_token``, its access token as ``token``."""
+        row = next((p for p in self.list_client_gitlab_projects(client_id) if p["id"] == link_id), None)
+        if row and with_token:
+            with self.get_shared_connection() as conn:
+                sealed = conn.execute("SELECT token_enc FROM client_gitlab_projects WHERE id = ?",
+                                      [link_id]).fetchone()
+            row["token"] = reveal_or_none(sealed[0] if sealed else None) or ""
+        return row
+
+    def create_client_gitlab_project(self, client_id: str, gitlab_id: str, purpose: str, project: str,
+                                     token: str, name: str = None, branch: str = None,
+                                     folder: str = None) -> str:
+        """Link a GitLab project to the client; the client then uses that instance. Returns its id."""
+        with self.get_shared_connection() as conn:
+            link_id = conn.execute(
+                "INSERT INTO client_gitlab_projects (client_id, gitlab_id, purpose, project, name, branch, folder, "
+                "token_enc) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+                [client_id, gitlab_id, purpose, project, name or None, branch or None, folder or None, seal(token)],
+            ).fetchone()[0]
+            conn.execute("INSERT INTO client_gitlab_map (client_id, gitlab_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
+                         [client_id, gitlab_id])
+        return link_id
+
+    def update_client_gitlab_project(self, link_id: str, **fields) -> None:
+        """Change a project link: ``purpose``, ``name``, ``branch``, ``folder`` ('' clears them),
+        ``backup_paused``, ``backup_skip`` (JSON), ``token`` (only when given) and what the last Test
+        found (``project``, ``project_id``, ``project_url``, ``token_expires_at``, ``last_status``,
+        ``last_message``, ``last_checked_at``)."""
+        allowed = {"purpose", "name", "branch", "folder", "backup_paused", "backup_skip", "project", "project_id",
+                   "project_url", "token_expires_at", "last_status", "last_message", "last_checked_at"}
+        updates = {k: (v if v != "" else None) for k, v in fields.items() if k in allowed}
+        if fields.get("token"):
+            updates["token_enc"] = seal(fields["token"])
+        if not updates:
+            return
+        with self.get_shared_connection() as conn:
+            conn.execute(
+                f"UPDATE client_gitlab_projects SET {', '.join(f'{k} = ?' for k in updates)}, updated_at = now() "
+                "WHERE id = ?", [*updates.values(), link_id])
+
+    def delete_client_gitlab_project(self, client_id: str, link_id: str) -> bool:
+        """Unlink one of the client's GitLab projects; the client stops using an instance it has no
+        other project on."""
+        with self.get_shared_connection() as conn:
+            gone = conn.execute("DELETE FROM client_gitlab_projects WHERE id = ? AND client_id = ? RETURNING gitlab_id",
+                                [link_id, client_id]).fetchone()
+            if gone:
+                conn.execute(
+                    "DELETE FROM client_gitlab_map WHERE client_id = ? AND gitlab_id = ? AND NOT EXISTS "
+                    "(SELECT 1 FROM client_gitlab_projects WHERE client_id = ? AND gitlab_id = ?)",
+                    [client_id, gone[0], client_id, gone[0]])
+        return gone is not None
 
     # --- Keycloak Inventory ---
 

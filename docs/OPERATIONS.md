@@ -68,6 +68,8 @@ You can leave the page while a sync runs. The **Last Synced** card shows when th
 
 For anything but **Done**, **Retry** runs the same sync again over the same destinations. Every sync is also listed in **Diagnostics → Sync activity** for 90 days.
 
+When the client has a GitLab backup project whose backups aren't paused, a sync ends by backing up the rules of the destinations it read that the project backs up (see [Rule backup](CLIENTS.md#rule-backup)). A backup that fails, for example because GitLab didn't answer, shows as **Done, steps failed**, and changes nothing in the project.
+
 A rule deleted in Kibana is marked **Deprecated** at the next sync, keeping its history, links and mappings. TIDE does this only when Kibana returned every rule it says the space holds, so a sync cut short never deprecates a rule that still exists. Two Diagnostics checks show when that keeps happening:
 
 - **Destinations whose last two syncs could not read every rule**: TIDE still counts rules there that may have been deleted in Kibana. To clear one you know was deleted, open it and use **Sync this rule**.
@@ -79,9 +81,9 @@ Syncs run when someone starts one. TIDE's figures for a destination are as of it
 
 ## OpenCTI connectors
 
-A connector links TIDE to an OpenCTI. A super admin adds it once in **Management → Integrations** (**Add integration** → **OpenCTI**), with OpenCTI's address and an API token; each client that should use it links it from the client's page (**Linked CTI Connectors → Edit**). **Sync Threats** on **Threat Landscape** then adds the intrusion sets of the client's OpenCTI to ATT&CK's actors and shows how much of each one's techniques your rules cover; **Create Baseline** turns an actor's techniques into a baseline.
+A connector links TIDE to an OpenCTI. A super admin adds it once in **Management → Integrations** (**Add integration** → **OpenCTI**), with OpenCTI's address and an API token; each client that should use it links it from the client's page (**Linked CTI Connectors → ⋮ → Manage connectors**). **Sync Threats** on **Threat Landscape** then adds the intrusion sets of the client's OpenCTI to ATT&CK's actors, for that client only, and shows how much of each one's techniques your rules cover. Each sync replaces the client's OpenCTI actors with what OpenCTI holds then; if an OpenCTI doesn't answer, the client keeps the actors it had until a sync reaches it. **Create Baseline** turns an actor's techniques into a baseline.
 
-- **Connection status.** A connector shows **Active** when its last connection test passed, **Failed** when it didn't (hover for the reason), or **Untested**. The arrow button on its card asks OpenCTI for its version, as a sync would connect.
+- **Connection status.** A connector shows **Active** when its last connection test passed, **Failed** when it didn't (hover for the reason), or **Untested**. **Test connection**, in its card's **⋮**, asks OpenCTI for its version, as a sync would connect.
 
 ---
 
@@ -281,7 +283,7 @@ Every check, look-up, fix and access change is recorded in the audit log.
 | A rule sync shows **Done, steps failed** | The rules were read, but a step afterwards failed; the result says which and why. Click **Retry**. If it fails again, report the error from **Diagnostics → Sync activity** with TIDE's log from that time. |
 | Diagnostics shows **A database stopped after a DuckDB fatal error** | DuckDB stopped a client's database, so TIDE restarted itself, which repairs the rule history indexes. If that client's pages work, nothing more is needed. If they say its database stopped, a second error came within 10 minutes and TIDE didn't restart again: restart it with `docker compose restart tide-app`, and if it happens again, back up the data folder and report the error. |
 | Rules show **SIEM offline** | That destination didn't answer at the last sync. Fix the connection, then sync that destination. |
-| A connector shows **Failed**, or **Sync Threats** reports an OpenCTI error | Hover for the reason, fix the address, token or certificate in the connector's form, test it with the arrow button, then click **Sync Threats** again. |
+| A connector shows **Failed**, or **Sync Threats** reports an OpenCTI error | Hover for the reason, fix the address, token or certificate in the connector's form, test it with **Test connection** (its card's **⋮**), then click **Sync Threats** again. |
 | A certificate is refused | See [When a certificate is refused](CONFIGURATION.md#when-a-certificate-is-refused). |
 | Scheduled rule-log exports or backups stopped | A background service isn't running; Diagnostics shows it. Restart TIDE: `docker compose restart tide-app`. |
 | A backup failed | Management → Backups shows why. Usually the disk is short of space: free some, or keep fewer backups. |
