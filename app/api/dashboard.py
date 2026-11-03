@@ -47,6 +47,11 @@ def _compute(db, client_id: str, card: dict) -> dict:
             view["changes"] = _changes(source, days, {"total": m.total_rules, "enabled": m.enabled_rules,
                                                       "validated": m.validated_count, "quality": m.avg_score},
                                        lambda at: past_figures.rule_health_then(db, client_id, rules, f.get("space"), at))
+            # Validated says how many were validated and how many lapsed: kept up, its change is none.
+            try:
+                view["flows"] = {"validated": past_figures.validation_flow(db, client_id, rules, days)}
+            except Exception:
+                logger.exception("Dashboard section rule_health: could not work out validations in %d day(s)", days)
         return view
     if source == "rule_monitoring":
         from app.services import rule_issues

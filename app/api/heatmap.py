@@ -827,7 +827,13 @@ def generate_baseline_from_heatmap(
         client_id=client_id,
     )
 
-    return RedirectResponse(url=f"/baselines?baseline_id={quote(baseline.id)}&group=baseline", status_code=303)
+    url = f"/baselines?baseline_id={quote(baseline.id)}&group=baseline"
+    if request.headers.get("HX-Request") == "true":
+        # From an actor's window ("…" › Create baseline): the browser goes to Baselines.
+        resp = HTMLResponse("")
+        resp.headers["HX-Redirect"] = url
+        return resp
+    return RedirectResponse(url=url, status_code=303)
 
 
 # ─── SYSTEM BASELINE HEATMAP ─────────────────────────────────────────────────

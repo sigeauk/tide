@@ -25,12 +25,14 @@
 {% if change %}<div class="metric-tip__row">{{ change.then_label }} <span>{{ change.then }}</span></div>{% endif %}
 {%- endmacro %}
 
-{# Rule Monitoring's comparison (past_figures.flow_lines): how many began (red, the figure went up for
-   them) and how many were fixed (green), in the period; the tip names each. #}
-{% macro metric_flow(flow) -%}
-{% if flow %}<p class="metric-change metric-change--flow"><span class="metric-change--{{ 'bad' if flow.new else 'neutral' }}">{% if flow.new %}{{ icon('arrow-up', '12') }}{% endif %}{{ flow.new }} new</span><span aria-hidden="true">·</span><span class="metric-change--{{ 'good' if flow.fixed else 'neutral' }}">{% if flow.fixed %}{{ icon('arrow-down', '12') }}{% endif %}{{ flow.fixed }} fixed</span><span>{{ flow.period }}</span></p>{% endif %}
+{# A comparison as two counts in the period: what took the figure up (``up``, the flow's key and its
+   word) and what took it down (``down``), each with its arrow, red or green as ``up_good`` says.
+   Rule Monitoring's (past_figures.flow_lines): new (red) and fixed (green). Validated's
+   (past_figures.validation_flow): validated (green) and lapsed (red). The tip names each. #}
+{% macro metric_flow(flow, up='new', down='fixed', up_good=false) -%}
+{% if flow %}{% set n_up, n_down = flow[up], flow[down] %}<p class="metric-change metric-change--flow"><span class="metric-change--{{ ('good' if up_good else 'bad') if n_up else 'neutral' }}">{% if n_up %}{{ icon('arrow-up', '12') }}{% endif %}{{ n_up }} {{ up }}</span><span aria-hidden="true">·</span><span class="metric-change--{{ ('bad' if up_good else 'good') if n_down else 'neutral' }}">{% if n_down %}{{ icon('arrow-down', '12') }}{% endif %}{{ n_down }} {{ down }}</span><span>{{ flow.period }}</span></p>{% endif %}
 {%- endmacro %}
 
-{% macro metric_flow_tip(flow, began, ended) -%}
-{% if flow %}<div class="metric-tip__row">{{ began }} {{ flow.period }} <span>{{ flow.new }}</span></div><div class="metric-tip__row">{{ ended }} {{ flow.period }} <span>{{ flow.fixed }}</span></div>{% endif %}
+{% macro metric_flow_tip(flow, began, ended, up='new', down='fixed') -%}
+{% if flow %}<div class="metric-tip__row">{{ began }} {{ flow.period }} <span>{{ flow[up] }}</span></div><div class="metric-tip__row">{{ ended }} {{ flow.period }} <span>{{ flow[down] }}</span></div>{% endif %}
 {%- endmacro %}

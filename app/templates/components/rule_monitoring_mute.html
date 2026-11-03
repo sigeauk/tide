@@ -1,0 +1,63 @@
+{#
+  Rule Monitoring's Mute dialog (rule_monitoring.mute_form). From a rule's row (``rule_id`` set) choose
+  what to mute: this problem on the rule, every problem it has now and later (both until unmuted), or
+  the problem's cause on every rule it affects, unless it is muted already (``cause_muted``). From a
+  cause, the cause only. A cause stays muted until it affects more rules than ``rules``, as it does now.
+  Context: issue, cause, space, title (the issue's), label (the cause, or its destination),
+  cause_siem_ids (comma-separated: the SIEM records of one cluster), rules, cause_muted; from a row also
+  rule_id, siem_id, name, where. Muting closes the dialog and refreshes the list (rmonChanged).
+#}
+{% from "macros/modal.html" import close_button %}
+{% set until_cause = ('Until it affects more rules than the ' ~ rules ~ ' it does now (disabled ones count).') if rules else 'Until you unmute it.' %}
+<div class="modal-overlay" data-click="backdrop.remove">
+    <div class="modal-content modal-sm" data-stop-click role="dialog" aria-modal="true" aria-labelledby="rmon-mute-title">
+        <div class="modal-header">
+            <h3 class="modal-title" id="rmon-mute-title">{{ 'Mute' if rule_id else 'Mute cause' }}</h3>
+            {{ close_button('data-click="modal.remove"', 'Cancel') }}
+        </div>
+        <form name="Mute" hx-post="/api/rule-monitoring/mute" hx-target="#modal-container" hx-swap="innerHTML">
+            <input type="hidden" name="issue" value="{{ issue }}">
+            <input type="hidden" name="cause" value="{{ cause }}">
+            <input type="hidden" name="space" value="{{ space }}">
+            <input type="hidden" name="cause_siem_ids" value="{{ cause_siem_ids }}">
+            {% if rule_id %}
+            <input type="hidden" name="rule_id" value="{{ rule_id }}">
+            <input type="hidden" name="siem_id" value="{{ siem_id }}">
+            <p class="text-secondary mb-md"><strong>{{ name }}</strong>{% if where %} ({{ where }}){% endif %}:
+                {{ title }}{% if cause %}, <strong>{{ cause }}</strong>{% endif %}. What you mute moves to
+                <strong>Muted</strong> and isn't counted.</p>
+            <fieldset class="border-0 p-0 mt-0 mx-0 mb-md">
+                <legend class="form-label">Mute</legend>
+                <label class="flex gap-sm items-start mb-sm">
+                    <input type="radio" name="scope" value="problem" checked>
+                    <span><strong>This problem on this rule</strong><br>
+                    <span class="text-muted fs-sm">Until you unmute it.</span></span>
+                </label>
+                <label class="flex gap-sm items-start{{ ' mb-sm' if not cause_muted }}">
+                    <input type="radio" name="scope" value="rule">
+                    <span><strong>Every problem on this rule, now and later</strong><br>
+                    <span class="text-muted fs-sm">Until you unmute it.</span></span>
+                </label>
+                {% if not cause_muted %}
+                <label class="flex gap-sm items-start">
+                    <input type="radio" name="scope" value="cause">
+                    <span><strong>{% if cause %}The cause, {{ cause }}, on every rule it affects{% else %}This problem on every rule in {{ label }}{% endif %}</strong><br>
+                    <span class="text-muted fs-sm">{{ until_cause }}</span></span>
+                </label>
+                {% endif %}
+            </fieldset>
+            {% else %}
+            <input type="hidden" name="scope" value="cause">
+            <p class="text-secondary mb-md">{{ title }}: <strong>{{ label }}</strong>, on every rule it affects. It moves to
+                <strong>Muted</strong> and isn't counted. {{ until_cause }}</p>
+            {% endif %}
+            <label class="form-label" for="rmon-mute-note">Note</label>
+            <textarea id="rmon-mute-note" name="note" class="form-input" rows="3" maxlength="1000"
+                      placeholder="{{ 'Why, for example: this rule is being rewritten.' if rule_id else "Why, for example: this index isn't onboarded until November." }}"></textarea>
+            <div class="modal-actions">
+                <button name="Cancel" type="button" class="btn btn-secondary" data-click="modal.remove">Cancel</button>
+                <button name="Mute" type="submit" class="btn btn-primary">Mute</button>
+            </div>
+        </form>
+    </div>
+</div>

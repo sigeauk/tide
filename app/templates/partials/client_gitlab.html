@@ -6,9 +6,10 @@
    A project is used for rule backup, issues or both (p.uses). Each has its own access token, never
    shown again; the edit popover's blank token keeps it. Every change re-renders this section, which
    tests the project again. Each project's ⋮ has Test and Edit; the backup project's also Back up
-   now and Pause/Resume backups. The backup project shows the destinations it doesn't back up
-   (skip_names) and its last backup (backing_up, last_backup: app.services.gitlab_backup); while one
-   runs, the section asks for itself again every few seconds. #}
+   now and Pause/Resume backups. The backup project shows its last backup (backing_up, last_backup:
+   app.services.gitlab_backup); while one runs, the section asks for itself again every few seconds.
+   What needs attention (p.attention: the test's problem, the backup's failure or what it left as it
+   was) sits in full behind the ⚠ beside the ⋮, in the same popover as Edit. #}
 {% from "macros/icons.html" import icon %}
 {% from "macros/modal.html" import close_button, empty_state %}
 {% from "macros/menu.html" import more_button, manage_menu %}
@@ -68,6 +69,7 @@
 <div class="client-list">
     {% for p in client_gitlab_projects %}
     {% set edit_id = 'gitlab-edit-' ~ loop.index %}
+    {% set why_id = 'gitlab-why-' ~ loop.index %}
     <div class="client-list-item client-list-item--{{ 'inactive' if p.last_status == 'fail' else 'active' }}">
         <div class="client-list-item__body">
             <span class="client-list-item__title cursor-default">{{ p.name or p.project }}</span>
@@ -85,19 +87,15 @@
             {% if p.expiry_days is not none %}
             <span class="client-list-item__meta{{ ' text-danger' if p.expiry_days <= gitlab_expiry_days else '' }}">Token expires {{ p.token_expires_at }}</span>
             {% endif %}
-            {% if p.last_message and p.last_status != 'ok' %}
-            <span class="client-list-item__meta client-gitlab-message">{{ p.last_message }}</span>
-            {% endif %}
             {% if p.backup %}
             {% set b = p.last_backup %}
-            {% if p.skip_names %}
-            <span class="client-list-item__meta client-gitlab-message">Doesn't back up {{ p.skip_names | join(', ') }}.</span>
-            {% endif %}
             <span class="client-list-item__meta client-gitlab-message{{ ' text-danger' if b and b.status == 'failed' and not p.backing_up and not p.backup_paused else '' }}">
                 {% if p.backing_up %}Backing up&hellip;
                 {% elif p.backup_paused %}Backups are paused: TIDE won't back up to it until you resume them.{% if b %} Last backup {{ b.started_at.strftime('%Y-%m-%d %H:%M') }}.{% endif %}
                 {% elif not b %}Not backed up yet: it backs up after each sync, or now with Back up now.
-                {% else %}{{ 'Last backup' if b.status != 'failed' else 'Last backup failed' }} {{ b.started_at.strftime('%Y-%m-%d %H:%M') }}
+                {% elif b.status == 'failed' %}Last backup failed {{ b.started_at.strftime('%Y-%m-%d %H:%M') }}
+                    ({{ 'after a sync' if b.trigger == 'sync' else 'Back up now' }}).
+                {% else %}Last backup {{ b.started_at.strftime('%Y-%m-%d %H:%M') }}
                     ({{ 'after a sync' if b.trigger == 'sync' else 'Back up now' }}): {{ b.message }}
                     {% if b.commit_url %}<a href="{{ b.commit_url }}" target="_blank" rel="noopener" class="text-primary">See the commit</a>{% endif %}
                 {% endif %}
@@ -109,7 +107,17 @@
             {% endif %}
             {% endif %}
         </div>
-        <div class="relative flex-none">
+        <div class="relative flex-none flex items-center gap-xs">
+            {% if p.attention %}
+            <button name="GitLab Project Attention" type="button" class="more-btn more-btn--{{ 'danger' if p.attention_danger else 'warning' }}"
+                    aria-label="Why it needs attention" title="Why it needs attention"
+                    data-click="clientSiems.toggleEdit" data-target="{{ why_id }}">{{ icon('triangle-alert', '16') }}</button>
+            <div id="{{ why_id }}" class="client-siem-edit-popover client-gitlab-why" style="display:none;" data-stop-click>
+                <ul class="stack gap-sm">
+                    {% for m in p.attention %}<li>{{ m }}</li>{% endfor %}
+                </ul>
+            </div>
+            {% endif %}
             <div class="rh-more" data-more>
                 {{ more_button('Project actions', title=('Back up now, pause or resume backups, test or edit it' if p.backup else 'Test or edit it'),
                                attrs='name="GitLab Project Actions"') }}

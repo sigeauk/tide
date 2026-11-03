@@ -10,7 +10,7 @@ from __future__ import annotations
 import difflib
 import json
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 # Promotion strips these environment tags, so they never count as a difference.
 _ENV_TAGS = {"test", "staging", "production"}
@@ -58,6 +58,13 @@ SECTION_KEYS = {
 }
 # Never taken from the other side: each copy keeps its own on/off state.
 NOT_TAKEN = {"enabled"}
+# Sections a merge can combine rather than take whole: a list's items, ticked one by one (the merged
+# list is what both share and what is ticked), or a text, edited in place (``section_changes``).
+ITEM_KEYS = ("index", "filters", "threat", "tags", "author", "false_positives", "references",
+             "investigation_fields")
+TEXT_KEYS = ("query", "description", "note", "setup")
+# Kibana refuses a rule without these: an edit may not leave them empty.
+_REQUIRED = ("query", "description")
 
 _CONTEXT = 2  # unchanged lines kept around a changed line in text diffs
 
@@ -260,35 +267,194 @@ def sections_text(labels: List[str]) -> str:
     return " and ".join([", ".join(words[:-1]), words[-1]]) if len(words) > 1 else "".join(words)
 
 
-def section_changes(dest: Dict[str, Any], donor: Dict[str, Any], sections) -> tuple:
+def section_changes(dest: Dict[str, Any], donor: Dict[str, Any], sections,
+                    merges: Optional[Dict[str, Any]] = None) -> tuple:
     """``(changes, remove)`` that make ``dest`` take ``donor``'s value for each chosen section, for
     ``elastic_helper.apply_rule_changes``: a field the donor leaves empty is removed from ``dest``.
-    Environment tags are each side's own and are kept."""
+    Environment tags are each side's own and are kept. ``merges`` (``posted_merges``) combines a
+    section instead: a list section's items both sides share plus those ticked, a text section as
+    edited. One combined just as the donor has it is taken as the donor holds it."""
     import copy
 
-    dest, donor = dest or {}, donor or {}
+    dest, donor, merges = dest or {}, donor or {}, merges or {}
     changes: Dict[str, Any] = {}
     remove: List[str] = []
+
+    def put(key: str, value: Any) -> None:
+        if _empty(value):
+            if key in dest:
+                remove.append(key)
+        else:
+            changes[key] = value
+
+    by_hand = combined_by_hand(dest, donor, merges, sections)
     for section in sections:
         if section in NOT_TAKEN:
+            continue
+        if section in by_hand and section in TEXT_KEYS:
+            put(section, merges[section])
+            continue
+        if section in by_hand and section in ITEM_KEYS:
+            value = _combined(dest, donor, section, merges[section])
+            if section == "tags":       # set, as when taken whole: the environment tags stay
+                changes["tags"] = value
+            else:
+                put(section, value)
             continue
         for key in SECTION_KEYS.get(section, (section,)):
             if key == "tags":
                 own_env = [t for t in dest.get("tags") or [] if str(t).lower() in _ENV_TAGS]
                 changes["tags"] = [t for t in donor.get("tags") or [] if str(t).lower() not in _ENV_TAGS] + own_env
-            elif _empty(donor.get(key)):
-                if key in dest:
-                    remove.append(key)
             else:
-                changes[key] = copy.deepcopy(donor[key])
+                put(key, copy.deepcopy(donor.get(key)))
     return changes, tuple(remove)
+
+
+def _items(rule: Dict[str, Any], key: str) -> List[tuple]:
+    """A list section's items as ``(shown, value)``: as the comparison shows it, and as the rule holds it."""
+    if key == "filters":
+        return [(_squash(json.dumps(p, sort_keys=True, ensure_ascii=False)), f)
+                for f, p in ((f, _prune(f)) for f in rule.get("filters") or []) if not _empty(p)]
+    return [(_squash(x), x) for x in _value(rule, key) or []]
+
+
+def _combined(dest: Dict[str, Any], donor: Dict[str, Any], key: str, ticked) -> Any:
+    """``key``'s value combined from both sides: the items both share and those ``ticked`` (as
+    shown), the donor's first in its order, then ``dest``'s."""
+    import copy
+
+    mine, theirs = _items(dest, key), _items(donor, key)
+    shared = {s for s, _ in mine} & {s for s, _ in theirs}
+    keep = shared | set(ticked or ())
+    out, seen = [], set()
+    for shown, value in theirs + mine:
+        if shown in keep and shown not in seen:
+            seen.add(shown)
+            out.append(copy.deepcopy(value))
+    if key == "threat":
+        return _threat_from(out, donor, dest)
+    if key == "investigation_fields":
+        return {**(donor.get("investigation_fields") or dest.get("investigation_fields") or {}), "field_names": out} if out else None
+    if key == "tags":
+        return out + [t for t in dest.get("tags") or [] if str(t).lower() in _ENV_TAGS]
+    return out
+
+
+def _threat_from(lines: List[str], *rules: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Kibana's ``threat`` from lines as ``_threat_lines`` makes them ("tactic › technique ›
+    sub-technique"), with the tactic, technique and sub-technique objects ``rules`` hold. A
+    sub-technique brings its technique, and a technique its tactic."""
+    import copy
+
+    entries, techs, subs = {}, {}, {}
+    for rule in rules:
+        for entry in rule.get("threat") or []:
+            if not isinstance(entry, dict):
+                continue
+            tactic = _squash(_label(entry.get("tactic") or {}))
+            entries.setdefault(tactic, entry)
+            for tech in entry.get("technique") or []:
+                name = _squash(_label(tech))
+                techs.setdefault((tactic, name), tech)
+                for sub in tech.get("subtechnique") or []:
+                    subs.setdefault((tactic, name, _squash(_label(sub))), sub)
+    out: Dict[str, Dict[str, Any]] = {}
+    for line in lines:
+        parts = [_squash(p) for p in line.split(" › ")]
+        if parts[0] not in entries:
+            continue
+        entry = entries[parts[0]]
+        made = out.setdefault(parts[0], {**{k: copy.deepcopy(v) for k, v in entry.items() if k != "technique"},
+                                         "technique": []})
+        if len(parts) < 2 or tuple(parts[:2]) not in techs:
+            continue
+        tech = next((t for t in made["technique"] if _squash(_label(t)) == parts[1]), None)
+        if tech is None:
+            tech = {k: copy.deepcopy(v) for k, v in techs[tuple(parts[:2])].items() if k != "subtechnique"}
+            made["technique"].append(tech)
+        if len(parts) > 2 and tuple(parts[:3]) in subs:
+            sub = subs[tuple(parts[:3])]
+            if all(_squash(_label(s)) != parts[2] for s in tech.get("subtechnique") or []):
+                tech.setdefault("subtechnique", []).append(copy.deepcopy(sub))
+    return list(out.values())
+
+
+def posted_merges(form) -> Dict[str, Any]:
+    """The combined sections a comparison's form posted (macros/rule_diff.html): ``{section: the
+    ticked items, as shown}`` for a list combined item by item (``merge-items`` names it), and
+    ``{section: text}`` for a text edited in place."""
+    out: Dict[str, Any] = {}
+    for key in form.getlist("merge-items"):
+        if key in ITEM_KEYS:
+            out[key] = [str(v) for v in form.getlist(f"merge-item-{key}")]
+    for key in TEXT_KEYS:
+        text = form.get(f"merge-text-{key}")
+        if text is not None:
+            out[key] = str(text).replace("\r\n", "\n")
+    return out
+
+
+def merge_problem(merges: Dict[str, Any], sections) -> str:
+    """Why a merge can't be written, or "": an edit leaving a field Kibana requires empty."""
+    labels = {key: label for key, label, _ in _FIELDS}
+    for key in _REQUIRED:
+        if key in sections and key in merges and not str(merges[key]).strip():
+            return f"The merged {labels[key].lower()} is empty: write one, or discard the edit."
+    return ""
+
+
+# A rule that becomes another type takes the new query language and query with it: Kibana refuses
+# the one without the others (an EQL query on a custom query rule).
+TOGETHER = ("type", "language", "query")
+
+
+def retyped(diffs: List[Dict[str, Any]]) -> bool:
+    """Whether the two rules ``build_rule_diff`` compared are of different types (each has one)."""
+    return any(d["key"] == "type" and _show(None) not in (d.get("old"), d.get("new")) for d in diffs)
+
+
+def together_problem(diffs: List[Dict[str, Any]], sections) -> str:
+    """Why the chosen sections can't be merged as they are, or "": when the rule type differs, its
+    rule type, query language and query (those that differ) are taken together or not at all."""
+    labels = {d["key"]: d["label"] for d in diffs}
+    tied = [k for k in TOGETHER if k in labels]
+    picked = [k for k in tied if k in sections]
+    if not retyped(diffs) or not picked or len(picked) == len(tied):
+        return ""
+    return (f"The rule type changes, so its {sections_text([labels[k] for k in tied])} go together: "
+            "tick all of them, or none.")
+
+
+def taken_text(diffs: List[Dict[str, Any]], sections, by_hand) -> str:
+    """The sections merged, for a message: "Tags, Highlighted fields (combined), Query (edited)"."""
+    labels = {d["key"]: d["label"] for d in diffs}
+    return ", ".join(labels.get(s, s) + ((" (edited)" if s in TEXT_KEYS else " (combined)") if s in by_hand else "")
+                     for s in sections)
+
+
+def combined_by_hand(dest: Dict[str, Any], donor: Dict[str, Any], merges: Dict[str, Any], sections) -> List[str]:
+    """The chosen sections ``merges`` makes other than the donor's: combined or edited, not taken."""
+    out = []
+    dest, donor = dest or {}, donor or {}
+    for key in sections:
+        if key not in (merges or {}):
+            continue
+        if key in TEXT_KEYS and _trim_lines(str(merges[key])) != _trim_lines(str(donor.get(key) or "")):
+            out.append(key)
+        elif key in ITEM_KEYS:
+            theirs = {s for s, _ in _items(donor, key)}
+            if ({s for s, _ in _items(dest, key)} & theirs) | set(merges[key]) != theirs:
+                out.append(key)
+    return out
 
 
 def build_rule_diff(staging: Dict[str, Any], production: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Return the reviewable differences between two rule payloads, in display order.
 
-    Each item: ``{key, label, kind}`` plus ``old``/``new`` (scalar), ``added``/``removed``
-    (list) or ``inline`` / ``side`` rows (text). ``old`` is the staging value, ``new`` the production one.
+    Each item: ``{key, label, kind, merge}`` plus ``old``/``new`` (scalar), ``added``/``removed``
+    and ``both`` (list) or ``inline`` / ``side`` rows and ``old_text``/``new_text``, each side's
+    own (text). ``old`` is the staging value, ``new`` the production one. ``merge`` says how a merge
+    can combine the section rather than take it whole: "items", "text" or None.
     """
     staging, production = staging or {}, production or {}
     changes: List[Dict[str, Any]] = []
@@ -303,16 +469,20 @@ def build_rule_diff(staging: Dict[str, Any], production: Dict[str, Any]) -> List
             removed = [x for x in old_l if x not in new_l]
             added = [x for x in new_l if x not in old_l]
             if removed or added:
-                changes.append({"key": key, "label": label, "kind": kind, "added": added, "removed": removed})
+                changes.append({"key": key, "label": label, "kind": kind, "added": added, "removed": removed,
+                                "both": [x for x in old_l if x in new_l],
+                                "merge": "items" if key in ITEM_KEYS else None})
         elif kind == "text":
             old_s, new_s = str(old or ""), str(new or "")
             if _squash(old_s) == _squash(new_s):
                 continue
+            texts = {"old_text": old_s, "new_text": new_s, "merge": "text" if key in TEXT_KEYS else None}
             if key in _PROSE:
                 old_s, new_s = _squash(old_s), _squash(new_s)
             else:
                 old_s, new_s = _trim_lines(old_s), _trim_lines(new_s)
-            changes.append({"key": key, "label": label, "kind": kind, **_text_diff(old_s, new_s)})
+            changes.append({"key": key, "label": label, "kind": kind, **_text_diff(old_s, new_s), **texts})
         elif old != new:
-            changes.append({"key": key, "label": label, "kind": kind, "old": _show(old), "new": _show(new)})
+            changes.append({"key": key, "label": label, "kind": kind, "old": _show(old), "new": _show(new),
+                            "merge": None})
     return changes

@@ -13,12 +13,14 @@
 
   Grouped by baseline, each template's heading has Manage (rename, add a technique, apply to a
   system, import, export, delete). A technique opens its window, like a system's technique.
+  As Rule Health (rule-browser-page), the header and metric strip stay put and the grid scrolls
+  under its filter bar, a template's heading held at the top of it (style.css, .sys-fill).
 #}
 
 {% block title %}Baselines | TIDE{% endblock %}
 
 {% block content %}
-
+<div class="rule-browser-page">
 <div class="page-header sys-header">
     <div class="sys-header__main">
         <h1 class="page-title-hero">Baselines {{ help_button('baselines') }}</h1>
@@ -52,6 +54,7 @@
     {% include "partials/template_steps_metrics.html" %}
 </div>
 
+<div class="sys-fill">
 <section class="card card-padded sys-section" data-section="templates" aria-label="Templates">
     <div class="sys-section__head">
         <h2 class="section-title sys-section__title">{{ icon('layers', '18') }} Templates <span class="rm-fold__count">{{ baselines | length }}</span></h2>
@@ -78,6 +81,8 @@
     {% endif %}
     </div>
 </section>
+</div>
+</div>
 
 <!-- ── New Baseline Modal ────────────────────────────────── -->
 <div name="Add Baseline Modal" id="add-baseline-modal" class="modal-overlay" style="display:none;"

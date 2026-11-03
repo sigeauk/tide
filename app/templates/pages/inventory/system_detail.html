@@ -14,8 +14,13 @@
   grouped from the bar above it; those choices ride in the URL, and the presentation ones (sort,
   group, view) are also remembered per browser.
 
-  Every baseline is managed here: Manage baselines (edit, remove, apply, add) and Add technique
-  open as windows over this page, and the Baseline filter narrows the grid to one baseline.
+  Every baseline is managed here: the Baselines ⋮ has Add baseline (apply a template, or start an
+  empty one), Add technique, Generate baselines and SIEM coverage; each baseline's own ⋮, in the
+  grid grouped by baseline (the default here), has Edit baseline, Add technique and Remove baseline.
+  The Baseline filter narrows the grid to one baseline. As Rule Health (rule-browser-page), the page
+  fills the window: the header and metric strip stay put, every section's heading is always in view,
+  and each open section scrolls inside itself under its filter bar, a baseline's heading held at the
+  top of the technique grid (style.css, .sys-fill).
 #}
 
 {% block title %}{{ system.name }} | Systems | TIDE{% endblock %}
@@ -31,7 +36,7 @@
 {%- endmacro %}
 
 {# The arrangement's root: the header's "…" › Sections arranges the sections below it. #}
-<div class="sys-layout" data-layout-key="tide.systemPageLayout" data-layout-legacy="tide.systemPageOrder">
+<div class="sys-layout rule-browser-page" data-layout-key="tide.systemPageLayout" data-layout-legacy="tide.systemPageOrder">
 <div class="page-header sys-header">
     <div class="sys-header__main">
         <h1 class="page-title-hero">
@@ -74,7 +79,7 @@
 </div>
 {% endif %}
 
-<div class="sys-sections rm-col" data-col="main" data-fold-store="tide.systemPageFolds">
+<div class="sys-sections sys-fill rm-col" data-col="main" data-fold-store="tide.systemPageFolds">
 
 {# ── Baselines ──────────────────────────────────────────────────────────────────────────── #}
 <section class="card card-padded sys-section" data-section="baselines" data-section-label="Baselines" data-fold="baselines" aria-label="Baselines">
@@ -82,11 +87,12 @@
         {{ collapse_ctl('baselines') }}
         <h2 class="section-title sys-section__title">{{ icon('check-square', '18') }} Baselines <span class="rm-fold__count">{{ bl_count }}</span></h2>
         <div class="rh-more" data-more>
-            {{ more_button('Baseline actions', title='Apply baselines, add techniques, generate baselines, choose SIEM coverage', attrs='name="Baseline Actions"') }}
+            {{ more_button('Baseline actions', title='Add a baseline or a technique, generate baselines, choose SIEM coverage', attrs='name="Baseline Actions"') }}
             <div class="rh-more__menu" role="menu" hidden>
-                <button name="Manage Baselines" type="button" role="menuitem" class="rh-more__item"
+                <button name="Add Baseline" type="button" role="menuitem" class="rh-more__item"
+                        title="Apply a template to this system, or start an empty baseline"
                         hx-get="/api/systems/{{ system.id }}/baselines-dialog" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
-                    {{ icon('layers', '15') }}<span>Manage baselines</span>
+                    {{ icon('layers', '15') }}<span>Add baseline</span>
                 </button>
                 {% if baselines %}
                 <button name="Add Technique" type="button" role="menuitem" class="rh-more__item"
@@ -125,9 +131,9 @@
     {% else %}
         {% call empty_state() %}
             <p>No baselines are applied to this system yet.</p>
-            <button name="Apply a Baseline" type="button" class="btn btn-primary btn-sm"
+            <button name="Add Baseline" type="button" class="btn btn-primary btn-sm"
                     hx-get="/api/systems/{{ system.id }}/baselines-dialog" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
-                {{ icon_text('plus', 'Apply a baseline', '13') }}
+                {{ icon_text('plus', 'Add baseline', '13') }}
             </button>
         {% endcall %}
     {% endif %}
@@ -365,5 +371,5 @@
 {% endblock %}
 
 {% block scripts %}
-<div hidden data-system-page data-system-id="{{ system.id }}" data-baselines="{{ (baselines or []) | map(attribute="id") | sort | join(",") }}"></div>
+<div hidden data-system-page data-system-id="{{ system.id }}"></div>
 {% endblock %}

@@ -5675,7 +5675,9 @@ class DatabaseService:
     def delete_rule(self, rule_id: str, siem_id: str, space: str, remove_links: bool = False) -> bool:
         """Permanently delete one rule from TIDE only. ``remove_links=True`` also deletes any
         rule_links row this rule was part of (on either side) -- otherwise the other side of any
-        link is left pointing at a rule that no longer exists (shown as "Deleted rule" there)."""
+        link is left pointing at a rule that no longer exists (shown as "Deleted rule" there).
+        Its Rule Monitoring findings are resolved with it, as a sync resolves those of a rule gone
+        from Kibana, so it leaves Rule Monitoring's list at once."""
         with self.get_connection() as conn:
             if remove_links:
                 conn.execute(
@@ -5689,10 +5691,14 @@ class DatabaseService:
                 "WHERE rule_id = ? AND siem_id = ? AND space = ? RETURNING rule_id",
                 [rule_id, siem_id, space],
             ).fetchone()
-            from app.services import rule_origins
+            from app.services import rule_issues, rule_origins
             rule_origins.ensure(conn)
             conn.execute("DELETE FROM rule_origins WHERE rule_id = ? AND siem_id = ? AND space = ?",
                          [rule_id, siem_id, space])
+            try:
+                rule_issues.refresh(self, conn, rule_keys={(rule_id, siem_id, space)})
+            except Exception:  # noqa: BLE001 - the delete stands; the next sync resolves them
+                logger.exception("Rule Monitoring not updated for deleted rule %s in %s/%s", rule_id, siem_id, space)
         return deleted is not None
 
     def replace_rule_id(
@@ -5794,6 +5800,7 @@ class DatabaseService:
         ("step_detections", "rule_ref", "siem_id", "space"),
         ("rule_issues", "rule_id", "siem_id", "space"),
         ("rule_issue_history", "rule_id", "siem_id", "space"),
+        ("rule_issue_mutes", "rule_id", "siem_id", "space"),
     )
 
     def rekey_rule(self, old_rule_id: str, new_rule_id: str, siem_id: str, space: str,
@@ -5830,9 +5837,10 @@ class DatabaseService:
 
     def note_rule_recreated(self, client_id: str, rule_id: str, siem_id: str, space: str,
                             old_object_id: Optional[str], new_object_id: str, actor_name: Optional[str] = None,
-                            actor_user_id: Optional[str] = None) -> None:
-        """Kibana deleted and re-created a rule (same rule_id, new saved-object id) because its stored
-        API key couldn't be decrypted (elastic_helper._put_rule). TIDE keys rules by rule_id, so its
+                            actor_user_id: Optional[str] = None, why: Optional[str] = None) -> None:
+        """Kibana deleted and re-created a rule (same rule_id, new saved-object id): because its stored
+        API key couldn't be decrypted (elastic_helper._put_rule), or, as ``why`` says, because it
+        became another type of rule (elastic_helper._retype_rule). TIDE keys rules by rule_id, so its
         mappings, links and validation still match. What carries the saved-object id moves to the new
         one, at this destination only: the stored JSON's id, search-time samples, and mappings recorded
         by that id before destinations were (Migration 77). The rule's history says what happened."""
@@ -5858,17 +5866,17 @@ class DatabaseService:
         self.record_rule_history(
             rule_id=rule_id, siem_id=siem_id, space=space, client_id=client_id, action="recreated",
             actor_user_id=actor_user_id, actor_name=actor_name,
-            detail={"message": "Kibana couldn't read the rule's stored API key and refreshing it didn't help, "
-                               "so TIDE deleted and re-created the rule there with the same rule ID. "
-                               f"Kibana ID {new_object_id}, was {old_object_id or 'unknown'}."},
+            detail={"message": (why or "Kibana couldn't read the rule's stored API key and refreshing it didn't help, "
+                                       "so TIDE deleted and re-created the rule there with the same rule ID.")
+                               + f" Kibana ID {new_object_id}, was {old_object_id or 'unknown'}."},
         )
 
     def kibana_recreate_hook(self, client_id: str, rule_id: str, siem_id: str, space: str,
                              actor_name: Optional[str] = None, actor_user_id: Optional[str] = None):
-        """The ``on_recreated(old_id, new_id)`` callback for elastic_helper's rule updates."""
-        def hook(old_object_id, new_object_id):
+        """The ``on_recreated(old_id, new_id, why=None)`` callback for elastic_helper's rule updates."""
+        def hook(old_object_id, new_object_id, why=None):
             self.note_rule_recreated(client_id, rule_id, siem_id, space or "default", old_object_id, new_object_id,
-                                     actor_name=actor_name, actor_user_id=actor_user_id)
+                                     actor_name=actor_name, actor_user_id=actor_user_id, why=why)
         return hook
 
     # --- DUPLICATE RULE ROWS ---

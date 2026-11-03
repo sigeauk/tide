@@ -12,40 +12,46 @@ How to describe what you protect, measure it against baselines, and record what 
 
 ## The Systems page
 
-**Systems** lists every system with its coverage. Search by name, description or classification, and filter by **Classification** and **Risk status**; **Clear** resets the filters.
+**Systems** lists every system with its coverage. Across the top are the figures for all of them: **Systems**, **Devices**, **Packages**, **CVE Matches**, **Affected Devices** and **Baseline Assignments**. Its **⋮** menu has **Add system**, **Upload Nessus**, **Import** and **Export**. Search by name, description or classification, and filter by **Classification** and **Risk status**; **Clear** resets the filters.
 
 ### Add a system
 
 Who can: anyone who can edit Systems.
 
-1. On **Systems**, click **Add System**.
+1. On **Systems**, choose **Add system** from the **⋮** menu.
 2. Give it a **Name**, and optionally a **Classification** and a **Description**.
 3. Click **Create**. The system opens, ready for its first baseline.
 
 ### Load devices from a Nessus scan
 
-1. On **Systems**, click **Upload Nessus**.
+1. On **Systems**, choose **Upload Nessus** from the **⋮** menu.
 2. Pick the system the devices belong to, or **+ Create new system…** to make one.
 3. Choose the `.nessus` or `.xml` scan file and upload it. TIDE adds each device with its operating system and installed packages, and matches the packages against known exploited vulnerabilities (see [CVEs](#cves)).
 
 ### Move systems between installations
 
-**Export** downloads your systems as a JSON file; **Import** loads one, for example on another TIDE. When an imported system has the same name as one you already have, choose whether to **Create copy** or **Override existing**.
+**Export**, in the **Systems** page's **⋮** menu, downloads your systems as a JSON file; **Import** loads one, for example on another TIDE. When an imported system has the same name as one you already have, choose whether to **Create copy** or **Override existing**.
 
 ## A system's page
 
 Click a system to open its page. Across the top are its figures: **Covered** (the share of techniques with coverage), **Techniques**, **No coverage**, **Known gaps**, **Unmapped** (techniques with no rule mapped) and **Not counted** (techniques whose rules sit only at destinations this system isn't measured on). Below are three sections, **Baselines**, **Devices** and **Heatmap**, which fold, move and hide like a window's (**⋮ › Sections**).
 
-The page's **⋮** menu has **Edit system** and **Export report**.
+The page's **⋮** menu has **Edit system** and **Export report**. As on Rule Health, the page fits the window: its heading and figures stay put, and every section's heading is always in view. A section you open scrolls inside itself, under its filter bar, holding the baseline you're in at the top of the techniques. Fold the sections you aren't using to give the others their room; open sections share the height, with Baselines getting twice the others' share, and none taller than it needs.
 
-### Apply a baseline to a system
+### Add a baseline to a system
 
 Who can: anyone who can edit Systems.
 
-1. In the **Baselines** section's **⋮** menu, choose **Manage baselines**.
-2. Pick a template and click **Apply a baseline**. The system gets its own copy, with each technique's risks as a starting point.
+1. In the **Baselines** section's **⋮** menu, choose **Add baseline**.
+2. Either pick a template and click **Apply**, or name an empty baseline of the system's own and click **Create baseline**. Applying gives the system its own copy, with each technique's risks as a starting point.
 
-In the same dialog you can **Edit** a baseline's name and description on this system, **Remove** it from the system (its techniques, mappings and known gaps go with it), or start an empty baseline of the system's own.
+The page then shows the new baseline, even an empty one. Each baseline's heading has its own **⋮**:
+
+- **Edit baseline** changes its name and description on this system.
+- **Add technique** adds a technique to it (see [Add techniques to a baseline](#add-techniques-to-a-baseline)).
+- **Remove baseline** removes it from the system, with its techniques, mappings and known gaps. The template and other systems aren't affected.
+
+The techniques are grouped by baseline until you choose otherwise in **Group by**. A baseline's **⋮** shows only while they're grouped by baseline.
 
 ### Choose which destinations count
 
@@ -73,10 +79,12 @@ The **Baselines** section has its own filter bar:
 - **Tactic** sorts in ATT&CK order or A to Z, and shows only the tactics you tick.
 - **Coverage** filters by status (Covered, No coverage, Known gap, Not applicable) and by rules (No rules mapped, Has rules, Has rules that don't count).
 - **Name** sorts by title.
-- **Group by** puts the techniques under each baseline, each tactic, or both.
+- **Group by** puts the techniques under each baseline (until you choose otherwise), each tactic, or both.
 - **View** switches between cards and a table.
 
 Your choices are remembered in this browser and kept in the address bar. Each group heading shows its coverage, for example *7/10 covered (70%)*.
+
+Each technique's card has its window's score ring: the score of the strongest rule protecting the system. A technique no rule covers has an empty ring in its status's colour, red for no coverage and amber for a known gap. The card's left edge is coloured by its status too.
 
 ### Export a system report
 
@@ -103,7 +111,7 @@ You can also make a baseline from a threat: a MITRE group, software or campaign,
 
 ### Add techniques to a baseline
 
-1. Choose **Add technique**: from the Baselines page's **⋮** menu, from a template's **Manage**, or on a system from the **Baselines** section's **⋮** menu.
+1. Choose **Add technique**: from the Baselines page's **⋮** menu, from a template's **Manage**, or on a system from the **Baselines** section's **⋮** menu or a baseline's own **⋮**, which picks that baseline for you.
 2. A blank technique window opens. Give it a **Title** (the only thing required), pick its baseline, and click **Create**.
 3. The window becomes the technique's own. Use each section's **⋮ › Update** to fill it in:
    - **Description**: what the attacker does, in your words.

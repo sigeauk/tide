@@ -1,0 +1,50 @@
+{#
+  A threat actor's window body (components/mitre_window.html, from threats.actor_window), laid out
+  as an ATT&CK group's (components/mitre_window_group.html): Details and Coverage · Description and
+  Techniques · the ATT&CK group it is. A technique's pill opens its side panel and its name its
+  window; the group opens its own window.
+  Context: detail (name, aliases, origin, sources, techniques, group), coverage, uncovered_count,
+  covered_ttps, ttp_rule_counts, source context.
+#}
+{% from "components/mitre_ui.html" import panel, coverage_section, description_section, techniques_section %}
+
+{% set aliases = (detail.aliases or '').split(',') | map('trim') | reject('equalto', '') | list %}
+
+<div class="rm-body">
+  <section class="rm-col rm-col--history" data-col="left" aria-label="Left column">
+    {% call panel('details', 'Details') %}
+      <dl class="rm-facts">
+        <div><dt>Origin</dt><dd>{{ detail.origin or 'Unknown' }}</dd></div>
+        <div><dt>Techniques</dt><dd>{{ detail.techniques | length }}</dd></div>
+      </dl>
+      {% if aliases %}
+      <div class="rm-chips"><span class="rm-chips__label">Also known as</span>{% for a in aliases %}<span class="rm-chip">{{ a }}</span>{% endfor %}</div>
+      {% endif %}
+    {% endcall %}
+    {{ coverage_section(coverage, uncovered_count, 'actor') }}
+  </section>
+
+  <section class="rm-col rm-col--technique" data-col="centre" aria-label="Centre column">
+    {{ description_section(detail) }}
+    {{ techniques_section(detail.techniques, source_domain, covered_ttps, ttp_rule_counts, 'actor') }}
+  </section>
+
+  <aside class="rm-col rm-col--actions" data-col="right" aria-label="Right column">
+    {% call panel('group', 'ATT&CK group') %}
+      {% if detail.group %}
+      <ul class="rm-mitre mw-related">
+        <li>
+          <span class="rm-chip rm-chip--mono">{{ detail.group.id }}</span>
+          <span class="rm-mitre__name">
+            <button type="button" class="rm-item__open" title="Open {{ detail.group.id }}"
+                    hx-get="/api/mitre/window/groups/{{ detail.group.id }}?src={{ source_domain }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">{{ detail.group.name }}</button>
+            <small>The ATT&amp;CK group of this name or alias</small>
+          </span>
+        </li>
+      </ul>
+      {% else %}
+      <p class="rm-empty">Not matched to an ATT&amp;CK group by name or alias.</p>
+      {% endif %}
+    {% endcall %}
+  </aside>
+</div>

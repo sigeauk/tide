@@ -1668,10 +1668,11 @@ def create_app() -> FastAPI:
         on one grid. htmx resolves an out-of-band swap with ``querySelector("#" + id)``, which
         takes whichever comes first, so saving an edit or validating one copy repainted a
         different destination's card. The scope goes in the id, and is slugified because it ends
-        up inside a CSS selector.
+        up inside a CSS selector. ``rule`` may be a dict, such as a Rule Monitoring finding.
         """
         from app.api.rules import rule_dom_id as _dom_id
-        return _dom_id(getattr(rule, 'rule_id', ''), getattr(rule, 'siem_id', ''), getattr(rule, 'space', None))
+        field = rule.get if isinstance(rule, dict) else (lambda key: getattr(rule, key, None))
+        return _dom_id(field('rule_id') or '', field('siem_id') or '', field('space'))
 
     templates.env.globals["rule_dom_id"] = rule_dom_id
 

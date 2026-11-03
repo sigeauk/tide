@@ -630,8 +630,10 @@ def _gitlab_destinations(db, client_id: str) -> list:
 
 def client_gitlab_context(client_id: str, db) -> dict:
     """What partials/client_gitlab.html needs, for the client's page and the section's own redraws.
-    The backup project also carries ``backing_up``, its ``last_backup`` (gitlab_backup, from the
-    client's own database) and ``skip_names``, the destinations it doesn't back up."""
+    The backup project also carries ``backing_up`` and its ``last_backup`` (gitlab_backup, from the
+    client's own database). Each project's ``attention`` is what needs it, in full: its last test's
+    problem, then its last backup's failure or what that left as it was; ``attention_danger`` when
+    the project can't be used or the backup failed."""
     from datetime import date
     from app.services import gitlab, gitlab_backup
     from app.services.tenant_manager import tenant_context_for
@@ -642,8 +644,9 @@ def client_gitlab_context(client_id: str, db) -> dict:
         expires = p.get("token_expires_at")
         p["expiry_days"] = (expires - today).days if expires else None
         p["used_for"] = " and ".join(gitlab.PURPOSES[u] for u in p["uses"])
+        p["attention"] = [p["last_message"]] if p.get("last_message") and p.get("last_status") != "ok" else []
+        p["attention_danger"] = p.get("last_status") == "fail"
         if p["backup"]:
-            p["skip_names"] = [d["name"] for d in destinations if d["pair"] in p["skip"]]
             p["backing_up"] = gitlab_backup.running(p["id"])
             try:
                 with tenant_context_for(client_id), db.get_connection() as conn:
@@ -651,6 +654,12 @@ def client_gitlab_context(client_id: str, db) -> dict:
             except Exception:  # noqa: BLE001 - no client database yet: no backup either
                 logger.debug("No backup runs read for client %s", client_id, exc_info=True)
                 p["last_backup"] = None
+            b = p["last_backup"]
+            if b and not p["backing_up"] and not p["backup_paused"]:
+                if b["status"] == "failed":
+                    p["attention"].append(b["message"])
+                    p["attention_danger"] = True
+                p["attention"] += b.get("notes") or []
     return {"client": db.get_client(client_id), "client_gitlab_projects": projects,
             "gitlab_instances": db.list_gitlab_inventory(), "gitlab_purposes": gitlab.PURPOSES,
             "gitlab_default_branch": gitlab.DEFAULT_BRANCH, "gitlab_expiry_days": gitlab.EXPIRY_WARNING_DAYS,

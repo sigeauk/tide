@@ -46,13 +46,13 @@ The page's **⋮** menu switches between **Show as cards** and **Show as table**
 
 ## Rule Monitoring
 
-**Rule Monitoring** lists the rules that need action, grouped by what causes it, so a problem many rules share is one thing to fix. It is as of each destination's last sync: every sync reads what Kibana says about each rule's last run, and checks the rules against the SIEM's indexes and fields.
+**Rule Monitoring** lists the rules that need action, grouped by what causes it, so a problem many rules share is one thing to fix. It is as of each destination's last sync: every sync reads what Kibana says about each rule's last run, and checks the rules against the SIEM's indexes and fields. A rule you delete in TIDE, or move to another destination, leaves the list straight away; one deleted in Kibana leaves it at the next sync, or when you choose **Sync this rule** in its window.
 
 - **What it finds:** an index pattern that matches no index, indexes missing the rule's timestamp override field (such as `event.ingested`), fields no index has or that have conflicting types, queries Kibana can't parse or Elasticsearch refuses, missing privileges, missed runs, schedules that leave part of each interval unsearched or too little look-back for late events, rules sharing a rule id, custom rules using one of Elastic's rule ids, custom rules linked to an Elastic rule they don't match, changes TIDE made in Kibana but couldn't finish recording (a new rule id, a move, a restore), SIEMs that didn't answer, syncs that couldn't read every rule, a step of the last sync that failed (such as cleaning up score history), and destinations not synced for 7 days. Anything else Kibana reports goes under **Other Kibana errors**, in Kibana's words.
 - **Who fixes** says who acts: **Engineer** (the indexes, pipelines and the SIEM itself), **Author** (the rule's query and schedule) or **TIDE** (something TIDE can fix, or a sync).
-- Each issue opens to its causes, such as an index pattern or a field in a data stream, with how many rules each affects and for how long. Open a cause for its rules; click a rule to open its window.
+- Each issue opens to its causes, such as an index pattern or a field in a data stream, with how many rules each affects and for how long. Open a cause for its rules; click a rule to open its window. **Previous** and **Next** in the window step through the rules listed, each rule once though it may be listed under several issues, so you can work through a list without going back to it.
 - Filter by **Search**, **SIEM**, **Severity**, **Who fixes** and **Issue**; the number beside each choice is how many rules (or whole destinations) you would see by picking it, with your other filters as they are. **Rules** shows enabled rules, or **Include disabled** for what would fail if they were switched on. **Show** lists what is open, or what was fixed in the last 14 days. **Group by** lists by **Issue**, **Who fixes**, **SIEM / destination** or **Rule**. The page keeps your filters when it reloads, and each group stays open or closed as you left it.
-- The cards count the rules needing action (beneath: how many of the enabled rules, and any disabled ones counted because of a rule id problem TIDE can fix), errors and warnings (and how many began in the last 7 days, once Rule Monitoring has a week of history; until then, the day it began), the **Things to Fix** by who fixes them, what was **Resolved** in the last 14 days, and when the client was **Last Synced**.
+- The cards count the rules needing action (beneath: how many of the enabled rules, and any disabled ones counted because of a rule id problem TIDE can fix), errors and warnings (and how many began in the last 7 days, once Rule Monitoring has a week of history; until then, the day it began), the **Things to Fix** (beneath: the rules they are on, and who fixes them), what was **Resolved** in the last 14 days (beneath: the rules it was on), and when the client was **Last Synced**. **Things to Fix** and **Resolved** count causes: a missing index or field once, however many rules it affects, and a problem without a cause, such as one with a rule's id or its link to Elastic's rule, once per destination.
 - The page's **⋮** menu holds **Sync**, as on Rule Health; what a sync finds fixed moves to **Resolved recently**.
 
 ### Act on a cause
@@ -66,7 +66,9 @@ Open a cause for its actions. Anyone who can edit Rule Health can use them.
 - **Sync these rules** reads the cause's rules again from their SIEM, to see whether it is fixed; for a whole destination, **Sync this destination**.
 - **Give them their own rule ids**, on **Custom rule using one of Elastic's rule ids**, gives every rule of the cause its own rule id in one go; **Finish them in TIDE**, on **Change not finished in TIDE**, finishes them all. Each shows what it will do first, then its progress, with any rule that failed and why.
 - **Compare them one by one**, on **Rules sharing a rule id in Kibana**, opens **Compare with the copy** for each rule of the cause in turn. Choose for each, or **Skip** it; what each choice did shows at the top of the next.
-- **Acknowledge…** mutes a cause you know about, with a note (for example, an index not onboarded yet). It moves to **Acknowledged** at the bottom of the list and isn't counted, until it affects more rules than when it was acknowledged; then it comes back, saying so. **Unmute** puts it back at once.
+- **Mute cause…** mutes a cause you know about on every rule it affects, with a note (for example, an index not onboarded yet). It moves to **Muted** at the bottom of the list and isn't counted, until it affects more rules than when it was muted; then it comes back, saying so. **Unmute cause** puts it back at once.
+- To mute one rule, use the bell at the end of its row, **Mute rule…**, and choose what to mute: **This problem on this rule**, or **Every problem on this rule, now and later**, each until you unmute it, or the problem's cause on every rule it affects, as **Mute cause…** does. Add a note if you like.
+- Each row under **Muted** says why it is there. **Rule muted** says by whom, when and why, and its bell, **Unmute rule**, unmutes it. **Muted with its cause** is lifted by **Unmute cause**: above the rows, or on the row itself when you group by rule. A rule muted with its cause can be muted on its own too, so it stays muted if the cause comes back.
 - Where TIDE can fix it, the rule's row has the fix: **Give it its own rule id** for a custom rule using one of Elastic's rule ids (TIDE still shows Elastic's updates for it), or **Unlink from Elastic** if it isn't Elastic's rule (which also gives it its own rule id), **Compare with the copy** where Kibana holds a custom copy beside Elastic's rule, **Compare with *Elastic*** for a rule linked to an Elastic rule it doesn't match (both below), and **Finish in TIDE** where Kibana made a change (a new rule id, a move, a restore) but TIDE couldn't record it.
 
 ## The rule window
@@ -157,10 +159,11 @@ In the rule window's **Linked** section, type a rule's name in **Add link**, pic
 1. In the rule window, choose **⋮ › Compare**, and pick the linked rule in **Comparing against** if it has several.
 2. Compare shows each section that differs, **Inline** or **Side by side**, with a tick beside each.
 3. To bring them in line, choose the **Direction** (which rule's version wins) and untick any section to leave as it is, for example keep your query and take the other's investigation guide.
-4. Under **After merging**, keep both rules or delete one.
-5. Click **Merge**.
+4. To combine a section rather than take one side's, see [Combining a section](#combining-a-section) below.
+5. Under **After merging**, keep both rules or delete one.
+6. Click **Merge**.
 
-With every section ticked, Merge copies the whole rule over.
+With every section ticked and none combined, Merge copies the whole rule over.
 
 ## Updates from Elastic and Sigma
 
@@ -173,10 +176,22 @@ TIDE remembers which of Elastic's or the Sigma rules each of your rules came fro
 To take an update:
 
 1. Open **Compare with *Elastic*** (or *Sigma*). Each differing section has a tick.
-2. Untick what you want to keep as it is, then click **Merge ticked sections**. Or click **Keep this rule as it is**. Either way the update is marked as reviewed.
-3. When nothing TIDE compares has changed (Elastic sometimes raises a version for something outside the rule itself), there is nothing to merge: **Move to version *N*** marks it. TIDE also does this by itself at each sync.
+2. Untick what you want to keep as it is. To keep your own items in a list and add Elastic's new ones, such as highlighted fields, tick your items too; see [Combining a section](#combining-a-section).
+3. Click **Merge ticked sections**. Or click **Keep this rule as it is**. Either way the update is marked as reviewed, TIDE says what it did, and you are back in the rule's window, or in the list you opened the comparison from.
+4. When nothing TIDE compares has changed (Elastic sometimes raises a version for something outside the rule itself), there is nothing to merge: **Move to version *N*** marks it. TIDE also does this by itself at each sync.
 
 An Elastic prebuilt rule can take sections too: Kibana keeps it as Elastic's and marks it customised.
+
+When the new version is another type of rule, such as a custom query rule that Elastic rewrote in EQL or ES|QL, its **Rule type**, **Query language** and **Query** go together: ticking one ticks the others. Kibana can't change a rule's type in place, so merging them deletes the rule in Kibana and creates it again under the same rule ID, with its exceptions, actions and whether it is enabled. Its past alerts stay. Elastic's prebuilt rules aren't re-created: install Elastic's update in Kibana (**Rules › Rule updates**) instead. Merging two linked rules of different types in **Compare** works the same way.
+
+### Combining a section
+
+In **Compare** and **Compare with *Elastic*** (or *Sigma*), a ticked section is taken whole from the side that wins, unless you combine it:
+
+- **A list** (highlighted fields, tags, MITRE ATT&CK, index patterns, filters, references, false positives, author): each item only one side has has a tick, and the merged rule has what is ticked, as well as what both have. To begin with, the winning side's items are ticked. To keep yours as well, tick them; to drop one, untick it, and it is struck through. A MITRE ATT&CK sub-technique brings its technique with it.
+- **A text** (query, description, investigation guide, setup guide): **Edit result** opens a box holding the winning side's text. What you write there is merged, in place of either side's. **Discard edit** closes it again. A query or description can't be left empty.
+
+In **Compare**, changing the **Direction** moves the ticks and the box's text to the other side, for each section you haven't touched. The rule's history says which sections were combined or edited.
 
 ### Rules linked to an Elastic rule they don't match
 

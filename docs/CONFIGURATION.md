@@ -72,6 +72,8 @@ Every SIEM, OpenCTI connector, GitLab and Keycloak entry in TIDE has its own **V
 - **Off (the default):** TIDE connects without checking the certificate. This suits a standalone network with self-signed certificates.
 - **On:** the integration's certificate must come from a public CA or from the CA in `certs/ca.crt`.
 
+A GitLab's box also covers every project linked to it on a client's page.
+
 Use **Test Connection** on the integration's form to try a setting before saving it.
 
 ### When a certificate is refused

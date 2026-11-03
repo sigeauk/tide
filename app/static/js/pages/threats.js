@@ -1,17 +1,11 @@
 /*
- * Threat Landscape (pages/threats/threat_landscape.html, partials/threats_grid.html): an actor's
- * Create baseline dialog, and the metrics refreshed with the grid.
+ * Threat Landscape (pages/threats/threat_landscape.html, partials/threats_grid.html): the metrics
+ * refreshed with the grid. An actor's Create baseline is in its window's "…".
  */
 (function () {
     'use strict';
 
     function $(id) { return document.getElementById(id); }
-
-    function closeBaseline() { $('actor-baseline-overlay').style.display = 'none'; }
-    document.addEventListener('click', function (e) {
-        var overlay = $('actor-baseline-overlay');
-        if (overlay && e.target === overlay) closeBaseline();
-    });
 
     document.addEventListener('htmx:afterSwap', function (event) {
         var target = event.detail.target;
@@ -28,14 +22,4 @@
         }
     });
 
-    TIDE.actions('threats', {
-        baselineOpen: function (e, el) {
-            $('actor-bl-actors').value = el.dataset.actor;
-            $('actor-bl-group-ids').value = el.dataset.groupId || '';
-            $('actor-bl-name').value = el.dataset.actor + ' Baseline';
-            $('actor-bl-desc').value = '';
-            $('actor-baseline-overlay').style.display = 'flex';
-        },
-        baselineClose: closeBaseline,
-    });
 })();

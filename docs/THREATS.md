@@ -11,16 +11,17 @@ How to see who might attack you, what they do, and how much of it your rules wou
 
 ## Threat Landscape
 
-**Threat Landscape** lists the threat actors known to the client, from ATT&CK and your feeds, with what each uses and how much of it you cover. Filter by **Origin** and **Source**, and **Sort By** TTPs or coverage. **Sync Threats** refreshes them from the feeds.
+**Threat Landscape** lists the threat actors known to the client, from ATT&CK and your feeds, with what each uses and how much of it you cover. Each actor is a card like a group's on the MITRE pages: its coverage in a ring, the share of its techniques your enabled rules carry, with the card's left edge coloured to match. Filter by **Origin** and **Source**, and **Sort By** TTPs or coverage. **Sync threats**, in the page's **⋮** menu, refreshes them from the feeds.
 
-Click an actor's name to open its MITRE group window.
+Click an actor to open its window: its aliases, coverage, description and techniques, and the ATT&CK group it is, by name or alias, which opens that group's window.
 
 ### Create a baseline from a threat actor
 
 Who can: anyone who can edit Baselines.
 
-1. On the actor's card, click **Create Baseline**.
-2. Give it a **Baseline name** and, if you like, a **Description (optional)**, then click **Generate Baseline**.
+1. Open the actor.
+2. In its window's **⋮** menu, choose **Create baseline**.
+3. Give it a **Baseline name** and, if you like, a **Description (optional)**, then click **Create**.
 
 It holds one technique for each ATT&CK technique the actor uses. Find it on **Baselines**, ready to apply to a system.
 
@@ -33,7 +34,7 @@ The **Heatmap** shows ATT&CK's tactics as columns, with the techniques one or mo
 3. Each cell is a technique: **Covered** (COV), **No Detection** (GAP), or **Defense in Depth** (DEF). Hover over a cell for detail; click its ID for the side panel.
 4. The search box above the matrix highlights the techniques matching an ID, a name or a tactic.
 
-**Export Report** makes a threat report for the chosen actors: choose PDF or Markdown, the classification marking, and *Executive / CISO* or *Technical / Engineer*. **Create Baseline** makes a baseline from the chosen actors' techniques, as from Threat Landscape.
+The page's **⋮** menu has **Export report**, a threat report for the chosen actors: choose PDF or Markdown, the classification marking, and *Executive / CISO* or *Technical / Engineer*. **Create baseline**, beside it, makes a baseline from the chosen actors' techniques, as an actor's window does on Threat Landscape.
 
 ## The MITRE pages
 
@@ -41,7 +42,7 @@ The **Heatmap** shows ATT&CK's tactics as columns, with the techniques one or mo
 
 - Filter by **Source** (Enterprise, ICS or Mobile) and the page's own filters: for example tactic, type and coverage for techniques, or platform for software.
 - **Sort** them, **Group by** a field such as tactic or coverage, and switch between cards and a table.
-- The left edge of each card is coloured by coverage, and the figures across the top total it, for example *Gaps groups use*: techniques a known group uses that no enabled rule of yours carries.
+- Each card shows its coverage in a ring, with its left edge coloured to match, and the figures across the top total it, for example *Gaps groups use*: techniques a known group uses that no enabled rule of yours carries. A group, software, campaign, mitigation or tactic's ring is the share of its techniques your enabled rules carry. A technique's is 100 when a rule carries it, the share of its sub-techniques covered when only they are, else 0.
 
 Wherever a tactic appears, it shows with its own icon.
 
@@ -54,8 +55,8 @@ Click one to open its window. A **technique** shows your rules for it, its sub-t
 Who can: anyone who can edit Baselines.
 
 1. Open the group, software or campaign.
-2. Click **Create baseline** in its window.
-3. Name it (**Baseline name**), add a **Description (optional)**, and create it.
+2. In its window's **⋮** menu, choose **Create baseline**.
+3. Name it (**Baseline name**), add a **Description (optional)**, and click **Create**.
 
 The baseline has one technique for each ATT&CK technique it uses, each described by what ATT&CK says it does with it, and opens on **Baselines**.
 

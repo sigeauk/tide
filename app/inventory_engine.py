@@ -2868,6 +2868,16 @@ def get_system_step_details(system_id: str, playbook_ids: List[str], client_id: 
     return {st.id: _step_detail(st, ctx) for st in steps}
 
 
+def attach_step_evidence(system_id: str, rows: List[Dict], client_id: str = None) -> None:
+    """Give each of a system's technique rows (get_system_steps) its card's ring: the strongest
+    counted rule's score and name (``evidence_score``, ``evidence_rule``), as its window's header
+    shows them; None when it isn't covered by a rule."""
+    details = get_system_step_details(system_id, sorted({r["baseline_id"] for r in rows}), client_id=client_id)
+    for r in rows:
+        d = details.get(r["step_id"]) or {}
+        r["evidence_score"], r["evidence_rule"] = d.get("evidence_score"), d.get("evidence_rule") or ""
+
+
 def _destination_names(client_id: str = None) -> Dict[Tuple[str, str], Dict]:
     """``(siem_id, space)`` -> the name and colour this tenant gave that destination."""
     if not client_id:

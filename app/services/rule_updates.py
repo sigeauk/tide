@@ -20,7 +20,8 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.services import rule_origins
-from app.services.rule_diff import NOT_TAKEN, build_rule_diff, link_differences, section_changes, sections_text
+from app.services.rule_diff import (NOT_TAKEN, build_rule_diff, combined_by_hand, link_differences, merge_problem,
+                                    section_changes, sections_text, taken_text, together_problem)
 
 logger = logging.getLogger(__name__)
 
@@ -183,9 +184,12 @@ def review(db, client_id: str, key: Key) -> Dict[str, Any]:
     return out
 
 
-def apply(db, client_id: str, key: Key, sections: List[str], actor_id: str, actor: str) -> Tuple[int, str]:
+def apply(db, client_id: str, key: Key, sections: List[str], actor_id: str, actor: str,
+          merges: Optional[Dict[str, Any]] = None) -> Tuple[int, str]:
     """Take the chosen sections of the upstream update (none: keep this rule as it is) and mark the
-    rule as reviewed against the upstream revision. Returns ``(status, message)``."""
+    rule as reviewed against the upstream revision. ``merges`` (rule_diff.posted_merges) combines a
+    chosen section rather than taking it: this rule's items kept beside the new ones, a text as
+    edited. Returns ``(status, message)``."""
     from app import elastic_helper
     from app.api.rules import sync_single_rule
 
@@ -196,15 +200,20 @@ def apply(db, client_id: str, key: Key, sections: List[str], actor_id: str, acto
     # An Elastic prebuilt rule takes the sections too: Kibana keeps it as Elastic's (same rule id
     # and version number) and marks it customised.
     chosen = [s for s in sections if s in info["sections"]]
-    taken = ""
+    merges = {k: v for k, v in (merges or {}).items() if k in chosen}
+    taken, by_hand, kibana_note = "", [], ""
     if chosen:
         if payload is None:
             return 400, info["note"]
+        problem = merge_problem(merges, chosen) or together_problem(info["diffs"] or [], chosen)
+        if problem:
+            return 400, problem
         siem = next((s for s in (db.get_client_siems(client_id) or [])
                      if s.get("id") == key[1] and str(s.get("space") or "default") == key[2]), None)
         if not siem:
             return 400, "This rule's destination is no longer linked to this client."
-        changes, remove = section_changes(rule.raw_data or {}, payload, chosen)
+        by_hand = combined_by_hand(rule.raw_data or {}, payload, merges, chosen)
+        changes, remove = section_changes(rule.raw_data or {}, payload, chosen, merges)
         outcome, message, _live = elastic_helper.apply_rule_changes(
             rule.rule_id, changes, remove, space=key[2], kibana_url=siem.get("kibana_url"),
             api_key=siem.get("api_token_enc"), cached=rule.raw_data or {},
@@ -215,8 +224,8 @@ def apply(db, client_id: str, key: Key, sections: List[str], actor_id: str, acto
                          "then review the update again.")
         if outcome != "updated":
             return 502, message
-        labels = {d["key"]: d["label"] for d in info["diffs"] or []}
-        taken = ", ".join(labels.get(s, s) for s in chosen)
+        taken = taken_text(info["diffs"] or [], chosen, by_hand)
+        kibana_note = message     # what Kibana's side took, such as re-creating a rule that changed type
     unchanged = info["diffs"] == []
     with db.get_connection() as conn:
         rule_origins.mark_current(conn, key, actor, version=status.get("to_version"),
@@ -232,6 +241,8 @@ def apply(db, client_id: str, key: Key, sections: List[str], actor_id: str, acto
                    "for this rule.")
     else:
         message = f"Kept this rule as it is; marked as reviewed against {status['source']}'s{version}."
+    if kibana_note:
+        message += f" {kibana_note}"
     if taken and status["prebuilt"]:
         message += " Kibana now marks it as customised."
     elif unchanged and status["prebuilt"] and status.get("installed_version"):
@@ -240,7 +251,7 @@ def apply(db, client_id: str, key: Key, sections: List[str], actor_id: str, acto
     db.record_rule_history(
         rule_id=key[0], siem_id=key[1], space=key[2], client_id=client_id, action="upstream_update",
         actor_user_id=actor_id, actor_name=actor,
-        detail={"message": message, "sections": chosen, "upstream_id": status["upstream_id"],
+        detail={"message": message, "sections": chosen, "combined": by_hand, "upstream_id": status["upstream_id"],
                 "to_version": status.get("to_version")},
     )
     if chosen:

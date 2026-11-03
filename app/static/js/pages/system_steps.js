@@ -19,8 +19,8 @@
         try { p = JSON.parse(localStorage.getItem(b.getAttribute('data-pref-key')) || '{}') || {}; } catch (_) { /* storage blocked */ }
         if (fromUrl.indexOf('tactic_sort') === -1 && p.tactic_sort) $('sys-tactic-sort').value = p.tactic_sort;
         if (fromUrl.indexOf('sort_name') === -1 && typeof p.sort_name === 'string') $('sys-sort-name').value = p.sort_name;
-        // Grouping: the URL's, else this browser's last, else the page's default (the Baselines
-        // page groups by template, so an empty one still shows).
+        // Grouping: the URL's, else this browser's last, else the page's default (both group by
+        // baseline, so each shows with its ⋮ or Manage, an empty one too).
         var group = Array.isArray(p.group) ? p.group : (b.getAttribute('data-default-group') || '').split(',').filter(Boolean);
         if (fromUrl.indexOf('group') === -1 && (Array.isArray(p.group) || group.length)) {
             b.querySelectorAll('input[name="group"][type="checkbox"]').forEach(function (c) { c.checked = group.indexOf(c.value) !== -1; });
@@ -145,4 +145,8 @@
         e.stopPropagation();
         htmx.ajax('GET', el.dataset.url, { target: '#modal-container', swap: 'innerHTML' });
     });
+
+    // A system baseline's ⋮ sits in its group's <summary>: a click on it or its menu doesn't fold the
+    // group. Only the default is stopped, so the ⋮ still opens and its items still run and close it.
+    TIDE.action('steps.inGroupHead', function () { return false; });
 })();

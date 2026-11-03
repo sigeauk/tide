@@ -66,7 +66,7 @@ Click **Save thresholds**.
 
 ## Connect threat feeds
 
-- **Linked CTI Connectors**: **⋮** → **Manage connectors**, then pick an OpenCTI connector set up under **Integrations** and add it. **Sync Threats** on Threat Landscape then brings in its intrusion sets.
+- **Linked CTI Connectors**: **⋮** → **Manage connectors**, then pick an OpenCTI connector set up under **Integrations** and add it. **Sync threats** (Threat Landscape's **⋮** menu) then brings in its intrusion sets.
 
 ## Link GitLab projects
 
@@ -80,6 +80,8 @@ A client links the GitLab projects TIDE should use: one to back up its rules to,
 
 Each project's **⋮** has **Test**, which tests it again, and **Edit**, which changes what it's for, its name and its token and, for rule backup, its branch, folder and destinations. TIDE never shows a token again; leave the token blank to keep it. **Settings → Diagnostics** lists projects that failed their last test or whose token is about to expire.
 
+When a project needs attention, a <tide-icon name="triangle-alert" size="14"></tide-icon> sits beside its **⋮**: amber when it can still be used, red when it can't or its last backup failed. Click it to read why, in full: what its last test found, why its last backup failed, or what that backup left as it was.
+
 ### Rule backup
 
 Kibana holds the rules; the backup project holds their copy. After each sync, TIDE backs up the destinations that sync covered: every rule, Elastic's prebuilt rules too, and the exception lists they use. **Back up now**, in the backup project's **⋮**, backs up all its destinations at once (use it for the first backup). The project shows its last backup, how it went and a link to the commit.
@@ -89,7 +91,7 @@ Kibana holds the rules; the backup project holds their copy. After each sync, TI
 - *Where:* in the project's folder (or at its top), each destination has a folder named after it, with `rules/<rule id>.json` and `exceptions/<list id>.json`. A `README.md` in the folder (`RULES.md` at the top of the project) lists every rule by name with a link to its file. A destination you rename moves its folder; a rule you rename keeps its file; a rule given its own rule id moves to its new file. Git keeps each file's history through a move.
 - *What:* each rule as Kibana holds it, with its keys in order and without what changes when the rule hasn't (when it was last updated, its revision, its last run), so a file changes only when the rule does. Each commit lists what changed and who last changed it in Kibana, and carries `[skip ci]`, so the project's pipelines don't run on a backup.
 - *Changes made in GitLab:* Kibana wins. A rule file changed in GitLab is put back to Kibana's version at the next backup, and a file added to a destination's `rules` or `exceptions` folder that isn't one of its rules or lists is removed. The commit says what it put back, Rule Monitoring lists the rule under **Backup changed in GitLab** for 7 days, and the project's history keeps the change. Make changes to rules in Kibana or TIDE instead. Anything else in the project, including other files in the destination's folder, is never touched.
-- *When it leaves things as they are:* a destination TIDE holds no rules for yet (sync it first), and an exception list Kibana didn't give at that time, keep what the backup has. If GitLab doesn't answer, the backup fails and changes nothing: the sync still finishes, and Rule Monitoring shows the failed step.
+- *When it leaves things as they are:* a destination TIDE holds no rules for yet (sync it first), and an exception list Kibana didn't give at that time, keep what the backup has, and the project's <tide-icon name="triangle-alert" size="14"></tide-icon> says so, naming the rules that use the list. If GitLab doesn't answer, the backup fails and changes nothing: the sync still finishes, and Rule Monitoring shows the failed step.
 
 ## Move systems and baselines between clients
 

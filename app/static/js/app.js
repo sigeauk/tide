@@ -355,11 +355,14 @@ console.debug('TIDE app.js loading...');
      * as before, and the rows follow it (its options, value and disabled state).
      * One panel is open at a time: opening one closes the others, and a click outside or Escape
      * closes it. A panel that would overflow the viewport's right edge is anchored to the right.
+     * One in a dialog or side panel that would run past the box it scrolls in floats over it
+     * instead (floatDropdown).
      */
     function closeFilterDropdowns(except) {
         document.querySelectorAll('.tide-filter-dropdown').forEach(function (d) {
             if (d === except || d.style.display === 'none') return;
             d.style.display = 'none';
+            sinkDropdown(d);
             var btn = document.querySelector('[data-target="' + d.id + '"]');
             if (btn) btn.setAttribute('aria-expanded', 'false');
         });
@@ -370,19 +373,65 @@ console.debug('TIDE app.js loading...');
         var opening = dd.style.display === 'none' || !dd.style.display;
         closeFilterDropdowns(dd);
         if (opening) window.tideFilterSync(dd.parentElement);
+        // In a dialog, a side panel, or a page section that scrolls inside itself (.sys-fill).
+        var box = opening && dd.closest('.modal-content, .slide-panel, .sys-fill') && scrollBox(dd), tall = box && box.scrollHeight;
         dd.style.display = opening ? 'block' : 'none';
         var btn = document.querySelector('[data-target="' + id + '"]');
         if (btn) btn.setAttribute('aria-expanded', opening ? 'true' : 'false');
-        dd.style.left = '';
-        dd.style.right = '';
+        sinkDropdown(dd);
         if (opening) {
             var rect = dd.getBoundingClientRect();
             if (rect.right > window.innerWidth) {
                 dd.style.left = 'auto';
                 dd.style.right = '0';
             }
+            if (box && btn && box.scrollHeight > tall) floatDropdown(dd, btn);
         }
     };
+
+    // The box a panel scrolls with: its nearest ancestor that scrolls or clips (a dialog's body, a
+    // system page section's body), if any.
+    function scrollBox(el) {
+        for (var p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+            var oy = getComputedStyle(p).overflowY;
+            if (oy === 'auto' || oy === 'scroll' || oy === 'hidden') return p;
+        }
+        return null;
+    }
+    // A panel that runs past that box makes it scroll as well as itself (a long list in a dialog),
+    // or is cut off. It is shown over the box instead, fixed to the viewport by its button, as wide
+    // as it was: below the button, or above when there's more room there, and no taller than fits.
+    function floatDropdown(dd, btn) {
+        var rect = dd.getBoundingClientRect();
+        var b = btn.getBoundingClientRect(), gap = 4, margin = 8;
+        var below = window.innerHeight - b.bottom - gap - margin, above = b.top - gap - margin;
+        dd.classList.add('tide-filter-dropdown--float');
+        dd.style.width = dd.style.minWidth = rect.width + 'px';
+        dd.style.left = Math.max(margin, Math.min(rect.left, window.innerWidth - rect.width - margin)) + 'px';
+        dd.style.right = 'auto';
+        if (below >= rect.height || below >= above) {
+            dd.style.top = b.bottom + 'px';
+            dd.style.maxHeight = Math.min(rect.height, below) + 'px';
+        } else {
+            dd.style.top = 'auto';
+            dd.style.bottom = (window.innerHeight - b.top + gap) + 'px';
+            dd.style.maxHeight = Math.min(rect.height, above) + 'px';
+        }
+    }
+    function sinkDropdown(dd) {
+        dd.classList.remove('tide-filter-dropdown--float');
+        ['left', 'right', 'top', 'bottom', 'width', 'minWidth', 'maxHeight'].forEach(function (k) { dd.style[k] = ''; });
+    }
+    // A floating panel stays by its button only while nothing moves: a scroll outside it, or a resize,
+    // closes it, as a browser's own dropdown does.
+    function closeFloating(e) {
+        var open = document.querySelector('.tide-filter-dropdown--float');
+        if (open && open.style.display !== 'none' && !(e.target && e.target.nodeType === 1 && open.contains(e.target))) {
+            closeFilterDropdowns();
+        }
+    }
+    document.addEventListener('scroll', closeFloating, true);
+    window.addEventListener('resize', closeFloating);
     // Capture phase: a dialog keeps its clicks to itself (data-stop-click), and a dropdown in it
     // must still close.
     document.addEventListener('click', function (e) {
@@ -1009,8 +1058,17 @@ console.debug('TIDE app.js loading...');
         if (!root) root = document.querySelector('[data-rule-list]');
         return root ? Array.prototype.slice.call(root.querySelectorAll('[data-rule-open]')) : [];
     }
+    // Each rule once, in list order, by the card's id or, where a rule can be listed more than once
+    // (Rule Monitoring: under each of its issues), by its data-rule-dom-id.
     function snapshotFromItems(items) {
-        return items.map(function(el) { return { id: el.id, url: el.getAttribute('hx-get') }; });
+        var seen = {};
+        return items.map(function(el) {
+            return { id: el.id || el.getAttribute('data-rule-dom-id'), url: el.getAttribute('hx-get') };
+        }).filter(function(entry) {
+            if (!entry.id || seen[entry.id]) return false;
+            seen[entry.id] = true;
+            return true;
+        });
     }
     function ruleNavIndex() {
         var modal = document.querySelector('.rule-modal[data-rule-dom-id]');
@@ -1042,7 +1100,8 @@ console.debug('TIDE app.js loading...');
     }
     function openSnapshotEntry(entry) {
         if (!entry || !entry.url) return;
-        var live = entry.id ? document.getElementById(entry.id) : null;
+        var live = entry.id ? (document.getElementById(entry.id) ||
+            document.querySelector('[data-rule-open][data-rule-dom-id="' + CSS.escape(entry.id) + '"]')) : null;
         if (live) live.scrollIntoView({ block: 'nearest' });
         loadIntoWindow(entry.url);
     }
@@ -1232,7 +1291,22 @@ console.debug('TIDE app.js loading...');
         if (!main || !panel) return;
         main.hidden = open;
         panel.hidden = !open;
+        menu.querySelectorAll('[data-rm-sub]').forEach(function(p) { p.hidden = true; });
     }
+    // "…" › an item that opens a form in place of the menu's items, as Sections does (Create
+    // baseline: window_ui sub_item + sub_panel). Back returns to the items.
+    document.addEventListener('click', function(e) {
+        var t = e.target.closest && e.target.closest('[data-rm-sub-open], [data-rm-sub-back]');
+        if (!t) return;
+        var menu = t.closest('.rh-more__menu'), name = t.getAttribute('data-rm-sub-open');
+        var back = name ? null : t.closest('[data-rm-sub]').getAttribute('data-rm-sub');
+        showSectionsPanel(menu, false);
+        if (back) { menu.querySelector('[data-rm-sub-open="' + back + '"]').focus({ preventScroll: true }); return; }
+        var panel = menu.querySelector('[data-rm-sub="' + name + '"]');
+        menu.querySelector('[data-rm-menu-main]').hidden = true;
+        panel.hidden = false;
+        (panel.querySelector('input:not([type=hidden]), textarea') || panel.querySelector('[data-rm-sub-back]')).focus({ preventScroll: true });
+    });
     function sectionLabel(s) {
         return s.getAttribute('data-section-label') || s.getAttribute('data-section');
     }
@@ -2343,17 +2417,20 @@ console.debug('TIDE app.js loading...');
         var winner = direction === 'source_over_target' ? sourceName : targetName;
         var loser = direction === 'source_over_target' ? targetName : sourceName;
         var esc = function (s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; };
-        // Sections ticked in the comparison: all of them copies the whole rule; fewer copies only those.
+        // Sections ticked in the comparison: all of them, none combined, copies the whole rule; else
+        // only those, each combined as its items are ticked or its text edited.
         var boxes = Array.prototype.slice.call(document.querySelectorAll('input[name="rm-merge-section"]'));
         var picked = boxes.filter(function (b) { return b.checked; });
-        var sections = boxes.length && picked.length < boxes.length ? picked.map(function (b) { return b.value; }) : null;
+        var combined = window.tideMergeCombined(root.closest('.rd-root'));
+        var sections = boxes.length && (picked.length < boxes.length || combined) ? picked.map(function (b) { return b.value; }) : null;
         if (sections && !sections.length && deleteWhich === 'none') {
             if (typeof showToast === 'function') showToast('Tick at least one section to merge.', 'error');
             return;
         }
         var body = sections
             ? '<p class="mb-md">' + (sections.length ? 'Only ' + picked.map(function (b) { return '<strong>' + esc(b.parentNode.textContent.trim()) + '</strong>'; }).join(', ') +
-              ' of <strong>' + esc(loser) + '</strong> will be replaced with <strong>' + esc(winner) + '</strong>\'s. The rest stays as it is.'
+              ' of <strong>' + esc(loser) + '</strong> will be replaced with <strong>' + esc(winner) + '</strong>\'s' +
+              (combined ? ', or combined as you ticked or edited them' : '') + '. The rest stays as it is.'
               : 'Nothing is merged.') + '</p>'
             : '<p class="mb-md"><strong>' + esc(loser) + '</strong> will be overwritten with the content of <strong>' +
               esc(winner) + '</strong>. Its own enabled/disabled state is kept.</p>';
@@ -2381,6 +2458,10 @@ console.debug('TIDE app.js loading...');
         if (sections) {
             body.append('by_section', '1');
             sections.forEach(function (s) { body.append('section', s); });
+            // How each ticked section is combined (rule_diff.posted_merges): what a section unticked has is disabled.
+            var scope = root.closest('.rd-root') || document;
+            scope.querySelectorAll('input[name="merge-items"]:not(:disabled), input[data-merge-item]:checked:not(:disabled), ' +
+                                   'textarea[data-merge-text]:not(:disabled)').forEach(function (el) { body.append(el.name, el.value); });
         }
         fetch('/api/promotion/' + encodeURIComponent(root.dataset.ruleId) + '/merge?' + qs, {
             method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString(),
@@ -2446,5 +2527,75 @@ console.debug('TIDE app.js loading...');
         root.setAttribute('data-view', btn.getAttribute('data-rd-view'));
         try { localStorage.setItem('tide.diffView', btn.getAttribute('data-rd-view')); } catch (_) { /* ignore */ }
     }, true); // capture: the dialog stops click propagation, so a bubbling listener never sees it
+
+    // Combining a section (macros/rule_diff.html): a list's items ticked one by one, a text edited in
+    // place. ``data-donor`` on .rd-fields is the side taken: its items start ticked and its text fills
+    // the box. A section unticked sends none of it.
+    function donorText(editor) {
+        var fields = editor.closest('.rd-fields');
+        return (editor.getAttribute('data-' + (fields ? fields.dataset.donor : 'new')) || '').replace(/\r\n/g, '\n');
+    }
+    function setEditor(editor, open) {
+        var box = editor.querySelector('.rd-edit__box'), text = editor.querySelector('[data-merge-text]');
+        var edit = editor.querySelector('[data-merge-edit]');
+        box.hidden = !open;
+        edit.hidden = open;
+        text.disabled = !open;
+        if (!open) { text.value = donorText(editor); delete editor.dataset.touched; }
+    }
+    document.addEventListener('click', function (e) {
+        var btn = e.target.closest && e.target.closest('[data-merge-edit], [data-merge-discard]');
+        if (!btn) return;
+        var editor = btn.closest('[data-merge-editor]');
+        setEditor(editor, btn.hasAttribute('data-merge-edit'));
+        if (btn.hasAttribute('data-merge-edit')) editor.querySelector('[data-merge-text]').focus();
+    }, true);
+    document.addEventListener('input', function (e) {
+        var editor = e.target.matches && e.target.matches('[data-merge-text]') && e.target.closest('[data-merge-editor]');
+        if (editor) editor.dataset.touched = '1';
+    }, true);
+    document.addEventListener('change', function (e) {
+        var t = e.target;
+        if (!t.matches) return;
+        if (t.matches('[data-merge-item]')) {
+            t.closest('[data-merge-pick]').dataset.touched = '1';
+        } else if (t.matches('[data-merge-section]')) {
+            // A rule type change: its rule type, query language and query are ticked together.
+            var tied = t.hasAttribute('data-merge-together')
+                ? t.closest('.rd-fields').querySelectorAll('[data-merge-together]') : [t];
+            Array.prototype.forEach.call(tied, function (box) {
+                box.checked = t.checked;
+                var field = box.closest('.rd-field');
+                field.classList.toggle('rd-field--off', !box.checked);
+                field.querySelectorAll('[data-merge-pick] input, [data-merge-edit]').forEach(function (el) { el.disabled = !box.checked; });
+                var editor = field.querySelector('[data-merge-editor]');
+                if (editor) editor.querySelector('[data-merge-text]').disabled = !box.checked || editor.querySelector('.rd-edit__box').hidden;
+            });
+        } else if (t.matches('input[name="rm-merge-direction"]')) {
+            // Compare's direction changes the side taken: what you haven't touched follows it.
+            var root = t.closest('.rd-root'), fields = root && root.querySelector('.rd-fields');
+            if (!fields) return;
+            fields.dataset.donor = t.value === 'target_over_source' ? 'new' : 'old';
+            fields.querySelectorAll('[data-merge-pick]:not([data-touched])').forEach(function (pick) {
+                pick.querySelectorAll('[data-merge-item]').forEach(function (b) { b.checked = b.dataset.side === fields.dataset.donor; });
+            });
+            fields.querySelectorAll('[data-merge-editor]:not([data-touched])').forEach(function (editor) {
+                editor.querySelector('[data-merge-text]').value = donorText(editor);
+            });
+        }
+    }, true);
+    // Whether a section is combined rather than taken whole: an item ticked other than the side
+    // taken's, or a text edited to other than its.
+    window.tideMergeCombined = function (scope) {
+        var fields = scope && scope.querySelector('.rd-fields');
+        if (!fields) return false;
+        var items = Array.prototype.some.call(fields.querySelectorAll('[data-merge-item]:not(:disabled)'), function (b) {
+            return b.checked !== (b.dataset.side === fields.dataset.donor);
+        });
+        return items || Array.prototype.some.call(fields.querySelectorAll('[data-merge-editor]'), function (editor) {
+            var text = editor.querySelector('[data-merge-text]');
+            return !text.disabled && text.value.replace(/\r\n/g, '\n') !== donorText(editor);
+        });
+    };
 
 })();

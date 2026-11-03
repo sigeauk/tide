@@ -1095,7 +1095,8 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False, only_siem_id: 
                     if backed and backed["status"] == "failed":
                         sync_runs.step_failed("Backing up rules to GitLab", backed["message"])
                     elif backed:
-                        logger.info(f"GitLab backup for client_id={client_id}: {backed['message']}")
+                        logger.info(f"GitLab backup for client_id={client_id}: "
+                                    f"{' '.join([backed['message'], *(backed.get('notes') or [])])}")
                 except Exception as _backup_exc:  # noqa: BLE001 - the sync carries on
                     logger.error(f"GitLab backup failed for client_id={client_id}: {_backup_exc}")
                     sync_runs.step_failed("Backing up rules to GitLab", _backup_exc)

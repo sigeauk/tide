@@ -1,7 +1,8 @@
 /*
- * A system's page (pages/inventory/system_detail.html): the Export report dialog, the heatmap's
- * baseline filter, and reloading once Manage baselines closes after a change.
- * Its anchor: <div hidden data-system-page data-system-id="…" data-baselines="id,id,…">.
+ * A system's page (pages/inventory/system_detail.html): the Export report dialog and the heatmap's
+ * baseline filter. (Adding, renaming or removing a baseline reloads the page from the server:
+ * inventory._system_page_reload.)
+ * Its anchor: <div hidden data-system-page data-system-id="…">.
  */
 (function () {
     'use strict';
@@ -32,21 +33,6 @@
         htmx.ajax('GET', '/api/heatmap/system/' + anchor().dataset.systemId + '/matrix' + (params ? '?' + params : ''),
                   { target: '#system-heatmap-matrix', swap: 'innerHTML' });
     }
-
-    // Applying or removing baselines changes more than the grid (the count, the metric strip, the
-    // heatmap's filters), so once the Manage baselines window closes after a change, reload.
-    TIDE.page('[data-system-page]', function (page) {
-        var host = $('modal-container');
-        if (!host) return;
-        var initial = page.dataset.baselines, latest = initial;
-        var observer = new MutationObserver(function () {
-            if (!page.isConnected) { observer.disconnect(); return; }
-            var d = host.querySelector('[data-baselines-dialog]');
-            if (d) { latest = d.getAttribute('data-applied'); return; }
-            if (latest !== initial) window.location.reload();
-        });
-        observer.observe(host, { childList: true, subtree: true });
-    });
 
     TIDE.actions('systemPage', {
         exportOpen: function () { $('export-modal-overlay').style.display = 'flex'; },

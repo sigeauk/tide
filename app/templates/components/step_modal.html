@@ -22,15 +22,16 @@
              or searched; convert each) · Risks (priority and category; Update edits them), and,
              opened from Coverage's "…", Add coverage (rule, gap, N/A, dashboard, report, log).
     right  : MITRE ATT&CK (Update edits the technique's ATT&CK ids in place).
-  The header ring is the strongest counted rule's own score (app/scoring.py); a technique that is
-  not covered shows a muted ring, since its status is decided by the mark, not a rule.
+  The header ring is the strongest counted rule's own score (app/scoring.py), as on its card
+  (window_ui.technique_ring); a technique no rule covers shows an empty ring in its status's
+  colour, since its status is decided by the mark, not a rule.
   The technique is this system's own (its copy of the template), so everything here -- the
   technique itself included -- belongs to this system alone.
 #}
 {% from "macros/icons.html" import icon, tactic_icon %}
 {% from "components/mitre_pill.html" import mitre_pill %}
 {% from "components/mitre_ui.html" import technique_list %}
-{% from "components/window_ui.html" import collapse_ctl, drag_ctl, remove_btn, rule_card, section_menu, sections_item, tag, window_menu %}
+{% from "components/window_ui.html" import collapse_ctl, drag_ctl, remove_btn, rule_card, section_menu, sections_item, tag, technique_ring, window_menu %}
 {% from "macros/modal.html" import close_button %}
 {% from "macros/menu.html" import more_button %}
 {% from "components/ui/loading_state.html" import loading_state %}
@@ -52,12 +53,6 @@
 {% set mark = detail.blind_spots[0] if detail.blind_spots else none %}
 {% set mark_label = ('Not applicable' if mark.override_type == 'na' else 'Known gap') if mark else '' %}
 {% set ev = detail.evidence_score %}
-{% set ring_class = 'muted' if ev is none else ('success' if ev >= 80 else ('warning' if ev >= 50 else 'danger')) %}
-{% set ring_title = {
-    'green': 'Strongest rule protecting this system: ' ~ detail.evidence_rule ~ ', scored ' ~ ev ~ '%',
-    'amber': 'Known gap: rule scores do not count while the gap stands',
-    'grey': 'Not applicable: no rule score applies',
-}.get(status, 'No rule is protecting this system yet') %}
 
 <div name="Dismiss Technique Window" class="modal-overlay" data-step-modal data-history-modal data-rm-overlay>
   <div class="modal-content rule-modal sm-modal" data-layout-key="tide.techniqueWindowLayout.v2" data-step-id="{{ step.id }}"
@@ -65,10 +60,7 @@
 
     <header class="rm-header">
       {% if not new %}
-      <div class="score-ring score-ring--sm score-ring--{{ ring_class }}" style="--score: {{ ev or 0 }}"
-           title="{{ ring_title }}" role="img" aria-label="{{ ring_title }}">
-        <span class="score-ring__value">{{ ev if ev is not none else '–' }}</span>
-      </div>
+      {{ technique_ring(status, ev, detail.evidence_rule, 'score-ring--sm') }}
       {% endif %}
       <div class="rm-header__main">
         <h2 class="rm-title" id="sm-title">{{ 'New technique' if new else step.title }}</h2>

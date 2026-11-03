@@ -234,7 +234,6 @@ def _groups_load(db, search, domain, covered, counts) -> List[dict]:
             "window_url": window_url("groups", r["id"], domain),
             "name": r["name"],
             "sub": ", ".join(aliases),
-            "summary": plain_summary(r.get("description")),
             "sources": r.get("sources") or [],
             "coverage": cov,
             "technique_count": r["technique_count"],
@@ -310,16 +309,18 @@ def _tactic_options(db, domain: str) -> List[Tuple[str, str]]:
 
 def technique_coverage(tid: str, subs: List[str], covered: set, counts: dict) -> Dict[str, Any]:
     """A technique is covered when an enabled rule carries its own id. One that is not, but has a
-    covered sub-technique, is partly covered: those rules see some ways of doing it, not all."""
+    covered sub-technique, is partly covered: those rules see some ways of doing it, not all. Its
+    card's ring (``pct``) is 100 covered, the share of sub-techniques covered when partly, else 0."""
     n = counts.get(tid, 0)
     if tid in covered:
-        return {"level": "full", "rank": 2, "label": f"{n} rule{'s' if n != 1 else ''}",
+        return {"level": "full", "rank": 2, "pct": 100, "label": f"{n} rule{'s' if n != 1 else ''}",
                 "title": f"{n} enabled rule{'s carry' if n != 1 else ' carries'} {tid}"}
     sub_hit = [s for s in subs if s in covered]
     if sub_hit:
-        return {"level": "partial", "rank": 1, "label": f"{len(sub_hit)}/{len(subs)} sub-techniques",
+        return {"level": "partial", "rank": 1, "pct": round(100 * len(sub_hit) / len(subs)),
+                "label": f"{len(sub_hit)}/{len(subs)} sub-techniques",
                 "title": f"No enabled rule carries {tid} itself; {len(sub_hit)} of its {len(subs)} sub-techniques are covered"}
-    return {"level": "none", "rank": 0, "label": "No rule", "title": f"No enabled rule carries {tid}"}
+    return {"level": "none", "rank": 0, "pct": 0, "label": "No rule", "title": f"No enabled rule carries {tid}"}
 
 
 def _technique_rows(db, domain: str) -> List[dict]:
@@ -367,13 +368,13 @@ def _techniques_load(db, search, domain, covered, counts) -> List[dict]:
         tactics = _row_tactics(r, tactic_by_short)
         parent = by_id.get((r["parent_id"] or "").upper()) if r["is_subtechnique"] else None
         subs = children.get(tid, [])
-        meta = []
-        if parent:
-            meta.append(("list-tree", f"Sub-technique of {parent['id']}", parent["name"]))
-        elif subs:
+        rules = counts.get(tid, 0)
+        # The card's footer, one line: its rules, its sub-techniques (a sub-technique's id names its
+        # parent), the groups using it. Mitigations are in its window.
+        meta = [("shield", f"{rules} rule{'s' if rules != 1 else ''}", f"Enabled rules that carry {tid}")]
+        if subs:
             meta.append(("list-tree", f"{len(subs)} sub-technique{'s' if len(subs) != 1 else ''}", "Sub-techniques"))
         meta.append(("users", f"{r['group_count']} group{'s' if r['group_count'] != 1 else ''}", "Groups known to use it"))
-        meta.append(("shield", f"{r['mitigation_count']} mitigation{'s' if r['mitigation_count'] != 1 else ''}", "ATT&CK mitigations"))
         items.append({
             "id": r["id"],
             "dom_id": dom_id("technique", r["id"]),
@@ -381,7 +382,6 @@ def _techniques_load(db, search, domain, covered, counts) -> List[dict]:
             "name": r["name"],
             "sub": ", ".join(name for _, name, _ in tactics),
             "sub_tactics": [name for _, name, _ in tactics],     # the sub line is tactics: each shows its icon
-            "summary": plain_summary(r.get("description")),
             "sources": r.get("sources") or [],
             "coverage": technique_coverage(tid, subs, covered, counts),
             "is_sub": r["is_subtechnique"],
@@ -535,7 +535,6 @@ def _software_load(db, search, domain, covered, counts) -> List[dict]:
             "window_url": window_url("software", r["id"], domain),
             "name": r["name"],
             "sub": " · ".join([type_label] + ([", ".join(platforms)] if platforms else [])),
-            "summary": plain_summary(r.get("description")),
             "sources": r.get("sources") or [],
             "coverage": coverage_of(tech_ids.get((r["id"] or "").upper(), set()), covered),
             "software_type": kind,
@@ -606,7 +605,6 @@ def _campaigns_load(db, search, domain, covered, counts) -> List[dict]:
             "window_url": window_url("campaigns", r["id"], domain),
             "name": r["name"],
             "sub": attributed,
-            "summary": plain_summary(r.get("description")),
             "sources": r.get("sources") or [],
             "coverage": coverage_of(tech_ids.get(cid, set()), covered),
             "groups": groups,
@@ -669,7 +667,6 @@ def _mitigations_load(db, search, domain, covered, counts) -> List[dict]:
             "name": r["name"],
             "sub": ", ".join(name for _, name, _ in tactics),
             "sub_tactics": [name for _, name, _ in tactics],     # the sub line is tactics: each shows its icon
-            "summary": plain_summary(r.get("description")),
             "sources": r.get("sources") or [],
             "coverage": coverage_of(ids, covered),
             "technique_ids": ids,
@@ -734,7 +731,6 @@ def _tactics_load(db, search, domain, covered, counts) -> List[dict]:
             "name": r["name"],
             "sub": "",
             "tactic": r["name"],
-            "summary": plain_summary(r.get("description")),
             "sources": r.get("sources") or [],
             "coverage": coverage_of(ids, covered),
             "order": order,

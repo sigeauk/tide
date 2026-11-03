@@ -39,7 +39,7 @@ ATT&CK, NIST 800-53, the SigmaHQ rules and Elastic's detection rules and hunting
 | What | When | Where |
 |------|------|-------|
 | Rule sync from your SIEMs | Only when someone clicks **Sync** | Rule Health |
-| Threat Landscape actors | Only when someone clicks **Sync Threats** | Threat Landscape |
+| Threat Landscape actors | Only when someone chooses **Sync threats** | Threat Landscape |
 | Rule-log export | Daily, at each SIEM's scheduled time, if turned on | Management → Integrations, a SIEM's card → Rule Logging |
 | Backups | Daily, at the scheduled time, if turned on | Management → Backups |
 | CVE data (CISA KEV) | Only when someone imports a file | CVE Overview → Actions → Import CVE |
@@ -81,7 +81,7 @@ Syncs run when someone starts one. TIDE's figures for a destination are as of it
 
 ## OpenCTI connectors
 
-A connector links TIDE to an OpenCTI. A super admin adds it once in **Management → Integrations** (**Add integration** → **OpenCTI**), with OpenCTI's address and an API token; each client that should use it links it from the client's page (**Linked CTI Connectors → ⋮ → Manage connectors**). **Sync Threats** on **Threat Landscape** then adds the intrusion sets of the client's OpenCTI to ATT&CK's actors, for that client only, and shows how much of each one's techniques your rules cover. Each sync replaces the client's OpenCTI actors with what OpenCTI holds then; if an OpenCTI doesn't answer, the client keeps the actors it had until a sync reaches it. **Create Baseline** turns an actor's techniques into a baseline.
+A connector links TIDE to an OpenCTI. A super admin adds it once in **Management → Integrations** (**Add integration** → **OpenCTI**), with OpenCTI's address and an API token; each client that should use it links it from the client's page (**Linked CTI Connectors → ⋮ → Manage connectors**). **Sync threats** in **Threat Landscape**'s **⋮** menu then adds the intrusion sets of the client's OpenCTI to ATT&CK's actors, for that client only, and shows how much of each one's techniques your rules cover. Each sync replaces the client's OpenCTI actors with what OpenCTI holds then; if an OpenCTI doesn't answer, the client keeps the actors it had until a sync reaches it. **Create baseline**, in an actor's window, turns its techniques into a baseline.
 
 - **Connection status.** A connector shows **Active** when its last connection test passed, **Failed** when it didn't (hover for the reason), or **Untested**. **Test connection**, in its card's **⋮**, asks OpenCTI for its version, as a sync would connect.
 
@@ -283,7 +283,7 @@ Every check, look-up, fix and access change is recorded in the audit log.
 | A rule sync shows **Done, steps failed** | The rules were read, but a step afterwards failed; the result says which and why. Click **Retry**. If it fails again, report the error from **Diagnostics → Sync activity** with TIDE's log from that time. |
 | Diagnostics shows **A database stopped after a DuckDB fatal error** | DuckDB stopped a client's database, so TIDE restarted itself, which repairs the rule history indexes. If that client's pages work, nothing more is needed. If they say its database stopped, a second error came within 10 minutes and TIDE didn't restart again: restart it with `docker compose restart tide-app`, and if it happens again, back up the data folder and report the error. |
 | Rules show **SIEM offline** | That destination didn't answer at the last sync. Fix the connection, then sync that destination. |
-| A connector shows **Failed**, or **Sync Threats** reports an OpenCTI error | Hover for the reason, fix the address, token or certificate in the connector's form, test it with **Test connection** (its card's **⋮**), then click **Sync Threats** again. |
+| A connector shows **Failed**, or **Sync threats** reports an OpenCTI error | Hover for the reason, fix the address, token or certificate in the connector's form, test it with **Test connection** (its card's **⋮**), then choose **Sync threats** again. |
 | A certificate is refused | See [When a certificate is refused](CONFIGURATION.md#when-a-certificate-is-refused). |
 | Scheduled rule-log exports or backups stopped | A background service isn't running; Diagnostics shows it. Restart TIDE: `docker compose restart tide-app`. |
 | A backup failed | Management → Backups shows why. Usually the disk is short of space: free some, or keep fewer backups. |

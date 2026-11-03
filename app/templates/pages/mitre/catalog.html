@@ -1,7 +1,8 @@
 {#
   A MITRE catalogue page (groups, software, ...): header, metric strip, filter bar, and a grid
   that loads itself once catalog-grid.js has applied this browser's remembered choices. Any item
-  opens in its window; ?open=<id> opens one on arrival.
+  opens in its window; ?open=<id> opens one on arrival. As Rule Health (rule-browser-page), the
+  header, metrics and filters stay put and the grid scrolls in its own region.
   Context: spec (mitre_catalog.KindSpec), f, url_keys, source context.
 #}
 {% extends "base.html" %}
@@ -14,6 +15,7 @@
 {% block content %}
 {{ breadcrumb(items=[('Home', '/'), ('MITRE', '/mitre'), (spec.title, none)]) }}
 
+<div class="rule-browser-page">
 <div class="page-header">
     <div class="page-header__text">
         <h1 class="page-title-hero">MITRE {{ spec.title }} {{ help_button('mitre') }}</h1>
@@ -21,14 +23,19 @@
     </div>
 </div>
 
+<div class="rule-browser-controls">
 <div class="metrics-grid" id="catalog-metrics"></div>
 
 {% include "partials/mitre_filters.html" %}
+</div>
 
+<div class="rule-scroll-region">
 <div id="catalog-grid" class="cat-grid-host" data-rule-list
      hx-get="/api/mitre/grid/{{ spec.key }}" hx-trigger="catalogFilter"
      hx-include="#catalog-filters input, #catalog-filters select" hx-swap="innerHTML">
     {{ loading_state("Loading " ~ spec.title | lower ~ "…") }}
+</div>
+</div>
 </div>
 
 <div id="slide-panel-container"></div>

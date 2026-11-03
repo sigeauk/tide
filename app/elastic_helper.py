@@ -2034,17 +2034,32 @@ def preview_detection_rule(rule_data, space="default", lookback="24h",
         return 0, [], str(e)
 
 
-def get_exception_list(list_id, source_space, session, base_url, namespace_type="single"):
+def get_exception_list(list_id, source_space, session, base_url, namespace_type="single", missing=None):
     """The exception list ``list_id`` itself (its name, description, type: not its items) in
-    ``source_space``, or None. ``namespace_type`` is the rule's for it: "agnostic" for a list shared
-    by every space."""
+    ``source_space``, or None; ``missing`` instead when Kibana says the space has no such list (404).
+    ``namespace_type`` is the rule's for it: "agnostic" for a list shared by every space."""
     prefix = _space_api_prefix(base_url, source_space)
     response = session.get(f"{prefix}/api/exception_lists",
                            params={"list_id": list_id, "namespace_type": namespace_type or "single"})
     if response.status_code == 200:
         return response.json()
     log_error(f"Failed to get exception list {list_id}: {response.status_code}")
-    return None
+    return missing if response.status_code == 404 else None
+
+
+# What get_exception_list gives, as ``missing``, for a list a rule points at that Kibana doesn't have in
+# the rule's space. The rule has no exceptions from it there, so a copy goes without it. A rule moved
+# before 6.3.1 can point at its own list in the space it was moved from.
+NO_SUCH_LIST = object()
+
+
+def _missing_lists_note(missing, space) -> str:
+    if not missing:
+        return ""
+    lists, it = ("An exception list the rule pointed at isn't", "it") if len(missing) == 1 else \
+        (f"{len(missing)} exception lists the rule pointed at aren't", "them")
+    return (f" {lists} in {space} in Kibana, so the rule had no exceptions from {it} there and goes without {it}. "
+            f"If the rule was moved to {space}, those exceptions may still be in the space it came from.")
 
 
 def get_exception_list_entries(list_id, source_space, session, base_url, namespace_type="single"):
@@ -2363,8 +2378,24 @@ def apply_rule_changes(
     if "timestamp_override" in remove:
         rule.pop("timestamp_override_fallback_disabled", None)
     if rule.get("type") == "esql":
-        rule.pop("index", None)     # an ES|QL rule takes its indices from the query's FROM
+        for key in _NOT_FOR_ESQL:   # an ES|QL rule takes its indices, and any filtering, from its query
+            rule.pop(key, None)
     rule["rule_id"] = live.get("rule_id") or rule_id
+    if rule.get("type") != live.get("type"):
+        from app.services.rule_origins import is_prebuilt
+        if is_prebuilt(live):
+            return "error", (f"It becomes another type of rule ({_TYPE_NAMES.get(live.get('type'), live.get('type'))} to "
+                             f"{_TYPE_NAMES.get(rule.get('type'), rule.get('type'))}), which Kibana can't do to a rule in "
+                             "place, and it is one of Elastic's prebuilt rules, which TIDE doesn't re-create. Install "
+                             "Elastic's update in Kibana (Rules, Rule updates), or merge without the rule type, query "
+                             "language and query."), live
+        try:
+            ok, note, _made = _retype_rule(session, base_url, space, rule, live, on_recreated)
+        except Exception as exc:
+            return "error", f"Could not reach Kibana: {exc}. Check the rule in Kibana before trying again.", live
+        if ok:
+            log_info(f"Re-created rule {rule_id} in {space} as {rule.get('type')}: {', '.join(sorted({*changes, *remove}))}")
+        return ("updated" if ok else "error"), note, live
     try:
         response, note = _put_rule(session, base_url, space, rule, on_recreated)
     except Exception as exc:
@@ -2373,6 +2404,74 @@ def apply_rule_changes(
         return "error", _kibana_error(response) + (f" {note}" if note else ""), live
     log_info(f"Updated rule {rule_id} in {space}: {', '.join(sorted({*changes, *remove}))}")
     return "updated", note or "", live
+
+
+# What an ES|QL rule doesn't take: its query names its indices and does any filtering.
+_NOT_FOR_ESQL = ("index", "filters", "data_view_id", "saved_id")
+_TYPE_NAMES = {"query": "custom query", "saved_query": "saved query", "eql": "EQL", "esql": "ES|QL",
+               "threshold": "threshold", "threat_match": "indicator match", "new_terms": "new terms",
+               "machine_learning": "machine learning"}
+
+
+def _a(name: str) -> str:
+    """``name`` with its article: "an EQL", "a custom query"."""
+    return f"{'an' if name[:1].lower() in 'aeiou' else 'a'} {name}"
+
+
+def _retype_rule(session, base_url: str, space: str, rule: dict, live: dict, on_recreated=None):
+    """Write ``rule``, another type of rule than ``live`` (a custom query that becomes EQL or ES|QL,
+    say), which Kibana can't change in place (a rule's type is fixed when it is created): delete it
+    and create it again under the same rule_id, its own exception list copied first (Kibana may delete
+    it with the rule), its enabled state, actions and shared lists kept. If Kibana refuses the new
+    rule, the old one is put back. ``on_recreated(old_id, new_id, why=...)`` is called with the Kibana
+    saved-object ids. Returns ``(ok, message, the new rule as Kibana created it)``."""
+    url = f"{_space_api_prefix(base_url, space)}/api/detection_engine/rules"
+    was, now = (_TYPE_NAMES.get(t, t) for t in (live.get("type"), rule.get("type")))
+    # The rule's own lists it keeps are copied; a list it brings (a copy from another rule) is its own.
+    wanted = {e.get("list_id") for e in rule.get("exceptions_list") or []}
+    keeps = {**live, "exceptions_list": [e for e in live.get("exceptions_list") or [] if e.get("list_id") in wanted]}
+    copied = _copy_own_lists(session, base_url, space, keeps)
+    if copied is None:
+        return False, "Its exception list couldn't be copied, so nothing was changed.", None
+    lists, missing = copied
+    swap = {old.get("list_id"): new for old, new in
+            zip([e for e in keeps["exceptions_list"] if e.get("list_id") not in missing], lists)}
+
+    def exceptions(of: dict) -> list:
+        return [swap.get(e.get("list_id"), e) for e in of.get("exceptions_list") or [] if e.get("list_id") not in missing]
+
+    deleted = session.delete(url, params={"rule_id": rule["rule_id"]})
+    if deleted.status_code not in (200, 204):
+        _drop_copies(session, base_url, space, keeps, lists)
+        return False, _kibana_error(deleted) + " Nothing was changed.", None
+
+    def recreated(response, why: str) -> None:
+        new_id = (response.json() or {}).get("id")
+        if on_recreated and new_id:
+            try:
+                on_recreated(live.get("id"), new_id, why=why)
+            except Exception:
+                _logger.exception("Rule %s re-created, but TIDE couldn't update its own records", rule["rule_id"])
+
+    created = session.post(url, json={**_creatable(rule), "exceptions_list": exceptions(rule)})
+    if created.status_code in (200, 201):
+        why = (f"It became {_a(now)} rule, which Kibana can't do to a rule in place, so TIDE deleted it there and "
+               "created it again, under the same rule ID. Its past alerts stay in Kibana.")
+        recreated(created, why)
+        for old_id in swap:     # Kibana keeps a deleted rule's own list: the copy replaces it
+            if swap[old_id].get("list_id") != old_id:
+                delete_exception_list(old_id, space, session, base_url)
+        return True, why + _missing_lists_note(missing, space), created.json() or {}
+    refused = _kibana_error(created)
+    restored = session.post(url, json={**_creatable(live), "exceptions_list": exceptions(live)})
+    if restored.status_code in (200, 201):
+        recreated(restored, f"Kibana refused it as {_a(now)} rule, so TIDE put it back as the {was} rule it was, "
+                            "under the same rule ID.")
+        return False, f"{refused} TIDE put the rule back as it was.", None
+    _logger.error("Rule %s: re-create as %s failed in space %s, and putting it back failed: HTTP %s",
+                  rule["rule_id"], now, space, restored.status_code)
+    return False, (f"{refused} TIDE had deleted the rule to create it again, and putting it back failed too "
+                   f"({_kibana_error(restored)}): restore it from TIDE's copy."), None
 
 
 def _kibana_error(response) -> str:
@@ -2435,13 +2534,47 @@ def restore_detection_rule(
 RULE_GONE = "Kibana no longer has this rule."
 
 
+def _copy_own_lists(session, base_url: str, space: str, live: dict):
+    """``live``'s exception lists for a rule made from it in the same space: its own (rule_default)
+    list copied, shared lists kept, an own list Kibana doesn't have in the space left out. Returns
+    ``(lists, missing list ids)``, or None when an own list couldn't be copied (the copies made are
+    removed again)."""
+    lists, missing = [], []
+    for exc in live.get("exceptions_list") or []:
+        if exc.get("type") != "rule_default":
+            lists.append(exc)
+            continue
+        source = get_exception_list(exc.get("list_id"), space, session=session, base_url=base_url,
+                                    namespace_type=exc.get("namespace_type"), missing=NO_SUCH_LIST)
+        if source is NO_SUCH_LIST:
+            missing.append(exc.get("list_id"))
+            continue
+        copied = source and create_exception_list_for_rule(
+            source, live.get("name"), space, space, source_session=session, source_base_url=base_url,
+            target_session=session, target_base_url=base_url)
+        if not copied:
+            _drop_copies(session, base_url, space, live, lists)
+            return None
+        lists.append(copied)
+    return lists, missing
+
+
+def _drop_copies(session, base_url: str, space: str, live: dict, lists) -> None:
+    """Remove the exception lists ``_copy_own_lists`` copied for ``live``, when they won't be used."""
+    for made in lists:
+        if made not in (live.get("exceptions_list") or []):
+            delete_exception_list(made.get("list_id"), space, session, base_url)
+
+
 def give_rule_own_id(object_id: str, space: str, kibana_url: str, api_key: str) -> Tuple[bool, str, Optional[dict]]:
     """Give the custom rule with saved-object ``object_id`` in ``space`` a rule id of its own: create
     it again under a new rule_id, as Kibana holds it now (its enabled state, actions and exceptions
-    included; its own exception list copied, shared lists kept), then delete the original. For a
-    custom rule holding one of Elastic's prebuilt rule ids, which stops Kibana installing that
-    prebuilt rule in the space or sits beside it. Kibana keeps the original's alerts and run history
-    with it. Returns ``(ok, message, created rule)``; on failure Kibana is left as it was."""
+    included; its own exception list copied, shared lists kept, an own list Kibana doesn't have in the
+    space left out), then delete the original. For a custom rule holding one of Elastic's prebuilt
+    rule ids, which stops Kibana installing that prebuilt rule in the space or sits beside it. Kibana
+    keeps the original's alerts and run history with it. Returns ``(ok, message, created rule)``: on
+    success the message is what to add to TIDE's (a list left out), else empty; on failure Kibana is
+    left as it was."""
     from app.services.rule_origins import is_prebuilt
     if not (kibana_url and api_key):
         return False, "This SIEM has no Kibana URL or API key configured.", None
@@ -2459,28 +2592,14 @@ def give_rule_own_id(object_id: str, space: str, kibana_url: str, api_key: str) 
             return False, "This is one of Elastic's prebuilt rules, so it keeps Elastic's rule id.", None
         body = _creatable(live)
         body["rule_id"] = str(uuid.uuid4())
-        lists = []
-        for exc in live.get("exceptions_list") or []:
-            if exc.get("type") != "rule_default":
-                lists.append(exc)
-                continue
-            source = get_exception_list(exc.get("list_id"), space, session=session, base_url=base_url,
-                                        namespace_type=exc.get("namespace_type"))
-            copied = source and create_exception_list_for_rule(
-                source, live.get("name"), space, space, source_session=session, source_base_url=base_url,
-                target_session=session, target_base_url=base_url)
-            if not copied:
-                for made in lists:
-                    if made not in (live.get("exceptions_list") or []):
-                        delete_exception_list(made.get("list_id"), space, session, base_url)
-                return False, "Its exception list couldn't be copied, so nothing was changed.", None
-            lists.append(copied)
+        copied = _copy_own_lists(session, base_url, space, live)
+        if copied is None:
+            return False, "Its exception list couldn't be copied, so nothing was changed.", None
+        lists, missing = copied
         body["exceptions_list"] = lists
         created = session.post(url, json=body)
         if created.status_code not in (200, 201):
-            for made in lists:
-                if made not in (live.get("exceptions_list") or []):
-                    delete_exception_list(made.get("list_id"), space, session, base_url)
+            _drop_copies(session, base_url, space, live, lists)
             return False, f"Kibana refused it under a new rule id (HTTP {created.status_code}: {created.text[:200]}).", None
         deleted = session.delete(url, params={"id": object_id})
         if deleted.status_code not in (200, 204, 404):
@@ -2488,8 +2607,9 @@ def give_rule_own_id(object_id: str, space: str, kibana_url: str, api_key: str) 
             return False, (f"Kibana would not delete the original (HTTP {deleted.status_code}), so TIDE removed "
                            "the new copy again. Nothing was changed."), None
         log_info(f"Rule '{live.get('name')}' in {space} now has its own rule id {body['rule_id']} "
-                 f"(was {live.get('rule_id')})")
-        return True, "", created.json() or body
+                 f"(was {live.get('rule_id')})" + (f"; left out exception lists not in {space}: {', '.join(missing)}"
+                                                   if missing else ""))
+        return True, _missing_lists_note(missing, space), created.json() or body
     except Exception as exc:
         log_error(f"Giving rule {object_id} its own rule id failed: {exc}")
         return False, f"Kibana could not be reached ({exc}).", None
@@ -2776,8 +2896,8 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
     key unreadable and the copy had to be deleted and created again (_put_rule).
 
     Returns ``(False, message)``, or ``(True, message, target_rule_id, note)``: ``note`` says which
-    actions were left behind for want of their connector in the target (``_portable_actions``),
-    for the caller to pass on; empty when none were.
+    actions were left behind for want of their connector in the target (``_portable_actions``), and
+    which exception lists for want of them in the source, for the caller to pass on; empty when none were.
     """
     if not (source_kibana_url and source_api_key):
         return False, "Promotion requires source SIEM kibana_url + api_key (none resolved)."
@@ -2829,18 +2949,19 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
     # a duplicate.
     tgt_prefix = _space_api_prefix(tgt_base, target_space)
     target_existing_id = None
+    target_live = None      # the rule overwritten, as the target holds it
     if overwrite_rule_id:
         found = _lookup_rule_by_rule_id(tgt_session, tgt_base, target_space, overwrite_rule_id)
         if not found:
             return False, f"The rule to merge onto is no longer in {target_space}, so nothing was changed."
-        target_existing_id = found.get("rule_id") or overwrite_rule_id
+        target_existing_id, target_live = found.get("rule_id") or overwrite_rule_id, found
     else:
         try:
             found = _lookup_rule_by_rule_id(tgt_session, tgt_base, target_space, rule_id)
         except Exception:
             found = None
         if found:
-            target_existing_id = found.get("rule_id") or found.get("id") or rule_id
+            target_existing_id, target_live = found.get("rule_id") or found.get("id") or rule_id, found
     if target_existing_id is None and not source_rule_id:
         # A real Elastic rule always has a rule_id, so this only fires when the source payload
         # was missing one — match by exact name as a last resort. This is a single-page scan,
@@ -2861,9 +2982,10 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
     
     # Exception lists: each is copied, with every item, as the copy's own. A list shared by every space
     # (agnostic, such as Elastic Defend's) stays as it is while the copy stays on the same Kibana. One
-    # that can't be copied stops here, before anything is created, so no exception is lost.
+    # that can't be copied stops here, before anything is created, so no exception is lost. One Kibana
+    # doesn't have in the source space is left out (NO_SUCH_LIST).
     original_lists = list(rule.get("exceptions_list") or [])
-    made_lists = []
+    made_lists, missing_lists = [], []
 
     def _drop_made_lists():
         for made in made_lists:
@@ -2876,7 +2998,11 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
                 new_exceptions.append(exception)
                 continue
             exc_obj = get_exception_list(exception.get("list_id"), source_space, session=src_session,
-                                         base_url=src_base, namespace_type=exception.get("namespace_type"))
+                                         base_url=src_base, namespace_type=exception.get("namespace_type"),
+                                         missing=NO_SUCH_LIST)
+            if exc_obj is NO_SUCH_LIST:
+                missing_lists.append(exception.get("list_id"))
+                continue
             new_exc = exc_obj and create_exception_list_for_rule(
                 exc_obj, rule_name, source_space, target_space,
                 source_session=src_session, source_base_url=src_base,
@@ -2901,33 +3027,52 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
         rule["rule_id"] = target_existing_id
     action = "Updated" if target_existing_id else "Created"
 
-    for _attempt in range(3):
-        if target_existing_id:
-            response, heal_note = _put_rule(tgt_session, tgt_base, target_space, rule, on_target_recreated)
-            if heal_note:
-                log_info(f"Promotion target: {heal_note}")
-        else:
-            response = tgt_session.post(url, json=rule)
-        # Kibana names a connector it doesn't have (its connectors couldn't be listed beforehand):
-        # go without that action rather than fail the whole rule. A missing connector is a 404
-        # ("Saved object [action/…] not found") as often as a 400.
-        missing = ({a or b for a, b in _MISSING_ACTION.findall(response.text or "")}
-                   if response.status_code in (400, 404) else set())
-        refused = [a for a in rule.get("actions") or [] if a.get("id") in missing]
-        if not refused:
-            break
-        rule["actions"] = [a for a in rule["actions"] if a not in refused]
-        left_behind += [a.get("id") for a in refused]
-    note = _actions_note(left_behind, target_space)
+    retyped = None          # the rule made again, when it became another type of rule than the one overwritten
+    if target_live and target_live.get("type") and rule.get("type") != target_live.get("type"):
+        # Kibana can't change a rule's type in place: it is deleted and created again (_retype_rule).
+        from app.services.rule_origins import is_prebuilt
+        if is_prebuilt(target_live):
+            _drop_made_lists()
+            return False, (f"It is {_a(_TYPE_NAMES.get(rule.get('type'), rule.get('type')))} rule and the rule in "
+                           f"{target_space} is one of Elastic's prebuilt rules of another type, which Kibana can't "
+                           "change in place and TIDE doesn't re-create.")
+        if rule.get("type") == "esql":
+            for key in _NOT_FOR_ESQL:
+                rule.pop(key, None)
+        ok, message, made = _retype_rule(tgt_session, tgt_base, target_space, rule, target_live, on_target_recreated)
+        if not ok:
+            _drop_made_lists()
+            return False, f"Could not update the rule in {target_space}: {message}"
+        log_info(f"Promotion target: {message}")
+        retyped = made or {}
+    else:
+        for _attempt in range(3):
+            if target_existing_id:
+                response, heal_note = _put_rule(tgt_session, tgt_base, target_space, rule, on_target_recreated)
+                if heal_note:
+                    log_info(f"Promotion target: {heal_note}")
+            else:
+                response = tgt_session.post(url, json=rule)
+            # Kibana names a connector it doesn't have (its connectors couldn't be listed beforehand):
+            # go without that action rather than fail the whole rule. A missing connector is a 404
+            # ("Saved object [action/…] not found") as often as a 400.
+            missing = ({a or b for a, b in _MISSING_ACTION.findall(response.text or "")}
+                       if response.status_code in (400, 404) else set())
+            refused = [a for a in rule.get("actions") or [] if a.get("id") in missing]
+            if not refused:
+                break
+            rule["actions"] = [a for a in rule["actions"] if a not in refused]
+            left_behind += [a.get("id") for a in refused]
+    note = _actions_note(left_behind, target_space) + _missing_lists_note(missing_lists, source_space)
 
-    if response.status_code not in (200, 201):
+    if retyped is None and response.status_code not in (200, 201):
         _drop_made_lists()
         error_msg = f"Could not {action.lower()[:-1]} the rule in {target_space}: {response.status_code} - {response.text}"
         log_error(error_msg)
         return False, error_msg
     
     try:
-        response_rule = response.json() or {}
+        response_rule = retyped if retyped is not None else (response.json() or {})
     except Exception:
         response_rule = {}
     target_rule_id = response_rule.get("rule_id") or response_rule.get("id") or rule_id

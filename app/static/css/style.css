@@ -1012,9 +1012,11 @@ a:hover { color: var(--color-primary); }
 
 
 /* ================================================================
- * RULE CARDS  (Layer 2 — bg-surface)
+ * RULE CARDS  (Layer 2 — bg-surface). A step card (a baseline technique, an ATT&CK object, a
+ * threat actor) is framed the same.
  * ================================================================ */
-.rule-card {
+.rule-card,
+.step-card {
   background: var(--color-bg-surface);
   border: var(--border-card);
   border-top: 1px solid var(--color-highlight-1);
@@ -1029,13 +1031,12 @@ a:hover { color: var(--color-primary); }
 }
 
 .rule-card:hover,
-.threat-card:hover {
+.step-card:hover {
   background: var(--color-bg-surface-hover);
   border-color: var(--color-border-strong);
   transform: translateY(-2px);
   box-shadow: var(--shadow-lg);
 }
-
 
 
 .rule-name {
@@ -1053,10 +1054,6 @@ a:hover { color: var(--color-primary); }
 }
 
 
-
-
-
-
 .mitre-pills-row {
   display: flex;
   justify-content: flex-end;
@@ -1070,17 +1067,10 @@ a:hover { color: var(--color-primary); }
 }
 
 
-
-
-
 /* .sev-pill, .mitre-pill, .mitre-more, .mitre-none → canonical defs above (PILL SYSTEM / MITRE PILLS) */
 
 
-
-
-
-.score-track,
-.coverage-track {
+.score-track {
   height: 5px;
   background-color: var(--color-bg-base);
   border-radius: var(--radius-full);
@@ -1088,13 +1078,11 @@ a:hover { color: var(--color-primary); }
 }
 
 .score-fill,
-.progress-fill,
-.coverage-fill {
+.progress-fill {
   height: 100%;
   border-radius: var(--radius-full);
   transition: width var(--transition-normal);
 }
-
 
 
 .meta-item {
@@ -1714,7 +1702,11 @@ a:hover { color: var(--color-primary); }
 .client-list-item--danger   { border-left-color: var(--color-danger); }
 .client-list-item--warning  { border-left-color: var(--color-warning); }
 .client-list-item__body { flex: 1; min-width: 0; display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
-.client-gitlab-message { flex-basis: 100%; }   /* why a GitLab project can't be used, on a line of its own */
+.client-gitlab-message { flex-basis: 100%; white-space: normal; }   /* a GitLab project's last backup, on a line of its own, never cut short */
+/* What a GitLab project needs attention for, in full, behind its ⚠ */
+.client-siem-edit-popover.client-gitlab-why { width: 24rem; max-width: calc(100vw - 2rem); max-height: 20rem; overflow-y: auto;
+  font-size: var(--fs-md); line-height: 1.45; color: var(--color-text); }
+.client-gitlab-why ul { margin: 0; padding: 0; list-style: none; }
 .client-gitlab-backup[hidden] { display: none; }   /* a GitLab project's branch, folder and destinations: rule backup only */
 .client-siem-dot { display: inline-block; width: 0.7rem; height: 0.7rem; border-radius: 999px; flex: 0 0 auto; border: 1px solid rgba(0,0,0,0.15); }
 .client-siem-edit-popover {
@@ -2215,7 +2207,6 @@ a:hover { color: var(--color-primary); }
 .btn-block { width: 100%; }
 
 
-
 .btn-secondary:hover {
   background: var(--color-info-bg);
   color: var(--color-info-text);
@@ -2541,69 +2532,19 @@ a:hover { color: var(--color-primary); }
 @media (max-width: 1200px) { .metrics-grid { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 768px)  { .metrics-grid { grid-template-columns: repeat(2, 1fr); } }
 
-.rules-grid,
-.threats-grid {
+.rules-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 1rem;
 }
 
-@media (max-width: 1200px) { .rules-grid, .threats-grid { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 768px)  { .rules-grid, .threats-grid { grid-template-columns: 1fr; } }
+@media (max-width: 1200px) { .rules-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 768px)  { .rules-grid { grid-template-columns: 1fr; } }
 
 
 /* ================================================================
- * THREAT CARDS
+ * SOURCE PILLS  (ATT&CK domains, OpenCTI and other connectors)
  * ================================================================ */
-.threat-card {
-  background: var(--color-bg-surface);
-  border: var(--border-card);
-  border-top: 1px solid var(--color-highlight-1);
-  border-radius: var(--radius-lg);
-  padding: 1rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  transition: all var(--transition-fast);
-  box-shadow: var(--shadow);
-}
-
-/* .threat-card:hover merged with .rule-card:hover above */
-
-.threat-card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 0.5rem;
-}
-
-.threat-card-title {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex: 1;
-  min-width: 0;
-}
-
-.actor-flag { font-size: 1.25rem; flex-shrink: 0; }
-
-.actor-name {
-  font: var(--h4);
-  color: var(--color-text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  margin: 0;
-}
-
-.fully-covered-badge { flex-shrink: 0; }
-
-.threat-card-sources {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem;
-}
-
 .source-pill {
   display: inline-flex;
   align-items: center;
@@ -2645,37 +2586,8 @@ a:hover { color: var(--color-primary); }
   text-align: center;
 }
 
-.threat-card-aliases {
-  font: var(--small);
-  color: var(--color-text-secondary);
-  margin: 0;
-  font-style: italic;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.threat-card-desc {
-  font: var(--small);
-  color: var(--color-text-muted);
-  margin: 0;
-  line-height: 1.4;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
 /* Coverage bars */
 .coverage-section { margin-top: auto; }
-
-.coverage-meta {
-  display: flex;
-  justify-content: space-between;
-  font: var(--small);
-  color: var(--color-text-muted);
-  margin-bottom: 0.25rem;
-}
 
 .progress-track {
   height: 6px;
@@ -2684,99 +2596,13 @@ a:hover { color: var(--color-primary); }
   overflow: hidden;
 }
 
-/* .progress-fill → merged with .score-fill, .coverage-fill above */
+/* .progress-fill → merged with .score-fill above */
 
 .progress-good { background-color: var(--color-sev-4); }
 .progress-warn { background-color: var(--color-sev-2); }
 .progress-bad  { background-color: var(--color-sev-1); }
 
-/* TTP Expander */
-.ttp-expander {
-  border-top: 1px solid var(--color-border-muted);
-  padding-top: 0.75rem;
-  margin-top: 0.5rem;
-}
-
-.ttp-summary {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  cursor: pointer;
-  font: var(--small);
-  color: var(--color-text-secondary);
-  padding: 0.25rem 0;
-}
-
-.ttp-summary:hover { color: var(--color-text); }
-.ttp-summary::-webkit-details-marker { display: none; }
-.ttp-summary { list-style: none; }
-
-.expand-icon {
-  transition: transform var(--transition-fast);
-  font-size: 0.75rem;
-}
-
-.ttp-expander[open] .expand-icon { transform: rotate(180deg); }
-
-.ttp-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin-top: 1rem;
-  padding-top: 0.75rem;
-  border-top: 1px solid var(--color-border-muted);
-  max-height: 200px;
-  overflow-y: auto;
-}
-
-.ttp-tag {
-  font-size: 0.7rem;
-  padding: 0.2rem 0.5rem;
-  border-radius: var(--radius-badge);
-  font-family: var(--font-mono);
-  white-space: nowrap;
-  cursor: pointer;
-  transition: all var(--transition-fast);
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-}
-
-.ttp-tag:hover { transform: scale(1.05); z-index: 10; }
-
-.ttp-covered {
-  background: var(--color-covered-glow);
-  color: var(--color-success-text);
-  border: 1px solid color-mix(in srgb, var(--color-covered) 55%, transparent);
-}
-
-.ttp-covered:hover { border-color: var(--color-covered); }
-
-.ttp-gap {
-  background: var(--color-gap-glow);
-  color: var(--color-danger-text);
-  border: 1px solid color-mix(in srgb, var(--color-gap) 55%, transparent);
-}
-
-.ttp-gap:hover { border-color: var(--color-gap); }
-
 /* .ttp-rule-count → canonical definition in HEATMAP section above */
-
-/* TTP list scrollbar */
-.ttp-list::-webkit-scrollbar { width: 4px; }
-.ttp-list::-webkit-scrollbar-track { background: var(--color-bg-surface); border-radius: 2px; }
-.ttp-list::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 2px; }
-
-.ttp-expander[open] {
-  position: relative;
-  z-index: 10;
-  background: var(--color-bg-surface);
-  margin: 0.75rem -1rem -1rem -1rem;
-  padding: 0.5rem 1rem 1rem 1rem;
-  border-radius: 0 0 var(--radius-md) var(--radius-md);
-  border-top: 1px solid var(--color-border-muted);
-  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
-}
 
 
 /* ================================================================
@@ -2826,93 +2652,12 @@ a:hover { color: var(--color-primary); }
   transform: translateX(-50%) translateY(0);
 }
 
-/* Actor flags */
-.actor-flag-icon {
-  width: 20px;
-  height: 15px;
-  border-radius: 2px;
-  margin-right: 0.5rem;
-  flex-shrink: 0;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1);
-}
-
-.actor-flag-placeholder {
-  width: 20px;
-  height: 15px;
-  margin-right: 0.5rem;
-  flex-shrink: 0;
-}
-
-.threat-aliases {
-  font: var(--small);
-  color: var(--color-text-muted);
-  margin-bottom: 0.75rem;
-  font-style: italic;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.expand-chevron {
-  width: 14px;
-  height: 14px;
-  opacity: 0.7;
-  transition: transform var(--transition-fast);
-  transform: rotate(90deg);
-}
-
-.ttp-expander[open] .expand-chevron { transform: rotate(-90deg); }
-
-
 /* ================================================================
- * THREAT CARD LAYOUT EXTRAS
+ * SCORE FILLS, STATUS ICONS
  * ================================================================ */
-.threat-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  margin-bottom: 0.5rem;
-}
-
-.threat-header-left {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex: 1;
-  min-width: 0;
-}
-
-.source-pills {
-  display: flex;
-  flex-wrap: nowrap;
-  gap: 0.15rem;
-  flex-shrink: 0;
-}
-
-.threat-desc {
-  font: var(--small);
-  color: var(--color-text-secondary);
-  line-height: 1.5;
-  flex: 1;
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 4;
-  line-clamp: 4;
-  -webkit-box-orient: vertical;
-  margin-bottom: 0.75rem;
-}
-
-.threat-coverage { margin-top: auto; }
-
-.coverage-value { font-weight: 600; }
-
-/* .coverage-track merged with .score-track above */
-
-/* .coverage-fill merged with .score-fill, .progress-fill above */
-.score-fill.fill-success, .coverage-fill.fill-success { background-color: var(--color-success); }
-.score-fill.fill-warning, .coverage-fill.fill-warning { background-color: var(--color-warning); }
-.score-fill.fill-danger,  .coverage-fill.fill-danger  { background-color: var(--color-danger); }
+.score-fill.fill-success { background-color: var(--color-success); }
+.score-fill.fill-warning { background-color: var(--color-warning); }
+.score-fill.fill-danger { background-color: var(--color-danger); }
 
 .status-icon {
   width: 11px;
@@ -3065,6 +2810,8 @@ a:hover { color: var(--color-primary); }
   opacity: 0 !important; pointer-events: none !important;
 }
 .tide-select > .tide-filter-dropdown { min-width: 100%; }
+/* A panel that would run past the dialog it is in floats over it (app.js floatDropdown) */
+.tide-filter-dropdown--float { position: fixed; z-index: 300; overscroll-behavior: contain; }
 /* In a window (rule, technique, MITRE) the same control is compact, like the window's own */
 .rule-modal .tide-filter-btn { height: 30px; padding: 0.25rem 0.6rem; font-size: 0.8rem; }
 .rule-modal .tide-select { min-width: 0; }
@@ -3081,20 +2828,6 @@ a:hover { color: var(--color-primary); }
 /* ================================================================
  * PAGINATION
  * ================================================================ */
-.pagination {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 1rem;
-  margin-top: 1.5rem;
-  padding-top: 1rem;
-  border-top: var(--border-card);
-}
-
-.pagination-info {
-  color: var(--color-text-muted);
-  font: var(--small);
-}
 
 .main-content:has(.rule-browser-page) {
   display: flex;
@@ -3379,7 +3112,6 @@ button.nav-child { border: 0; background: none; width: 100%; font: inherit; font
   fill: none;
   stroke-width: 2;
 }
-
 
 
 /* ================================================================
@@ -4676,7 +4408,6 @@ a.metric-card--link:focus-visible { outline: 2px solid var(--color-primary); out
   border: 1px solid var(--color-info);
 }
 
-/* .score-fill.fill-* merged with .coverage-fill.fill-* in THREAT CARD LAYOUT section */
 
 /* Metric card compact variants for modals */
 .metric-card.metric-compact    { padding: 0.75rem; }
@@ -5790,12 +5521,9 @@ body.is-resizing-slide-panel {
 }
 
 
-
 .rule-score {
   color: #d4a850;
 }
-
-
 
 
 .mitre-tag {
@@ -7231,12 +6959,16 @@ body.is-resizing-slide-panel {
 .score-ring--danger  { --ring: var(--color-danger); }
 .score-ring--muted   { --ring: var(--color-border-strong); }
 .score-ring--muted .score-ring__value { color: var(--color-text-muted); }
+/* Nothing to score (a baseline technique no rule covers): the track and the dash in its status's colour */
+.score-ring--empty { background: color-mix(in srgb, var(--ring) 35%, var(--color-bg-layer-4)); }
+.score-ring--empty .score-ring__value { color: var(--ring); }
 
 /* ── Rule card (Rule Health grid + MITRE side panel: one template) ─
  * Score ring | title with one line of facts beneath (destination, severity, ATT&CK); a row of
  * flags only when something needs noticing; footer = validation status (left) and author.
  * Left edge colour = the destination's colour, else validation status. */
-.rule-card {
+.rule-card,
+.step-card {
   --edge: var(--color-border-strong);
   height: auto;
   gap: 0.65rem;
@@ -7248,9 +6980,9 @@ body.is-resizing-slide-panel {
 .rule-card--val-warning { --edge: var(--color-warning); }
 .rule-card--val-danger  { --edge: var(--color-danger); }
 .rule-card--val-muted   { --edge: var(--color-border-strong); }
-.rule-card:hover { border-color: color-mix(in srgb, var(--color-primary) 45%, var(--color-border)); border-left-color: var(--edge); }
-.rule-card:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
-.rule-card:hover .score-ring::before { background: var(--color-bg-surface-hover); }
+.rule-card:hover, .step-card:hover { border-color: color-mix(in srgb, var(--color-primary) 45%, var(--color-border)); border-left-color: var(--edge); }
+.rule-card:focus-visible, .step-card:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.rule-card:hover .score-ring::before, .step-card:hover .score-ring::before { background: var(--color-bg-surface-hover); }
 
 .rc-head { display: flex; align-items: flex-start; gap: 0.75rem; }
 .rc-head .score-ring { flex-shrink: 0; }
@@ -7305,7 +7037,7 @@ body.is-resizing-slide-panel {
 @media (max-width: 1280px) { .rules-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 900px)  { .rules-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 600px)  { .rules-grid { grid-template-columns: 1fr; } }
-.rule-card { min-width: 0; }
+.rule-card, .step-card { min-width: 0; }
 
 /* Side panel: let the grid track shrink to the panel (it was sized to the
  * widest child's min-content and overflowed by ~25px). */
@@ -7428,6 +7160,9 @@ body.is-resizing-slide-panel {
 }
 .more-btn:hover, .more-btn[aria-expanded="true"] { color: var(--color-text); background: var(--color-bg-action-hover); }
 .more-btn:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 1px; }
+/* The same box holding a ⚠: something needs attention, and why opens from it */
+.more-btn--warning, .more-btn--warning:hover { color: var(--color-warning); }
+.more-btn--danger, .more-btn--danger:hover { color: var(--color-danger); }
 /* The X that closes every dialog, window and side panel (macros/modal.html close_button) */
 .rm-close {
   display: grid; place-items: center; flex-shrink: 0; width: 2rem; height: 2rem;
@@ -7880,7 +7615,6 @@ body.is-resizing-slide-panel {
 .rm-panel.is-collapsed .rm-panel__head { flex-wrap: nowrap; margin-bottom: 0; min-height: 1.5rem; }
 
 
-
 /* ── Metric card hover detail (Rule Health / dashboard stat cards) ──
  * Face shows a one-line summary (P:x S:x ...); the full legend appears on
  * hover or keyboard focus. */
@@ -8234,46 +7968,29 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .diag-access__result--refused { border: 1px solid var(--color-warning); background: var(--color-warning-bg); color: var(--color-warning-text); }
 
 
-
 /* ================================================================
  * BASELINE STEP CARD + STEP WINDOW  (system-scoped baseline board)
  * Mirrors the rule card / rule window so the two read as one app.
  * Left edge = this step's coverage status ON THIS SYSTEM.
  * ================================================================ */
+/* 4 cards wide, as Rule Health's grid. A step card is a rule card's frame and layout (rc-head,
+ * rc-meta): its ring is coverage, or a technique's strongest rule; its left edge, coverage. */
 .steps-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 1rem;
 }
-@media (max-width: 1280px) { .steps-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 860px)  { .steps-grid { grid-template-columns: 1fr; } }
+@media (max-width: 1280px) { .steps-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 900px)  { .steps-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 600px)  { .steps-grid { grid-template-columns: 1fr; } }
+.step-card--success { --edge: var(--color-success); }
+.step-card--warning { --edge: var(--color-warning); }
+.step-card--danger  { --edge: var(--color-danger); }
+.step-card--muted   { --edge: var(--color-border-strong); }
 
-.step-card {
-  display: flex;
-  flex-direction: column;
-  gap: 0.7rem;
-  min-height: 8.5rem;
-  padding: 0.85rem 0.9rem 0.75rem;
-  background: var(--color-bg-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  cursor: pointer;
-}
-.step-card:hover { border-color: color-mix(in srgb, var(--color-primary) 45%, var(--color-border)); }
-.step-card:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
-
-.sc-head { flex: 1; display: flex; align-items: flex-start; justify-content: space-between; gap: 0.6rem; }
-.sc-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.35rem; }
-.sc-title {
-  font-size: 0.88rem; font-weight: 600; line-height: 1.3; color: var(--color-text);
-  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
-}
-.sc-tactic { font-size: 0.7rem; color: var(--color-text-muted); display: flex; align-items: center; gap: 0.25rem; }
-.sc-side { flex: 0 1 46%; min-width: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 0.35rem; }
-.sc-side .mitre-pills-wrap { justify-content: flex-end; flex-wrap: wrap; }
-
+/* one line, as a rule card's footer: a long baseline name is cut short */
 .sc-foot {
-  display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+  display: flex; align-items: center; gap: 0.5rem; margin-top: auto; white-space: nowrap;
   font-size: 0.72rem; color: var(--color-text-muted);
   border-top: 1px solid var(--color-border-muted); padding-top: 0.5rem;
 }
@@ -8281,7 +7998,7 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .sc-foot__none  { display: inline-flex; align-items: center; gap: 0.25rem; }
 .sc-foot__warn  { color: var(--color-warning-text); }
 .sc-foot__hint  { opacity: 0.8; }
-.sc-foot__baseline { margin-left: auto; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sc-foot__baseline { flex: 0 1 auto; min-width: 3rem; margin-left: auto; overflow: hidden; text-overflow: ellipsis; }
 
 /* ── Step window ── */
 /* Technique window: the rule window's frame (.rule-modal), with its own contents. */
@@ -8375,7 +8092,37 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .sys-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
 .sys-header__main { min-width: 0; flex: 1 1 auto; }
 .sys-header__clf { font-size: 0.7rem; vertical-align: middle; margin-left: 0.5rem; }
-.sys-layout { display: contents; }
+/* Sections that fill what the page (a .rule-browser-page: Rule Health's layout) leaves below its
+   header and figures, so every section's heading is always in view: a folded one is its heading;
+   open ones share the height, Baselines twice what the others get (at least 12rem, none taller
+   than its content: what one doesn't need goes to the others), and scroll inside themselves. A
+   section's filter bar stays at the top of it, and a technique grid scrolls under its filter bar
+   with each open outer group's heading (a baseline's) held at the top of the grid. */
+.rule-browser-page > .metrics-grid { flex: 0 0 auto; }
+.sys-fill { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 1rem; }
+.sys-fill > .sys-section { flex: 1 1 0; min-height: 12rem; max-height: max-content; display: flex; flex-direction: column; }
+.sys-fill > .sys-section[data-section="baselines"] { flex-grow: 2; }
+.sys-fill > .sys-section.is-collapsed { flex: 0 0 auto; min-height: 0; }
+.sys-fill > .sys-section > .sys-section__head { flex: 0 0 auto; }
+.sys-fill > .sys-section > .sys-section__body {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-gutter: stable;
+  margin-right: -0.5rem; padding: 0.1rem 0.5rem 0.25rem 0.1rem;
+}
+.sys-fill .sys-section__body .filters-bar { position: sticky; top: 0; z-index: 6; }
+.sys-fill > .sys-section:not(.is-collapsed) > .sys-section__body:has(> #system-steps-grid) { display: flex; flex-direction: column; overflow: hidden; }
+.sys-fill #system-steps-grid {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-gutter: stable;
+  margin-right: -0.5rem; padding: 0 0.5rem 0.25rem 0.1rem;
+}
+.sys-fill #system-steps-grid > .sys-group--outer[open] > .sys-group__head {
+  position: sticky; top: 0; z-index: 5;
+  background: var(--bg-level-2-subcard); border-radius: var(--radius-md) var(--radius-md) 0 0;   /* not inherit: a summary inherits from <details>' slot */
+}
+@media (max-width: 768px) {   /* as Rule Health: the page scrolls as a whole */
+  .sys-fill, .sys-fill > .sys-section, .sys-fill > .sys-section:not(.is-collapsed) > .sys-section__body:has(> #system-steps-grid) { display: block; }
+  .sys-fill > .sys-section { max-height: none; min-height: 0; margin-bottom: 1rem; }
+  .sys-fill > .sys-section > .sys-section__body, .sys-fill #system-steps-grid { overflow: visible; margin-right: 0; padding: 0; }
+}
 .sys-sections { display: flex; flex-direction: column; gap: 1rem; margin-top: 1rem; }
 .sys-section__head { display: flex; align-items: center; gap: 0.5rem; }
 .sys-section__title { display: inline-flex; align-items: center; gap: 0.45rem; margin: 0; font-size: 1.1rem; flex: 1 1 auto; min-width: 0; }
@@ -8399,6 +8146,7 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .sys-tactic { display: inline-flex; align-items: center; gap: 0.3rem; white-space: nowrap; }
 .sys-group--inner .sys-group__label { font-size: 0.85rem; }
 .sys-group__meta { margin-left: auto; font-size: 0.75rem; color: var(--color-text-muted); }
+.sys-group__head > .rh-more { flex: 0 0 auto; cursor: default; }
 .sys-group__body { padding: 0 0.8rem 0.8rem; }
 
 /* Rule Monitoring (#67): the Systems page's groups, issue → cause → rules; Rule Health's table. */
@@ -8409,6 +8157,11 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .rmon-table th:nth-child(3) { width: 7rem; }
 .rmon-table th:nth-child(4) { width: 7rem; }
 .rmon-table .rmon-detail { white-space: normal; overflow-wrap: anywhere; }
+/* Mute a rule: an icon at the end of its row; a muted row says who muted it, and why */
+.rmon-table th.rmon-col-mute { width: 2.75rem; }
+.rmon-table td.rmon-mute { text-align: right; padding: 0.15rem 0.35rem; overflow: visible; text-overflow: clip; }
+.rmon-table td.rmon-mute .btn-icon { display: inline-flex; padding: 0.35rem; }
+.rmon-muted { margin-top: 0.25rem; }
 .rmon-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin: 0 0 0.6rem; }
 /* A cause's GitLab issues sit at the end of its actions, so the buttons stay put however many there are. */
 .rmon-actions__issues { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-left: auto; }
@@ -8444,21 +8197,20 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
    The baseline card and table, one ATT&CK object each. Left edge = how much of the object's
    tradecraft the active client's enabled rules cover. */
 .cat-filters { margin-bottom: 0.85rem; }
-.cat-card, .cat-card:hover { border-left: 3px solid var(--color-border-strong); }
-.cat-card { min-height: 9.5rem; }
-.cat-card--full, .cat-card--full:hover { border-left-color: var(--color-success); }
-.cat-card--partial, .cat-card--partial:hover { border-left-color: var(--color-warning); }
-.cat-card--none, .cat-card--none:hover { border-left-color: var(--color-danger); }
-.cat-card__sub { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* aliases: the rest of the facts line, cut short (all of them on hover) */
+.cat-card__sub { flex: 1 1 0; min-width: 4rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cat-card__flag { width: 1.1rem; height: auto; margin-right: 0.3rem; vertical-align: -2px; border-radius: 2px; }
+/* the name, with its sources top right: each pill as wide as its code, and the name keeps nearly
+   half the line (three sources fit beside it, a fourth goes to a second row) */
+.cat-card__top { display: flex; align-items: flex-start; gap: 0.5rem; min-width: 0; }
+.cat-card__top .rc-title { flex: 1; min-width: 45%; }
+.cat-card__top .source-pill-row { flex: 0 1 auto; flex-wrap: wrap; justify-content: flex-end; }
+.cat-card__top .source-pill { min-width: 0; }
 /* A tactic with its icon, as on a system's technique cards (tactic_icon) */
 .cat-card__tactic { display: inline-flex; align-items: center; gap: 0.25rem; vertical-align: middle; }
 .cat-card__tactic + .cat-card__tactic { margin-left: 0.6rem; }
-.rm-chip > .icon, .sc-title > .icon, .rt-title > .icon, .sys-group__label > .icon { vertical-align: -2px; }
+.rm-chip > .icon, .rc-title > .icon, .rt-title > .icon, .sys-group__label > .icon { vertical-align: -2px; }
 .cat-card__id { font-family: var(--font-mono); font-size: 0.72rem; font-weight: 700; color: var(--color-text-secondary); }
-.cat-card__summary {
-  margin: 0; font-size: 0.76rem; line-height: 1.45; color: var(--color-text-muted);
-  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
-}
 .cat-table { min-width: 48rem; }
 .cat-table .cat-cell-id { font-family: var(--font-mono); font-size: 0.78rem; white-space: nowrap; }
 .cat-table--groups th:nth-child(1) { width: 6rem; }
@@ -8497,15 +8249,12 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .mw-sigma--test { color: var(--color-primary); }
 .mw-sigma--experimental { color: var(--color-warning); }
 /* A group, software or campaign window's Create baseline: a small form under its button. */
-.mw-baseline .btn { display: inline-flex; align-items: center; gap: 0.35rem; white-space: nowrap; }
-.mw-baseline__form { width: 20rem; max-width: calc(100vw - 2rem); padding: 0.75rem; }
-.mw-baseline__form form { display: flex; flex-direction: column; gap: 0.35rem; }
-.mw-baseline__form .form-input { width: 100%; box-sizing: border-box; font-size: 0.85rem; }
+/* "…" › Create baseline: the form in place of the menu's items */
+.mw-baseline__form { display: flex; flex-direction: column; gap: 0.35rem; width: 20rem; max-width: calc(100vw - 2rem); padding: 0.25rem 0.5rem 0.5rem; }
+.mw-baseline__form .form-input { width: 100%; font-size: 0.85rem; }
 .mw-baseline__form textarea.form-input { resize: vertical; }
 .mw-baseline__form .btn-primary { align-self: flex-end; }
-.mw-baseline__label { margin-top: 0.25rem; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-text-muted); }
 .mw-baseline__hint { margin: 0.25rem 0; font-size: 0.75rem; color: var(--color-text-muted); }
-@media (max-width: 640px) { .mw-baseline__text { display: none; } }
 .mw-sigma--deprecated, .mw-sigma--unsupported { color: var(--color-danger); }
 /* A coverage bar; --pct (0-100) set on the element. */
 .cov-bar { height: 0.45rem; border-radius: 999px; background: var(--bg-level-3-inner); border: 1px solid var(--color-border-muted); overflow: hidden; }
@@ -8529,9 +8278,6 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .tpl-delete { margin-right: auto; }
 .sys-dialog__row { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; }
 .sys-dialog__saved { margin: 0.35rem 0 0; font-size: 0.8rem; color: var(--color-success); }
-.sys-dialog__list { list-style: none; margin: 0 0 1rem; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
-.sys-dialog__item { display: flex; align-items: center; gap: 0.6rem; padding: 0.5rem 0.65rem; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--bg-level-2-subcard); }
-.sys-dialog__name { font-weight: 600; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sys-dialog__apply { margin-bottom: 1rem; }
 .sys-dialog__apply-row { display: flex; gap: 0.5rem; }
 .sys-dialog__apply-row select { flex: 1 1 auto; min-width: 0; }
@@ -8549,9 +8295,6 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
  * ================================================================ */
 
 /* Shared: a main column with a filter/side column beside it (systems, NIST pages) */
-.page-split__main { flex: 1 1 520px; min-width: 280px; max-width: 980px; }
-.page-split__side { flex: 0 1 320px; min-width: 260px; max-width: 100%; align-self: start; }
-.page-split__side--stack { display: flex; flex-direction: column; gap: 0.5rem; }
 /* Shared: id column · body · right column, in list cards (hosts, systems, NIST) */
 .row-grid { display: grid; grid-template-columns: minmax(120px, 170px) 1fr auto; gap: 0.75rem; align-items: center; }
 .row-grid--top { align-items: flex-start; }
@@ -8570,7 +8313,6 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 
 /* Data-driven values come in as custom properties (style="--pct: 40%"), never as properties. */
 .icon-text { display: inline-flex; align-items: center; gap: var(--gap, 0.35rem); }
-.coverage-fill.coverage-fill--pct { width: var(--pct); }
 .matrix-container.matrix-container--cols { grid-template-columns: repeat(var(--cols), minmax(120px, 1fr)); }
 .client-siem-dot, .client-siem-swatch { background: var(--swatch); }
 /* A classification's colour (--u-bg-color, with u-bg-dyn / u-bg-dyn-tint for the fill) */
@@ -8627,6 +8369,22 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .rd-line.del .rd-mark { background: rgba(var(--color-danger-rgb), 0.35); color: inherit; border-radius: 2px; }
 .rd-line.add .rd-mark { background: rgba(var(--color-success-rgb), 0.35); color: inherit; border-radius: 2px; }
 .rd-chips { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+/* Combining a list item by item: a tick per item only one side has; unticked, it is struck through. */
+.rd-pick { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; }
+.rd-pick--lines { flex-direction: column; align-items: stretch; }
+.rd-pick__item { display: inline-flex; align-items: flex-start; gap: 0.4rem; padding: 0.15rem 0.5rem; border-radius: var(--radius-badge);
+  font-size: 0.85rem; cursor: pointer; overflow-wrap: anywhere; }
+.rd-pick--lines .rd-pick__item { border-radius: 6px; font-size: 0.82rem; }
+.rd-pick__item input { margin: 0.15rem 0 0; flex-shrink: 0; accent-color: var(--color-primary); }
+.rd-pick__item input:not(:checked) + span { text-decoration: line-through; opacity: 0.55; }
+.rd-pick__both { font-size: 0.8rem; color: var(--color-text-secondary); }
+/* A text edited in place: Edit result opens a box holding the side taken's text. */
+.rd-edit { margin-top: 0.5rem; }
+.rd-edit [hidden] { display: none; }
+.rd-edit__text { width: 100%; font-family: var(--font-mono); font-size: 0.8rem; line-height: 1.5; resize: vertical; }
+.rd-edit__foot { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-top: 0.35rem; }
+.rd-field--off .rd-pick, .rd-field--off .rd-edit { opacity: 0.5; }
+.rd-note { margin: -0.25rem 0 0.5rem; }
 .rd-toolbar { display: flex; justify-content: flex-end; margin-bottom: 0.75rem; }
 .rd-toggle { display: inline-flex; border: 1px solid var(--color-border); border-radius: 6px; overflow: hidden; }
 .rd-toggle button { background: transparent; border: 0; padding: 0.25rem 0.75rem; cursor: pointer; color: inherit; font: inherit; font-size: 0.85rem; }
@@ -8695,11 +8453,8 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .cve-card-item.nist-capability { display: block; border-left-width: 4px; }
 
 /* Heatmap (pages/threats/heatmap.html) and Threat Landscape cards (partials/threats_grid.html) */
-.heatmap-toggle { display: flex; align-items: center; gap: 0.375rem; height: 38px; }
 .filter-group.filter-group--md { min-width: 200px; max-width: 300px; }
 .filter-group.filter-group--lg { min-width: 250px; max-width: 350px; }
-.threat-card-foot { margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--border-color); }
-.threat-card-foot__btn { width: 100%; display: flex; align-items: center; justify-content: center; gap: 0.375rem; font-size: 0.75rem; }
 
 /* Classifications (partials/classification_list.html) */
 .classification-row { display: flex; align-items: center; justify-content: space-between; padding: 0.4rem 0.6rem; background: var(--color-bg-layer-2); border-radius: var(--radius-sm); border: 1px solid var(--color-border); }

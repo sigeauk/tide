@@ -18,8 +18,10 @@
 {%- if f.first_seen -%}<span title="First seen {{ f.first_seen.strftime('%Y-%m-%d %H:%M') }}">{{ f.age }}</span>{%- else -%}<span class="text-muted">—</span>{%- endif -%}
 {%- endmacro %}
 
+{# A rule row opens the rule window; ``data-rule-dom-id`` (the rule's, not an id, as one rule can be
+   listed under several issues) is what the window's < and > walk the list by (app.js). #}
 {% macro open_attrs(f) -%}
-data-rule-open role="button" tabindex="0" aria-label="Open rule: {{ f.name }}"
+data-rule-open data-rule-dom-id="{{ rule_dom_id(f) }}" role="button" tabindex="0" aria-label="Open rule: {{ f.name }}"
 hx-get="/api/rules/{{ f.rule_id | urlencode }}/history-modal?space={{ f.space | urlencode }}&amp;siem_id={{ f.siem_id | urlencode }}"
 hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset" hx-trigger="click, keyup[key=='Enter']"
 {%- endmacro %}
@@ -28,7 +30,7 @@ hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset" hx-trigger="
 {% macro rule_rows(rows) -%}
 <div class="sys-table-wrap">
 <table class="rules-table rmon-table">
-    <thead><tr><th>Rule</th><th>Destination</th><th>State</th><th>For</th><th>What was found</th></tr></thead>
+    <thead><tr><th>Rule</th><th>Destination</th><th>State</th><th>For</th><th>What was found</th><th class="rmon-col-mute"><span class="sr-only">Mute</span></th></tr></thead>
     <tbody>
     {% for f in rows | sort(attribute='sort_name') %}
         {% if f.rule_id %}
@@ -43,7 +45,8 @@ hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset" hx-trigger="
             <td></td>
         {% endif %}
             <td>{{ since(f) }}</td>
-            <td class="rt-sub rmon-detail" title="{{ f.detail }}">{{ f.detail | truncate(180, end='…') }}{{ fix(f) }}</td>
+            <td class="rt-sub rmon-detail" title="{{ f.detail }}">{{ f.detail | truncate(180, end='…') }}{{ muted_note(f, cause_above=true) }}{{ fix(f) }}</td>
+            {{ mute_cell(f) }}
         </tr>
     {% endfor %}
     </tbody>
@@ -88,11 +91,51 @@ hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset" hx-trigger="
 {%- endif -%}
 {%- endmacro %}
 
+{# Mute rule… (rule_monitoring.mute_form) on every rule's row: this problem on the rule, every problem it
+   has (both until unmuted), or the problem's cause on every rule it affects; a rule muted on its own
+   has Unmute rule instead, which lifts the mute as it was made. ``consume`` keeps the click from also
+   opening the rule window. #}
+{% macro mute_cell(f) -%}
+<td class="rmon-mute">
+{%- if f.rule_id and can_fix and filters.show == 'open' %}
+{%- if f.mute %}
+<button name="Unmute Rule" type="button" class="btn-icon"
+        hx-post="/api/rule-monitoring/unmute" hx-vals='{{ {"rule_id": f.rule_id, "siem_id": f.siem_id, "space": f.space, "issue": f.mute.issue, "cause": f.mute.cause} | tojson }}'
+        hx-trigger="click consume" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+        title="Unmute rule{{ ' (it stays muted with its cause)' if f.ack }}" aria-label="Unmute rule">{{ icon('bell', '14') }}</button>
+{%- else %}
+<button name="Mute Rule" type="button" class="btn-icon"
+        hx-get="/api/rule-monitoring/mute-form?rule_id={{ f.rule_id | urlencode }}&amp;siem_id={{ f.siem_id | urlencode }}&amp;space={{ f.space | urlencode }}&amp;issue={{ f.issue | urlencode }}&amp;cause={{ (f.cause or '') | urlencode }}&amp;name={{ (f.name or f.rule_id) | urlencode }}&amp;where={{ (f.destination or '') | urlencode }}"
+        hx-trigger="click consume" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+        title="{{ 'Mute rule… on its own as well, so it stays muted if its cause comes back' if f.ack else 'Mute rule…: this problem, every problem on it, or its cause' }}"
+        aria-label="Mute rule…">{{ icon('bell-off', '14') }}</button>
+{%- endif %}
+{%- endif %}
+</td>
+{%- endmacro %}
+
+{# Why a row is under Muted: with its cause (whose Unmute cause is the cause's, above it, or, grouped by
+   rule where no cause is above, on the row) and/or on its own. #}
+{% macro muted_note(f, cause_above) -%}
+{%- if f.ack %}
+{%- if cause_above %}<div class="rmon-muted text-muted">Muted with its cause: use <strong>Unmute cause</strong> above.</div>
+{%- else %}<div class="rmon-muted text-muted">Muted with its cause by {{ f.ack.by }} on {{ f.ack.at.strftime('%Y-%m-%d') }}{% if f.ack.note %}: {{ f.ack.note }}{% else %}.{% endif %}</div>
+{%- if can_fix and filters.show == 'open' %}
+<div class="rmon-fix"><button name="Unmute Cause" type="button" class="btn btn-secondary btn-sm"
+        hx-post="/api/rule-monitoring/unmute-cause" hx-vals='{{ {"issue": f.issue, "cause": f.cause, "siem_id": f.ack_siem_ids | join(","), "space": f.space} | tojson }}'
+        hx-trigger="click consume" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+        title="Unmute {{ f.cause or 'this problem' }} on every rule it affects">{{ icon_text('bell', 'Unmute cause', '13') }}</button></div>
+{%- endif %}
+{%- endif %}
+{%- endif %}
+{%- if f.mute %}<div class="rmon-muted text-muted">Rule muted {{ 'for this problem' if f.mute.issue else 'for every problem' }} by {{ f.mute.by }} on {{ f.mute.at.strftime('%Y-%m-%d') }}{% if f.mute.note %}: {{ f.mute.note }}{% else %}.{% endif %}</div>{% endif -%}
+{%- endmacro %}
+
 {# Group by rule: a rule's findings. #}
 {% macro finding_rows(node) -%}
 <div class="sys-table-wrap">
 <table class="rules-table rmon-table">
-    <thead><tr><th>Issue</th><th>Cause</th><th>Severity</th><th>For</th><th>What was found</th></tr></thead>
+    <thead><tr><th>Issue</th><th>Cause</th><th>Severity</th><th>For</th><th>What was found</th><th class="rmon-col-mute"><span class="sr-only">Mute</span></th></tr></thead>
     <tbody>
     {% for f in node.rows %}
         <tr class="rule-row rule-row--val-{{ 'danger' if f.severity == 'error' else 'warning' }}" {% if f.rule_id %}{{ open_attrs(f) }}{% endif %}>
@@ -100,7 +143,8 @@ hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset" hx-trigger="
             <td class="rt-sub">{{ f.cause or '—' }}</td>
             <td>{{ severity(f.severity) }}</td>
             <td>{{ since(f) }}</td>
-            <td class="rt-sub rmon-detail" title="{{ f.detail }}">{{ f.detail | truncate(180, end='…') }}</td>
+            <td class="rt-sub rmon-detail" title="{{ f.detail }}">{{ f.detail | truncate(180, end='…') }}{{ muted_note(f, cause_above=false) }}</td>
+            {{ mute_cell(f) }}
         </tr>
     {% endfor %}
     </tbody>
@@ -108,7 +152,7 @@ hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset" hx-trigger="
 </div>
 {%- endmacro %}
 
-{# A cause's actions: Raise issue, Sync, Acknowledge or Unmute, then at the end of the row the GitLab
+{# A cause's actions: Raise issue, Sync, Mute cause… or Unmute cause, then at the end of the row the GitLab
    issues raised for it (open ones and those closed in the last few days, gitlab_issues.shown; state
    and assignee are GitLab's when TIDE last looked), so the buttons stay put. In the group's body, so
    a click never folds the group. #}
@@ -147,14 +191,15 @@ hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset" hx-trigger="
             title="Sync {{ node.where }} now">{{ icon_text('refresh-cw', 'Sync this destination', '13') }}</button>
     {% endif %}
     {% if acked %}
-    <button name="Unmute" type="button" class="btn btn-secondary btn-sm"
-            hx-post="/api/rule-monitoring/unack" hx-vals='{{ {"issue": node.issue, "cause": node.cause, "siem_id": node.siem_ids | join(","), "space": node.space} | tojson }}'
-            hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">{{ icon_text('bell', 'Unmute', '13') }}</button>
-    {% else %}
-    <button name="Acknowledge" type="button" class="btn btn-secondary btn-sm"
-            hx-get="/api/rule-monitoring/ack-form?{{ q }}&amp;label={{ node.label | urlencode }}"
+    <button name="Unmute Cause" type="button" class="btn btn-secondary btn-sm"
+            hx-post="/api/rule-monitoring/unmute-cause" hx-vals='{{ {"issue": node.issue, "cause": node.cause, "siem_id": node.siem_ids | join(","), "space": node.space} | tojson }}'
             hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
-            title="Mute this cause until it affects more rules, with a note">{{ icon_text('bell-off', 'Acknowledge…', '13') }}</button>
+            title="Unmute this cause on every rule it affects">{{ icon_text('bell', 'Unmute cause', '13') }}</button>
+    {% else %}
+    <button name="Mute Cause" type="button" class="btn btn-secondary btn-sm"
+            hx-get="/api/rule-monitoring/mute-form?scope=cause&amp;issue={{ node.issue | urlencode }}&amp;cause={{ node.cause | urlencode }}&amp;cause_siem_ids={{ node.siem_ids | join(',') | urlencode }}&amp;space={{ node.space | urlencode }}&amp;label={{ node.label | urlencode }}"
+            hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+            title="Mute this cause on every rule it affects, with a note, until it affects more rules">{{ icon_text('bell-off', 'Mute cause…', '13') }}</button>
     {% endif %}
     {% endif %}
     {% if node.gitlab_issues %}
@@ -168,9 +213,9 @@ hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset" hx-trigger="
     {% endif %}
 </div>
 {% if node.ack %}
-<p class="text-muted rmon-meaning">Acknowledged by {{ node.ack.by }} on {{ node.ack.at.strftime('%Y-%m-%d') }}{% if node.ack.note %}: {{ node.ack.note }}{% else %}.{% endif %}</p>
+<p class="text-muted rmon-meaning">Cause muted by {{ node.ack.by }} on {{ node.ack.at.strftime('%Y-%m-%d') }}{% if node.ack.note %}: {{ node.ack.note }}{% else %}.{% endif %}</p>
 {% elif node.ack_lapsed %}
-<p class="text-warning rmon-meaning">Acknowledged by {{ node.ack_lapsed.by }} on {{ node.ack_lapsed.at.strftime('%Y-%m-%d') }}, but it now affects {{ node.ack_lapsed.now }} rules where it affected {{ node.ack_lapsed.rules }} (counting disabled ones), so it is back in the list.{% if node.ack_lapsed.note %} Their note: {{ node.ack_lapsed.note }}{% endif %}</p>
+<p class="text-warning rmon-meaning">Cause muted by {{ node.ack_lapsed.by }} on {{ node.ack_lapsed.at.strftime('%Y-%m-%d') }}, but it now affects {{ node.ack_lapsed.now }} rules where it affected {{ node.ack_lapsed.rules }} (counting disabled ones), so it is back in the list.{% if node.ack_lapsed.note %} Their note: {{ node.ack_lapsed.note }}{% endif %}</p>
 {% endif %}
 {%- endmacro %}
 

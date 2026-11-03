@@ -1,7 +1,8 @@
-{% from "macros/metrics.html" import metric_card, metric_change, metric_change_tip %}
+{% from "macros/metrics.html" import metric_card, metric_change, metric_change_tip, metric_flow, metric_flow_tip %}
 {% set keys = metric_keys | default(none) %}{% set link = metric_link | default(none) %}
-{# A Dashboard section comparing with an earlier day passes each card's change; the page passes none. #}
-{% set changes = changes | default({}) %}
+{# A Dashboard section comparing with an earlier day passes each card's change, and Validated's
+   validations and lapses (flows); the page passes neither. #}
+{% set changes = changes | default({}) %}{% set flows = flows | default({}) %}
 {% from "macros/icons.html" import icon, icon_text %}
 <!-- Metrics Row Partial - swappable via HTMX -->
 
@@ -54,12 +55,14 @@
     <p class="metric-sub">
         <span class="text-warning">D:{{ metrics.validation_amber_count }}</span> <span class="text-danger">E:{{ metrics.validation_expired_count }}</span> <span>N:{{ metrics.never_validated_count }}</span>
     </p>
-    {{ metric_change(changes.validated) }}
+    {% if flows.validated %}{{ metric_flow(flows.validated, 'validated', 'lapsed', up_good=true) }}
+    {% else %}{{ metric_change(changes.validated) }}{% endif %}
     <div class="metric-tip" role="tooltip">
         <div class="metric-tip__row"><b class="text-success">V</b> Validated: currently in policy <span>{{ metrics.validated_count }}</span></div>
         <div class="metric-tip__row"><b class="text-warning">D</b> Due soon: validation expiring shortly <span>{{ metrics.validation_amber_count }}</span></div>
         <div class="metric-tip__row"><b class="text-danger">E</b> Expired: validation has lapsed, no longer validated <span>{{ metrics.validation_expired_count }}</span></div>
         <div class="metric-tip__row"><b>N</b> Never validated <span>{{ metrics.never_validated_count }}</span></div>
+        {{ metric_flow_tip(flows.validated, 'Validated, re-validations included,', 'Lapsed, past their period,', 'validated', 'lapsed') }}
         {{ metric_change_tip(changes.validated) }}
     </div>
 {% endcall %}

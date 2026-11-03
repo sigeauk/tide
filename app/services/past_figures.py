@@ -42,8 +42,9 @@ FLOWS: Dict[str, Tuple[str, ...]] = {"rule_monitoring": ("rules", "errors", "war
 COMPARE_FILTERS: Dict[str, Tuple[str, ...]] = {"rule_health": ("space",), "system": ("system_id",),
                                                "rule_monitoring": ("scope", "severity", "fixer", "issue", "rules")}
 _COVERAGE_NOTE = "TIDE has the history to work this out from its 6.0 upgrade on, for the systems you have now."
-NOTES = {"rule_health": "Total Rules, Enabled, Validated and Avg Quality show how much they have changed "
-                        "since then, when the section has no filter other than SIEM.",
+NOTES = {"rule_health": "Total Rules, Enabled and Avg Quality show how much they have changed since then, and "
+                        "Validated how many rules were validated and how many lapsed in that time, when the "
+                        "section has no filter other than SIEM.",
          "system": "Each card shows how much it has changed since then. " + _COVERAGE_NOTE,
          "baselines": "Rules Mapped, Uncovered and Fully Covered show how much they have changed since then. "
                       + _COVERAGE_NOTE,
@@ -131,19 +132,9 @@ def rule_health_then(db, client_id: str, rules: List, scope: Optional[str], at: 
             "  AND (SELECT max(h.created_at) FROM rule_lifecycle_history h WHERE h.rule_id = r.rule_id "
             "       AND h.siem_id = r.siem_id AND h.space = r.space AND h.action IN ('deprecated', 'moved')) > ?",
             [siem, space, at]).fetchall()
-        # A check counts for every copy of the rule: validation follows Kibana's own rule id.
-        checked = dict(conn.execute(
-            "SELECT COALESCE(NULLIF(r.kibana_rule_id, ''), h.rule_id), max(h.created_at) "
-            "FROM rule_lifecycle_history h LEFT JOIN detection_rules r "
-            "  ON r.rule_id = h.rule_id AND r.siem_id = h.siem_id AND r.space = h.space "
-            "WHERE h.action = 'validated' AND h.created_at <= ? GROUP BY 1", [at]).fetchall())
-        try:                               # each rule's latest check, imported ones included
-            for vkey, when in conn.execute("SELECT rule_id, max(last_checked_on) FROM checkedRule "
-                                           "WHERE rule_id IS NOT NULL AND last_checked_on <= ? GROUP BY 1", [at]).fetchall():
-                checked[vkey] = max(when, checked.get(vkey, when))
-        except Exception:
-            logger.debug("No checkedRule table yet", exc_info=True)
-        scores = {(r, s, sp): (score, version) for r, s, sp, score, version in conn.execute(
+        checked = {vkey: by_then[-1] for vkey, by_then in
+                   ((k, [d for d in ds if d <= at]) for k, ds in _checks(conn).items()) if by_then}
+        scores ={(r, s, sp): (score, version) for r, s, sp, score, version in conn.execute(
             "SELECT rule_id, siem_id, space, arg_max(score, created_at), arg_max(scoring_version, created_at) "
             "FROM rule_score_history WHERE created_at <= ? GROUP BY ALL", [at]).fetchall()}
         switches = _enabled_changes(conn)
@@ -175,6 +166,54 @@ def rule_health_then(db, client_id: str, rules: List, scope: Optional[str], at: 
         "quality": (round(sum(current) / len(current), 1)
                     if then and len(current) >= QUALITY_COVERAGE * len(then) else None),
     }
+
+
+def validation_flow(db, client_id: str, rules: List, days: int, now: Optional[datetime] = None) -> dict:
+    """Validated's line on a Rule Health section comparing with ``days`` ago: of the rules it counts
+    now, how many were validated since the end of that day (re-validating one still in policy
+    included) and how many lapsed, a check going past the client's period for the rule's severity
+    (today's periods) before a newer one, so the rule left Validated for Due soon. A rule counts
+    once in each, however often."""
+    now = now or datetime.now()
+    at = day_end(days, now.date())
+    with db.get_connection() as conn:
+        checks = _checks(conn)
+    weeks: Dict[str, int] = {}
+    validated = lapsed = 0
+    for r in rules:
+        ds = sorted(set(checks.get(validation_key(r.rule_id, r.raw_data), [])
+                        + ([r.validation_date] if r.validation_date else [])))
+        if not ds:
+            continue
+        sev = str(getattr(r.severity, "value", r.severity) or "low").lower()
+        if sev not in weeks:
+            weeks[sev] = db.get_client_validation_thresholds(client_id, severity=sev)[0]
+        # Rule Health ages a check in whole days: in policy while (today - check).days / 7 <= its weeks.
+        period = timedelta(days=7 * weeks[sev] + 1)
+        validated += any(at < d <= now for d in ds)
+        lapsed += any(at < d + period <= now and (newer is None or newer > d + period)
+                      for d, newer in zip(ds, ds[1:] + [None]))
+    return {"validated": validated, "lapsed": lapsed, "period": PERIODS[days]}
+
+
+def _checks(conn) -> Dict[str, List[datetime]]:
+    """Every check recorded of each rule, oldest first, by its validation key: the validations in
+    its history (a check counts for every copy of the rule: validation follows Kibana's own rule
+    id) and its latest check, imported ones included."""
+    out: Dict[str, set] = {}
+    for vkey, when in conn.execute(
+            "SELECT COALESCE(NULLIF(r.kibana_rule_id, ''), h.rule_id), h.created_at "
+            "FROM rule_lifecycle_history h LEFT JOIN detection_rules r "
+            "  ON r.rule_id = h.rule_id AND r.siem_id = h.siem_id AND r.space = h.space "
+            "WHERE h.action = 'validated' AND h.created_at IS NOT NULL").fetchall():
+        out.setdefault(vkey, set()).add(when)
+    try:
+        for vkey, when in conn.execute("SELECT rule_id, last_checked_on FROM checkedRule "
+                                       "WHERE rule_id IS NOT NULL AND last_checked_on IS NOT NULL").fetchall():
+            out.setdefault(vkey, set()).add(when)
+    except Exception:
+        logger.debug("No checkedRule table yet", exc_info=True)
+    return {k: sorted(v) for k, v in out.items()}
 
 
 def _enabled_changes(conn) -> Dict[Tuple[str, str, str], List[Tuple[datetime, bool, Optional[bool]]]]:

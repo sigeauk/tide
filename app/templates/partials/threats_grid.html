@@ -1,140 +1,46 @@
-<!-- Threats Grid Partial -->
-{% from "macros/icons.html" import icon, icon_text %}
-{% from "components/mitre_pill.html" import mitre_pill %}
+{#
+  Threat Landscape's actors (threats.list_threats), as the MITRE Groups page shows groups: the same
+  card (components/mitre_card.html) in the same grid, the next page loading as the end of the grid
+  scrolls into view (partials/mitre_grid.html). A card opens the actor's window.
+  Context: items (threats.actor_item), total, page, next_url, spec, source_meta, filtered.
+#}
+{% from "macros/icons.html" import icon_text %}
 {% from "macros/modal.html" import empty_state %}
+{% from "components/ui/loading_state.html" import loading_state %}
 
-{% if actors and actors | length > 0 %}
-<div class="threats-grid">
-    {% for actor in actors %}
-    {% set cov_class = 'success' if actor.coverage_pct >= 75 else ('warning' if actor.coverage_pct >= 25 else 'danger') %}
-    <div class="threat-card" id="actor-{{ loop.index }}">
-        <!-- Header: Flag + Name + Pills on right -->
-        <div class="threat-header">
-            <div class="threat-header-left">
-                {% if actor.iso_code %}
-                <img src="/static/flags/4x3/{{ actor.iso_code }}.svg" alt="{{ actor.iso_code }}" class="actor-flag-icon">
-                {% endif %}
-                {% if actor.group_url %}
-                <a href="{{ actor.group_url }}" class="actor-name" title="Open MITRE group: {{ actor.name }}">{{ actor.name }}</a>
-                {% else %}
-                <span class="actor-name" title="{{ actor.name }}">{{ actor.name }}</span>
-                {% endif %}
-            </div>
-            <!-- Source Pills - right aligned -->
-            <div class="source-pills">
-                {% if actor.source %}
-                {% for src in actor.source %}
-                    {% set src_lower = src | lower %}
-                    {% if 'enterprise' in src_lower %}
-                    <span class="source-pill src-enterprise" title="MITRE ATT&CK Enterprise">ENT</span>
-                    {% elif 'ics' in src_lower %}
-                    <span class="source-pill src-ics" title="MITRE ATT&CK ICS">ICS</span>
-                    {% elif 'mobile' in src_lower %}
-                    <span class="source-pill src-mobile" title="MITRE ATT&CK Mobile">MOB</span>
-                    {% elif src_lower == 'octi' or src_lower == 'opencti' or src_lower == 'stix' %}
-                    <span class="source-pill src-opencti" title="OpenCTI / STIX">CTI</span>
-                    {% else %}
-                    {# Arbitrary connector label (5.0.0+): show the
-                       full friendly name rather than truncating to 3
-                       letters so operators can tell connectors apart. #}
-                    <span class="source-pill src-opencti" title="{{ src }}">{{ src }}</span>
-                    {% endif %}
-                {% endfor %}
-                {% endif %}
-            </div>
-        </div>
-        
-        <!-- Aliases -->
-        <p class="threat-aliases" title="{{ actor.aliases or 'No known aliases' }}">
-            {{ actor.aliases[:60] + '…' if actor.aliases and actor.aliases | length > 60 else actor.aliases or 'No known aliases' }}
-        </p>
-        
-        <!-- Description -->
-        <p class="threat-desc">
-            {{ actor.description[:100] + '…' if actor.description and actor.description | length > 100 else actor.description or 'No description available.' }}
-        </p>
-        
-        <!-- Coverage Section -->
-        <div class="threat-coverage">
-            <div class="coverage-meta">
-                <span>Coverage</span>
-                <span class="coverage-value text-{{ cov_class }}">{{ actor.covered_count }}/{{ actor.ttp_count }} ({{ actor.coverage_pct }}%)</span>
-            </div>
-            <div class="coverage-track">
-                <div class="coverage-fill coverage-fill--pct fill-{{ cov_class }}" style="--pct: {{ actor.coverage_pct }}%"></div>
-            </div>
-        </div>
-        
-        <!-- Expandable TTPs with MITRE Pills -->
-        <details class="ttp-expander">
-            <summary class="ttp-summary">
-                <span>View {{ actor.ttp_count }} TTPs</span>
-                {{ icon('chevron-right', '16', 'expand-chevron') }}
-            </summary>
-            <div class="ttp-list">
-                {% for ttp in actor.ttps_with_coverage %}
-                {{ mitre_pill(ttp.id, covered=ttp.covered, rule_count=ttp.rule_count, clickable=true, size='sm') }}
-                {% endfor %}
-            </div>
-        </details>
-
-        {% if not user or user.can_write('page:baselines') %}
-        <!-- Generate Baseline from this actor -->
-        <div class="threat-card-foot">
-            <button name="Create Baseline" class="btn btn-primary btn-sm threat-card-foot__btn"
-                    data-click="threats.baselineOpen" data-actor="{{ actor.name }}" data-group-id="{{ (actor.group_url or '') | replace('/mitre/groups/', '') }}">
-                {{ icon('check-square', '12') }}
-                Create Baseline
-            </button>
-        </div>
-        {% endif %}
-    </div>
-    {% endfor %}
+{% macro more() -%}
+{% if next_url %}
+<div class="infinite-scroll-sentinel" hx-get="{{ next_url }}" hx-trigger="tideLoadMore once" hx-target="this" hx-swap="outerHTML" hx-include="unset">
+    {{ loading_state("Loading more threat actors…", inline=true) }}
 </div>
+{% elif page > 1 %}
+<div class="infinite-scroll-end">All {{ total }} loaded</div>
+{% endif %}
+{%- endmacro %}
 
-<!-- Pagination -->
-<div class="pagination">
-    {% if page > 1 %}
-    <button name="Previous" 
-        class="btn btn-secondary btn-sm"
-        hx-get="/api/threats?page={{ page - 1 }}&search={{ search }}&origin={{ origin }}&source={{ source }}&sort_by={{ sort_by }}"
-        hx-target="#threats-grid"
-        hx-swap="innerHTML">{{ icon_text('arrow-left', 'Previous', '14') }}</button>
-    {% else %}
-    <button name="Previous" class="btn btn-secondary btn-sm" disabled>{{ icon_text('arrow-left', 'Previous', '14') }}</button>
-    {% endif %}
-    
-    <span class="pagination-info">
-        Page {{ page }} of {{ total_pages }} ({{ total }} actors)
-    </span>
-    
-    {% if page < total_pages %}
-    <button name="Next" 
-        class="btn btn-secondary btn-sm"
-        hx-get="/api/threats?page={{ page + 1 }}&search={{ search }}&origin={{ origin }}&source={{ source }}&sort_by={{ sort_by }}"
-        hx-target="#threats-grid"
-        hx-swap="innerHTML"><span class="icon-text">Next {{ icon('arrow-right', '14') }}</span></button>
-    {% else %}
-    <button name="Next" class="btn btn-secondary btn-sm" disabled><span class="icon-text">Next {{ icon('arrow-right', '14') }}</span></button>
-    {% endif %}
+{% if page > 1 %}
+    {% for it in items %}{% include "components/mitre_card.html" %}{% endfor %}{{ more() }}
+{% elif items %}
+<div class="steps-grid cat-grid">
+    {% for it in items %}{% include "components/mitre_card.html" %}{% endfor %}
+    {{ more() }}
 </div>
-
 {% else %}
 {% call empty_state() %}
     <p class="empty-state-title">No threat actors found</p>
     <p>
-        {% if search or origin or source %}
+        {% if filtered %}
             No actors match your current filters. Try adjusting your search criteria.
         {% else %}
             Sync threat intelligence from OpenCTI or MITRE to populate this page.
         {% endif %}
     </p>
-    <button name="Sync Threat Intel" 
+    <button name="Sync Threat Intel"
         class="btn btn-primary"
         hx-post="/api/threats/sync"
         hx-target="#toast-container"
         hx-swap="beforeend">
-        Sync Threat Intel
+        {{ icon_text('refresh-cw', 'Sync Threat Intel', '16') }}
     </button>
 {% endcall %}
 {% endif %}

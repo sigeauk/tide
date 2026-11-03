@@ -230,7 +230,7 @@ Designed for isolated networks and strict compliance from the start.
 1. [Link every Kibana space](CLIENTS.md#link-destinations-to-a-client) whose rules TIDE should see.
 2. [Sync](RULES.md#sync-rules-from-your-siems) after rules change in Kibana, so your figures are current.
 3. Choose [how rules are scored](CLIENTS.md#choose-how-rules-are-scored) and [how long a validation lasts](CLIENTS.md#set-how-long-a-validation-lasts) for your team.
-4. Describe your key systems and [apply a baseline](SYSTEMS.md#apply-a-baseline-to-a-system) to each.
+4. Describe your key systems and [add a baseline](SYSTEMS.md#add-a-baseline-to-a-system) to each.
 5. Review [Rule Monitoring](RULES.md#rule-monitoring) each week, starting with its errors.
 6. [Connect your threat feeds](CLIENTS.md#connect-threat-feeds).
 7. [Turn on daily backups](OPERATIONS.md#scheduled-backups).

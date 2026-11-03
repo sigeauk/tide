@@ -97,9 +97,24 @@
    a technique's own (technique_coverage, which brings its label and title). #}
 {% macro coverage_pill(c) -%}
 {% set cls = {'full': 'success', 'partial': 'warning', 'none': 'danger'}.get(c.level, 'muted') %}
-<span class="status-pill status-{{ cls }}" title="{{ c.title if c.title else c.covered ~ ' of ' ~ c.total ~ ' technique' ~ ('s' if c.total != 1 else '') ~ ' covered by your enabled rules (' ~ c.pct ~ '%)' }}">
+<span class="status-pill status-{{ cls }}" title="{{ coverage_title(c) }}">
     {{ icon('shield-check', '11') }} <span class="status-pill__text">{{ c.label if c.label else c.covered ~ '/' ~ c.total ~ ' covered' }}</span>
 </span>
+{%- endmacro %}
+
+{% macro coverage_title(c) -%}
+{{ c.title if c.title else c.covered ~ ' of ' ~ c.total ~ ' technique' ~ ('s' if c.total != 1 else '') ~ ' covered by your enabled rules (' ~ c.pct ~ '%)' }}
+{%- endmacro %}
+
+{# The same coverage as a card's ring (a rule card's score ring): its percentage, coloured by its
+   level; a muted dash for an object with no techniques to cover (c is none). #}
+{% macro coverage_ring(c) -%}
+{% set tone = {'full': 'success', 'partial': 'warning', 'none': 'danger'}.get(c.level, 'muted') if c else 'muted' %}
+{% set title = coverage_title(c) if c else 'No ATT&CK techniques are recorded for it, so there is nothing to cover' %}
+<div class="score-ring score-ring--{{ tone }}" style="--score: {{ c.pct if c else 0 }}" title="{{ title }}" role="img"
+     aria-label="{{ 'Coverage ' ~ c.pct ~ ' percent' if c else 'No coverage to measure' }}">
+    <span class="score-ring__value">{{ c.pct if c else '–' }}</span>
+</div>
 {%- endmacro %}
 
 {# A window section listing related ATT&CK objects: id, name (opens that object's window when its

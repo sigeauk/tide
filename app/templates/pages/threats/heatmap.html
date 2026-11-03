@@ -3,6 +3,7 @@
 {% from "macros/modal.html" import close_button %}
 {% from "macros/help.html" import help_button with context %}
 {% from "macros/icons.html" import icon %}
+{% from "macros/menu.html" import more_button %}
 
 {% block title %}Heatmap | TIDE{% endblock %}
 
@@ -17,23 +18,20 @@
         </h1>
         <p class="page-subtitle">Visualize your detection coverage against adversary techniques used by tracked threat actors.</p>
     </div>
-    <div class="flex gap-sm flex-wrap justify-end items-center shrink-0">
-        <button name="Export Report"
-            class="btn btn-secondary btn-sm heatmap-toggle"
-            data-click="heatmap.exportOpen"
-            title="Export threat report for selected actors">
-            {{ icon('download', '14') }}
-            Export Report
-        </button>
-        {% if not user or user.can_write('page:baselines') %}
-        <button name="Create Baseline"
-            class="btn btn-primary btn-sm heatmap-toggle"
-            data-click="heatmap.baselineOpen"
-            title="Generate an Assurance Baseline from selected actors">
-            {{ icon('check-square', '14') }}
-            Create Baseline
-        </button>
-        {% endif %}
+    <div class="rh-more shrink-0" data-more>
+        {{ more_button('More actions', title='Export a report, create a baseline', attrs='name="Heatmap Actions"') }}
+        <div class="rh-more__menu" role="menu" hidden>
+            <button name="Export Report" type="button" role="menuitem" class="rh-more__item"
+                    data-click="heatmap.exportOpen" title="Export a threat report for the chosen actors">
+                {{ icon('download', '15') }}<span>Export report</span>
+            </button>
+            {% if not user or user.can_write('page:baselines') %}
+            <button name="Create Baseline" type="button" role="menuitem" class="rh-more__item"
+                    data-click="heatmap.baselineOpen" title="Make a baseline of the chosen actors' techniques">
+                {{ icon('plus', '15') }}<span>Create baseline</span>
+            </button>
+            {% endif %}
+        </div>
     </div>
 </div>
 
@@ -44,6 +42,7 @@
 <div class="filters-bar">
     <!-- Technique Search -->
     <div class="filter-group grow filter-group--md">
+        <label class="form-label" for="technique-search">Search techniques</label>
         <input name="Technique Search" 
             type="text" 
             id="technique-search"

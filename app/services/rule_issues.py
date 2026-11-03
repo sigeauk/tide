@@ -116,8 +116,9 @@ KNOWN: Dict[str, Issue] = {i.id: i for i in (
           "Make the rule search back at least its run interval plus a margin: for example, runs every 5 minutes "
           "with 1 minute of additional look-back time (from now-6m)."),
     Issue("short_lookback", "Little or no additional look-back", "author", "warning", "rule",
-          "The rule searches back little more than its run interval, so events that reach Elasticsearch late "
-          "(normal ingest delay) fall between runs and are missed.",
+          "The rule searches back little more than its run interval, by the time each event happened, so events "
+          "that reach Elasticsearch late (normal ingest delay) fall between runs and are missed. A rule that "
+          "uses event.ingested as its timestamp override isn't listed: the next run finds a late event.",
           "Give the rule at least a minute of additional look-back time, more if its data arrives late, or use "
           "event.ingested as its timestamp override."),
     Issue("never_run", "Enabled but never run", "engineer", "warning", "rule",
@@ -199,11 +200,13 @@ def _span(text) -> Optional[int]:
     return int(m.group(1)) * _SPAN_SECONDS[m.group(2)] if m else None
 
 
-def schedule_findings(interval, lookback_from) -> List[Tuple[str, str, str, str]]:
+def schedule_findings(interval, lookback_from, timestamp_override=None) -> List[Tuple[str, str, str, str]]:
     """(issue, cause, severity, detail) for a rule's schedule, from its own JSON (#74): it runs every
-    ``interval`` and searches back to ``from`` ('now-6m'). Searching back less than the interval leaves
-    blind windows between runs; less than a minute more leaves late events unsearched. The cause is
-    the schedule, so rules sharing one are fixed together."""
+    ``interval`` and searches back to ``from`` ('now-6m': the whole window, Kibana's additional
+    look-back is what it adds to the interval). Searching back less than the interval leaves blind
+    windows between runs; less than a minute more leaves late events unsearched, unless the rule
+    searches by event.ingested: a late event is then found by the next run. The cause is the
+    schedule, so rules sharing one are fixed together."""
     every = _span(interval)
     m = re.fullmatch(r"now-(\d+[smhd])", str(lookback_from or "").replace(" ", ""))
     back = _span(m.group(1)) if m else None
@@ -214,7 +217,7 @@ def schedule_findings(interval, lookback_from) -> List[Tuple[str, str, str, str]
         return [("schedule_gap", cause, KNOWN["schedule_gap"].severity,
                  f"Runs every {_duration(every)} but searches only the last {_duration(back)}: {_duration(every - back)} "
                  "of each interval is never searched.")]
-    if back - every < MIN_EXTRA_LOOKBACK:
+    if back - every < MIN_EXTRA_LOOKBACK and str(timestamp_override or "") != "event.ingested":
         extra = f"only {_duration(back - every)}" if back > every else "no"
         return [("short_lookback", cause, KNOWN["short_lookback"].severity,
                  f"Runs every {_duration(every)} and searches the last {_duration(back)}: {extra} additional look-back, "
@@ -405,7 +408,7 @@ def detect(db, conn, scopes: Optional[Set[Tuple[str, str]]] = None,
              run_interval, lookback_from) in siem_rules:
             rule = {"index": _json(idx, []), "results": _json(results, []), "timestamp_override": override}
             parsed.append((rule_id, space, enabled, _json(last, {}), rule, updated_at, last_updated))
-            for issue, cause, severity, detail in schedule_findings(run_interval, lookback_from):
+            for issue, cause, severity, detail in schedule_findings(run_interval, lookback_from, override):
                 add(issue, cause, siem_id, space, rule_id, severity, detail)
         # Its own patterns and every pattern its lines name (an indicator match rule's indicator indexes).
         patterns = {p for *_x, rule, _u, _l in parsed
@@ -843,8 +846,13 @@ def view(conn, destinations: List[Dict[str, Any]], filters: Dict[str, Any],
             out.setdefault(field(f), set()).add(_item(f))
         return {k: len(v) for k, v in out.items()}
 
-    # An acknowledged cause stays muted until it affects more rules than when it was acknowledged.
-    acks, counts_now = _acks(conn), _open_counts(conn)
+    # A muted cause (``ack``, stored as an acknowledgement) stays muted until it affects more rules than
+    # when it was muted; a muted rule (``mute``: one problem of it, or every one) until it is unmuted. A
+    # row can be both. ``ack_siem_ids``: the SIEM records its cause is muted on, for Unmute cause on the row.
+    acks, counts_now, mutes = _acks(conn), _open_counts(conn), _mutes(conn)
+    siems_of: Dict[str, List[str]] = {}
+    for siem_id, cluster in clusters.items():
+        siems_of.setdefault(cluster, []).append(siem_id)
     for f in every:
         ack = acks.get(_cause_key(f))
         if ack and f["resolved_at"] is None:
@@ -853,6 +861,10 @@ def view(conn, destinations: List[Dict[str, Any]], filters: Dict[str, Any],
             f["ack_lapsed"] = None if current <= ack["rules"] else {**ack, "now": current}
         else:
             f["ack"] = f["ack_lapsed"] = None
+        f["ack_siem_ids"] = (sorted(s for s in siems_of.get(f["cluster"], [f["siem_id"]])
+                                    if (f["issue"], f["cause"], s, "") in acks) if f["cause"] else [f["siem_id"]]
+                             ) if f["ack"] else []
+        f["mute"] = _muted(mutes, f) if f["resolved_at"] is None else None
 
     show = filters.get("show") or "open"
     before = shown(show)
@@ -863,15 +875,15 @@ def view(conn, destinations: List[Dict[str, Any]], filters: Dict[str, Any],
     found = narrowed(before)
     group = filters.get("group") or "issue"
     open_rows = found if show == "open" else narrowed(shown("open"))
-    muted = [f for f in open_rows if f["ack"]]
-    metrics = _metrics(conn, [f for f in open_rows if not f["ack"]], narrowed(shown("resolved")), names, scope,
-                       all_rules, now)
-    metrics["acknowledged"] = len({_fix_key(f) for f in muted})
+    muted = [f for f in open_rows if f["ack"] or f["mute"]]
+    metrics = _metrics(conn, [f for f in open_rows if not (f["ack"] or f["mute"])], narrowed(shown("resolved")),
+                       names, scope, all_rules, now)
+    metrics["muted_causes"] = len({_fix_key(f) for f in muted if f["ack"]})
+    metrics["muted_rules"] = len({_item(f) for f in muted if f["mute"]})
     if show == "open":
-        groups = _group([f for f in found if not f["ack"]], group)
+        groups = _group([f for f in found if not (f["ack"] or f["mute"])], group)
         if muted:
-            groups.append(_node("acknowledged", "acknowledged", "Acknowledged", muted,
-                                children=_group(muted, group, ("acknowledged",))))
+            groups.append(_node("muted", "muted", "Muted", muted, children=_group(muted, group, ("muted",))))
     else:
         groups = _group(found, group)
     return {"rows": found, "groups": groups, "metrics": metrics, "counts": counts, "now": now}
@@ -889,7 +901,8 @@ def flows(conn, destinations: List[Dict[str, Any]], filters: Dict[str, Any], sta
     one begins and fixed when it has none left; a cause, when it is found and when it is gone. What
     TIDE found when it first looked at a destination was there already, so isn't new. Problems worked
     out when asked (stale data, a failed sync step, a change TIDE didn't finish) have no history and
-    aren't counted, nor are causes acknowledged now. None before the first sync that keeps history."""
+    aren't counted, nor are causes or rules muted now. None before the first sync that
+    keeps history."""
     now = now or datetime.now()
     try:
         watched = {(s, sp): (first, complete) for s, sp, first, complete in conn.execute(
@@ -911,7 +924,7 @@ def flows(conn, destinations: List[Dict[str, Any]], filters: Dict[str, Any], sta
     all_rules = (filters.get("rules") or "enabled") == "all"
     wanted = {"severity": set(filters.get("severity") or []), "fixer": set(fixer_values(filters.get("fixer"))),
               "issue": set(filters.get("issue") or [])}
-    acks, counts_now = _acks(conn), _open_counts(conn)
+    acks, counts_now, mutes = _acks(conn), _open_counts(conn), _mutes(conn)
     spans: Dict[str, Dict[Any, List[Tuple[datetime, Optional[datetime], datetime]]]] = {k: {} for k in FLOW_CARDS}
     for issue, cause, s, sp, rule_id, severity, opened, resolved, enabled in stored:
         if (s, sp) not in in_scope or (s, sp) not in watched:
@@ -923,7 +936,7 @@ def flows(conn, destinations: List[Dict[str, Any]], filters: Dict[str, Any], sta
         if not (all_rules or not rule_id or enabled or f["fixer"] == "tide"):
             continue
         ack = acks.get(_cause_key(f))
-        if ack and counts_now.get(_cause_key(f), 0) <= ack["rules"]:
+        if (ack and counts_now.get(_cause_key(f), 0) <= ack["rules"]) or _muted(mutes, f):
             continue
         span = (opened, resolved, watched[(s, sp)][0])
         if rule_id:
@@ -988,7 +1001,7 @@ def _linked_to_elastic(conn, keys: List[Tuple[str, str, str]]) -> Set[Tuple[str,
 
 
 def _cause_key(f: Dict[str, Any]) -> Tuple[str, str, str, str]:
-    """A cause on one SIEM record (what is acknowledged): the issue and its cause on a SIEM, or a
+    """A cause on one SIEM record (what Mute cause mutes): the issue and its cause on a SIEM, or a
     problem without a cause per destination."""
     return (f["issue"], f["cause"], f["siem_id"], "" if f["cause"] else f["space"])
 
@@ -1006,7 +1019,8 @@ def _fix_key(f: Dict[str, Any]) -> Tuple[str, str, str, str]:
     return (f["issue"], f["cause"], f.get("cluster") or f["siem_id"], "" if f["cause"] else f"{f['siem_id']}|{f['space']}")
 
 
-# ── acknowledging a cause ────────────────────────────────────────────────
+# ── muting a cause ───────────────────────────────────────────────────────
+# Stored as an acknowledgement (rule_issue_acks), its name before 6.3.3.
 
 ACK_DDL = """
     CREATE TABLE IF NOT EXISTS rule_issue_acks (
@@ -1027,7 +1041,7 @@ def _acks(conn) -> Dict[Tuple[str, str, str, str], Dict[str, Any]]:
     try:
         rows = conn.execute("SELECT issue, cause, siem_id, space, note, acked_by, acked_at, rules_at_ack "
                             "FROM rule_issue_acks").fetchall()
-    except Exception:            # nothing acknowledged yet
+    except Exception:            # no cause muted yet
         return {}
     return {tuple(r[:4]): {"note": r[4], "by": r[5], "at": r[6], "rules": r[7]} for r in rows}
 
@@ -1045,9 +1059,9 @@ def _open_counts(conn) -> Dict[Tuple[str, str, str, str], int]:
     return {k: len(v) for k, v in out.items()}
 
 
-def acknowledge(conn, key: Tuple[str, str, str, str], note: str, actor: str,
-                now: Optional[datetime] = None) -> int:
-    """Acknowledge (mute) one cause until it affects more rules than it does now. Returns that number."""
+def mute_cause(conn, key: Tuple[str, str, str, str], note: str, actor: str,
+               now: Optional[datetime] = None) -> int:
+    """Mute one cause until it affects more rules than it does now. Returns that number."""
     conn.execute(ACK_DDL)
     rules = _open_counts(conn).get(tuple(key), 1)
     conn.execute("INSERT OR REPLACE INTO rule_issue_acks VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1055,9 +1069,85 @@ def acknowledge(conn, key: Tuple[str, str, str, str], note: str, actor: str,
     return rules
 
 
-def unacknowledge(conn, key: Tuple[str, str, str, str]) -> None:
+def unmute_cause(conn, key: Tuple[str, str, str, str]) -> None:
     conn.execute(ACK_DDL)
     conn.execute("DELETE FROM rule_issue_acks WHERE issue = ? AND cause = ? AND siem_id = ? AND space = ?", list(key))
+
+
+def cause_scope(conn, destinations: List[Dict[str, Any]], keys: List[Tuple[str, str, str, str]]) -> Dict[str, Any]:
+    """What muting a cause (``keys``, causes_from's) holds back: ``keys``, ``rules``, how many rules it
+    affects now, disabled ones too (more brings it back), and ``muted``, whether it is muted now. From
+    a rule's row ``keys`` is the rule's SIEM record only: a named cause takes in the other SIEM records
+    of its cluster it is open on, as its group on the page does."""
+    counts, acks = _open_counts(conn), _acks(conn)
+    if len(keys) == 1 and keys[0][1]:
+        issue, cause, siem_id, _ = keys[0]
+        clusters = {d["id"]: cluster_of(d) for d in destinations}
+        home = clusters.get(siem_id, siem_id)
+        keys = [k for k in ((issue, cause, s, "") for s in sorted({s for s, c in clusters.items() if c == home} | {siem_id}))
+                if counts.get(k) or k[2] == siem_id]
+    held = [k for k in keys if k in acks and counts.get(k, 0) <= acks[k]["rules"]]
+    return {"keys": keys, "rules": sum(counts.get(k, 0) for k in keys), "muted": bool(keys) and len(held) == len(keys)}
+
+
+# ── muting a rule ────────────────────────────────────────────────────────
+# One rule's problem, or every problem it has now and later (issue and cause ''), muted until it is
+# unmuted: unlike a cause, it doesn't come back by affecting more rules.
+
+MUTE_DDL = """
+    CREATE TABLE IF NOT EXISTS rule_issue_mutes (
+        rule_id   VARCHAR NOT NULL,
+        siem_id   VARCHAR NOT NULL,
+        space     VARCHAR NOT NULL,
+        issue     VARCHAR NOT NULL,    -- '' with cause '': every problem the rule has
+        cause     VARCHAR NOT NULL,
+        note      VARCHAR,
+        muted_by  VARCHAR,
+        muted_at  TIMESTAMP NOT NULL,
+        PRIMARY KEY (rule_id, siem_id, space, issue, cause)
+    )
+"""
+
+
+def _mutes(conn) -> Dict[Tuple[str, str, str, str, str], Dict[str, Any]]:
+    try:
+        rows = conn.execute("SELECT rule_id, siem_id, space, issue, cause, note, muted_by, muted_at "
+                            "FROM rule_issue_mutes").fetchall()
+    except Exception:            # nothing muted yet
+        return {}
+    return {tuple(r[:5]): {"issue": r[3], "cause": r[4], "note": r[5], "by": r[6], "at": r[7]} for r in rows}
+
+
+def _muted(mutes, f: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The mute that holds ``f`` back: its own problem's, else its rule's for every problem."""
+    rule = (f["rule_id"], f["siem_id"], f["space"])
+    return mutes.get((*rule, f["issue"], f["cause"] or "")) or mutes.get((*rule, "", "")) if f["rule_id"] else None
+
+
+def mute(conn, key: Tuple[str, str, str, str, str], note: str, actor: str, now: Optional[datetime] = None) -> None:
+    """Mute one rule's problem (``key``: rule_id, siem_id, space, issue, cause), or every problem it
+    has (issue and cause '')."""
+    conn.execute(MUTE_DDL)
+    conn.execute("INSERT OR REPLACE INTO rule_issue_mutes VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                 [*key, (note or "").strip()[:1000], actor, now or datetime.now()])
+
+
+def unmute(conn, key: Tuple[str, str, str, str, str]) -> None:
+    conn.execute(MUTE_DDL)
+    conn.execute("DELETE FROM rule_issue_mutes WHERE rule_id = ? AND siem_id = ? AND space = ? AND issue = ? "
+                 "AND cause = ?", list(key))
+
+
+def mute_from(params) -> Optional[Tuple[str, str, str, str, str]]:
+    """A rule mute's key from a request: the rule (rule_id, siem_id, space), and its problem (issue,
+    cause), or every problem it has when ``scope`` is ``rule`` or there is no issue."""
+    rule = tuple(str(params.get(k) or "").strip() for k in ("rule_id", "siem_id", "space"))
+    issue = str(params.get("issue") or "")
+    if not all(rule) or (issue and issue not in KNOWN):
+        return None
+    if params.get("scope") == "rule" or not issue:
+        return (*rule, "", "")
+    return (*rule, issue, str(params.get("cause") or ""))
 
 
 def causes_from(params) -> List[Tuple[str, str, str, str]]:
@@ -1282,7 +1372,7 @@ def _issue_markdown(issue: str, nodes: List[Dict[str, Any]], labels: Dict[str, s
         if node.get("ack"):
             a = node["ack"]
             what = f"`{node['cause'] or node['where']}` " if len(nodes) > 1 else ""
-            lines.append(f"- **Acknowledged:** {what}by {_md(a['by'])} on {a['at']:%Y-%m-%d}"
+            lines.append(f"- **Muted:** {what}by {_md(a['by'])} on {a['at']:%Y-%m-%d}"
                          + (f": {_md(a['note'])}" if a["note"] else ""))
     return "\n".join(lines + [""] + table)
 
@@ -1347,6 +1437,7 @@ def _metrics(conn, open_rows, resolved_rows, names, scope: str, all_rules: bool,
         "causes": len({_fix_key(f) for f in open_rows}),
         "by_fixer": {k: len(v) for k, v in by_fixer.items()},
         "resolved": len({_fix_key(f) for f in resolved_rows}),
+        "resolved_rules": len({_item(f) for f in resolved_rows if f["rule_id"]}),
         "stale": len({_item(f) for f in open_rows if f["issue"] == "stale_data"}),
         "last_synced": max((synced[k] for k in pairs if synced.get(k)), default=None),
     }

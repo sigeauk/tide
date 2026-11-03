@@ -5,11 +5,14 @@
   template's group heading opens its Manage window, and an empty template still shows.
 
   Context: steps, groups (from group_system_steps; empty = flat), view, tactic_sort, sort_name,
-           and system_id + coverage_undefined (a system) or template.
+           and system_id + coverage_undefined + narrowed + baseline_id (a system) or template.
+  A system's baseline group has a ⋮ (Edit baseline, Add technique, Remove baseline); grouped by
+  baseline, an empty one still shows.
 #}
 {% from "macros/icons.html" import icon, icon_text, tactic_icon %}
 {% from "components/mitre_pill.html" import mitre_pill %}
 {% from "macros/modal.html" import empty_state %}
+{% from "macros/menu.html" import more_button %}
 
 {% macro coverage(step) -%}
 {% set status = step.status | default('red') %}
@@ -66,6 +69,14 @@
 {% endif %}
 {%- endmacro %}
 
+{# Add technique, into the given baseline (``query``: ?baseline_id=…) or any of them. #}
+{% macro add_technique(query='') -%}
+<button name="Add Technique" type="button" class="btn btn-primary btn-sm"
+        hx-get="{{ '/api/baselines/techniques-new' if template else '/api/systems/' ~ system_id ~ '/steps-new' }}{{ query }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
+    {{ icon_text('plus', 'Add technique', '13') }}
+</button>
+{%- endmacro %}
+
 {% macro group_block(g, level) -%}
 <details class="sys-group sys-group--{{ level }}" open>
     <summary class="sys-group__head">
@@ -76,15 +87,33 @@
             {% if not coverage_undefined and g.scored %} · {{ g.covered }}/{{ g.scored }} covered ({{ g.pct }}%){% endif %}
         </span>
         {% if g.kind == 'baseline' %}
-        {# Inside <summary>: stop the click folding the group, then open the window. #}
         {% if template %}
+        {# Inside <summary>: stop the click folding the group, then open the window. #}
         <button name="Manage Baseline" type="button" class="btn btn-secondary btn-sm"
                 data-click="steps.openDialog" data-url="/api/baselines/{{ g.key }}/manage"
                 title="Rename {{ g.label }}, add a technique, apply it to a system, import, export or delete it">{{ icon_text('settings', 'Manage', '12') }}</button>
         {% else %}
-        <button name="Manage Baseline" type="button" class="btn btn-secondary btn-sm"
-                data-click="steps.openDialog" data-url="/api/systems/{{ system_id }}/baselines/{{ g.key }}/edit"
-                title="Rename {{ g.label }}, change its description, or remove it from this system">{{ icon_text('settings', 'Manage', '12') }}</button>
+        {# Inside <summary>: steps.inGroupHead keeps a click on the ⋮ or its menu from folding the group. #}
+        <div class="rh-more" data-more data-click="steps.inGroupHead">
+            {{ more_button(g.label ~ ' actions', title='Edit ' ~ g.label ~ ', add a technique to it, or remove it', attrs='name="Baseline Menu"') }}
+            <div class="rh-more__menu" role="menu" hidden>
+                <button name="Edit Baseline" type="button" role="menuitem" class="rh-more__item"
+                        hx-get="/api/systems/{{ system_id }}/baselines/{{ g.key }}/edit" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
+                    {{ icon('pencil', '15') }}<span>Edit baseline</span>
+                </button>
+                <button name="Add Technique" type="button" role="menuitem" class="rh-more__item"
+                        hx-get="/api/systems/{{ system_id }}/steps-new?baseline_id={{ g.key }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
+                    {{ icon('plus', '15') }}<span>Add technique</span>
+                </button>
+                <div class="rh-more__sep" role="separator"></div>
+                <button name="Remove Baseline" type="button" role="menuitem" class="rh-more__item rh-more__item--danger"
+                        hx-delete="/api/baselines/{{ g.key }}/apply/{{ system_id }}" hx-swap="none" hx-include="unset"
+                        data-confirm-title="Remove baseline" data-confirm-label="Remove"
+                        hx-confirm="Remove {{ g.label }} from this system? Its techniques, rule mappings and known gaps are deleted. Templates and other systems are not affected.">
+                    {{ icon('trash-2', '15') }}<span>Remove baseline</span>
+                </button>
+            </div>
+        </div>
         {% endif %}
         {% endif %}
     </summary>
@@ -95,11 +124,8 @@
             {{ items(g.steps) }}
         {% else %}
             {% call empty_state() %}
-                <p>No techniques in this template yet.</p>
-                <button name="Add Technique" type="button" class="btn btn-primary btn-sm"
-                        hx-get="/api/baselines/techniques-new?baseline_id={{ g.key }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
-                    {{ icon_text('plus', 'Add technique', '13') }}
-                </button>
+                <p>No techniques in this {{ 'template' if template else 'baseline' }} yet.</p>
+                {{ add_technique('?baseline_id=' ~ g.key) }}
             {% endcall %}
         {% endif %}
     </div>
@@ -123,6 +149,11 @@
 {% elif not baselines %}
 {% call empty_state() %}
     <p>{{ "No templates yet. Create one from this page's menu, with New baseline." if template else "No baselines are applied to this system." }}</p>
+{% endcall %}
+{% elif not template and not narrowed %}
+{% call empty_state() %}
+    <p>{{ "This baseline has" if baseline_id or baselines | length == 1 else "These baselines have" }} no techniques yet.</p>
+    {{ add_technique('?baseline_id=' ~ baseline_id if baseline_id else '') }}
 {% endcall %}
 {% else %}
 {% call empty_state('search') %}

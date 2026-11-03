@@ -5,7 +5,13 @@
   row from get_template_steps -- a template's technique, with no coverage or rule count (it has
   none until applied to a system).
 
-  The coverage pill = this step's coverage status ON THIS SYSTEM. The MITRE pills are neutral labels,
+  Laid out as a rule card (components/rule_card.html): ring | title, and beneath it one line of
+  facts (status on this system, tactic, priority, the first two ATT&CK ids then +n); Non-alerting
+  only when it applies; the footer. The ring is the strongest counted rule's score on this system,
+  as in the technique's window (window_ui.technique_ring; evidence_score from
+  attach_step_evidence); the left edge, its status there. A template's card has neither.
+
+  The status = this step's coverage status ON THIS SYSTEM. The MITRE pills are neutral labels,
   never a verdict: the same technique sits on many steps, so "some rule carries this tag" says
   nothing about whether this scenario is covered. The only number that does is the step's own
   mapped-rule count, which is always shown, including at zero. As on rule cards, a pill opens the
@@ -14,42 +20,38 @@
 #}
 {% from "macros/icons.html" import icon, tactic_icon %}
 {% from "components/mitre_pill.html" import mitre_pill %}
+{% from "components/window_ui.html" import technique_ring %}
 
 {% set status = step.status | default('red') %}
 {% set status_class = {'green': 'success', 'amber': 'warning', 'grey': 'muted', 'red': 'danger'}.get(status, 'danger') %}
 {% set status_label = {'green': 'Covered', 'amber': 'Known gap', 'grey': 'Not applicable', 'red': 'No coverage'}.get(status, 'No coverage') %}
 {% set mapped = step.mapped_count | default(0) %}
 {% set uncounted = step.uncounted_count | default(0) %}
+{% set tids = step.display_technique_ids | default([]) %}
 
-<div name="Open Technique" class="step-card" id="step-{{ step.step_id }}"
+<div name="Open Technique" class="step-card step-card--{{ 'muted' if template else status_class }}" id="step-{{ step.step_id }}"
      data-step-open data-rule-open role="button" tabindex="0" aria-label="Open technique: {{ step.title }}"
      hx-get="{{ '/api/baselines/tactics/' ~ step.step_id if template else '/api/systems/' ~ system_id ~ '/steps/' ~ step.step_id }}"
      hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
      hx-trigger="click, keyup[key=='Enter']">
 
-    <div class="sc-head">
-        <div class="sc-main">
-            <div class="sc-title" title="{{ step.title }}">{{ step.title }}</div>
-            <div class="sc-tactic">{{ tactic_icon(step.tactic, '12') }} {{ step.tactic | default('Other') }}</div>
-        </div>
-        <div class="sc-side">
-            {% if not template %}
-            <span class="status-pill status-{{ status_class }}" title="{{ status_label }} on this system">
-                {{ icon('shield-check', '11') }} <span class="status-pill__text">{{ status_label }}</span>
-            </span>
-            {% endif %}
-            {% if step.non_alerting %}<span class="status-pill status-info" title="Covered by a dashboard, report or log: watched, but nothing alerts">{{ icon('eye', '11') }} <span class="status-pill__text">Non-alerting</span></span>{% endif %}
-            {% if step.priority %}<span class="status-pill sm-priority sm-priority--{{ step.priority }}" title="Priority">{{ step.priority | capitalize }}</span>{% endif %}
-            <div class="mitre-pills-wrap">
-                {% for tid in (step.display_technique_ids | default([]))[:3] %}
-                {{ mitre_pill(tid, neutral=true, clickable=true, size='sm') }}
-                {% endfor %}
-                {% if (step.display_technique_ids | default([])) | length > 3 %}
-                <span class="mitre-pill mitre-more mitre-sm">+{{ (step.display_technique_ids | length) - 3 }}</span>
-                {% endif %}
+    <div class="rc-head">
+        {% if not template %}{{ technique_ring(status, step.evidence_score, step.evidence_rule) }}{% endif %}
+        <div class="rc-heading">
+            <div class="rc-title" title="{{ step.title }}">{{ step.title }}</div>
+            <div class="rc-meta">
+                {% if not template %}<span class="rc-sev text-{{ status_class }}" title="{{ status_label }} on this system">{{ status_label }}</span>{% endif %}
+                <span class="cat-card__tactic">{{ tactic_icon(step.tactic, '12') }} {{ step.tactic | default('Other') }}</span>
+                {% if step.priority %}<span class="rc-sev rc-sev--{{ step.priority }}" title="Priority">{{ step.priority | capitalize }}</span>{% endif %}
+                {% for tid in tids[:2] %}{{ mitre_pill(tid, neutral=true, clickable=true, size='sm') }}{% endfor %}
+                {% if tids | length > 2 %}<span class="rc-more" title="{{ tids[2:] | join(', ') }}">+{{ tids | length - 2 }}</span>{% endif %}
             </div>
         </div>
     </div>
+
+    {% if step.non_alerting %}
+    <div class="rc-flags"><span class="status-pill status-info" title="Covered by a dashboard, report or log: watched, but nothing alerts">{{ icon('eye', '11') }} <span class="status-pill__text">Non-alerting</span></span></div>
+    {% endif %}
 
     <div class="sc-foot">
         {% if template %}

@@ -39,7 +39,7 @@
         <button type="button" data-rd-view="side">Side by side</button>
       </div>
     </div>
-    {{ diff_fields(diffs, 'This rule', 'Linked rule', select='rm-merge-section' if source and target else none) }}
+    {{ diff_fields(diffs, 'This rule', 'Linked rule', select='rm-merge-section' if source and target else none, donor='old') }}
     {% else %}
     <p class="rm-empty">The two rules are identical in every field compared.</p>
     {% endif %}
@@ -48,7 +48,9 @@
       <p class="rd-label mb-sm">Merge</p>
       <p class="text-muted fs-md mb-sm">
         Merging copies one side's content over the other, in the other's own SIEM, keeping the other's own enabled/disabled state.
-        {% if diffs %}Untick a section above to leave it as the other side has it; with every section ticked, the whole rule is copied.{% endif %}
+        {% if diffs %}Untick a section above to leave it as the other side has it; with every section ticked, the whole rule is copied.
+        To combine a list, tick each item the merged rule should have, from either side; to combine a text, use
+        <strong>Edit result</strong> and write it as it should be.{% endif %}
         Deleting is a separate choice — pick either side, both, or neither.
       </p>
       {% set src_label = source.name ~ ' (' ~ source_dest_name ~ ')' %}

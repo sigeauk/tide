@@ -1,38 +1,46 @@
 {% extends "base.html" %}
 {% from "components/ui/breadcrumb.html" import breadcrumb %}
 {% from "macros/help.html" import help_button with context %}
+{% from "macros/menu.html" import more_button %}
+{% from "macros/icons.html" import icon %}
 
 {% block title %}{{ nist_group.code }} - NIST 800-53 | TIDE{% endblock %}
 
 {% block content %}
 {{ breadcrumb(items=[('Home', '/'), ('MITRE', '/mitre'), ('NIST', '/mitre/nist'), (nist_group.code, none)]) }}
 
+{# As Rule Health (rule-browser-page): the header and figures stay put; the rest scrolls. #}
+<div class="rule-browser-page">
 <div class="page-header flex items-start justify-between gap-md">
-    <div class="page-split__main">
+    <div>
         <h1 class="page-title-hero">{{ nist_group.code }} - {{ nist_group.name }} {{ help_button('nist') }}</h1>
         <p class="page-subtitle">Capability descriptions under this control family, with the ATT&CK techniques they mitigate.</p>
-        <h2 class="section-title mt-md">Description</h2>
-        <div class="md-content mt-sm">{{ (nist_group.description or 'Capability descriptions under this control family, with mapped ATT&CK techniques.') | md }}</div>
     </div>
-    <div class="page-split__side page-split__side--stack">
-        <aside class="card card-padded">
-            <h2 class="section-title">Details</h2>
-            {% set technique_total = namespace(value=0) %}
-            {% for capability in nist_group.capabilities %}
-            {% set technique_total.value = technique_total.value + (capability.technique_count or 0) %}
-            {% endfor %}
-            <div class="mt-sm grid gap-xs">
-                <div><strong>Family:</strong> {{ nist_group.code }}</div>
-                <div><strong>Capabilities:</strong> {{ nist_group.capabilities | length }}</div>
-                <div><strong>Techniques:</strong> {{ technique_total.value }}</div>
-            </div>
-        </aside>
-        <div class="flex justify-end gap-sm">
-            <button type="button" class="btn btn-secondary btn-sm" data-click="ui.expandAll" data-scope="#nist-capability-group-detail" data-expand="true">Expand all</button>
-            <button type="button" class="btn btn-secondary btn-sm" data-click="ui.expandAll" data-scope="#nist-capability-group-detail" data-expand="false">Collapse all</button>
+    <div class="rh-more shrink-0" data-more>
+        {{ more_button('More actions', title='Expand or collapse every section', attrs='name="NIST Actions"') }}
+        <div class="rh-more__menu" role="menu" hidden>
+            <button name="Expand All" type="button" role="menuitem" class="rh-more__item" data-click="ui.expandAll" data-scope="#nist-capability-group-detail" data-expand="true">
+                {{ icon('chevron-down', '15') }}<span>Expand all</span>
+            </button>
+            <button name="Collapse All" type="button" role="menuitem" class="rh-more__item" data-click="ui.expandAll" data-scope="#nist-capability-group-detail" data-expand="false">
+                {{ icon('chevron-up', '15') }}<span>Collapse all</span>
+            </button>
         </div>
     </div>
 </div>
+
+{% set technique_total = namespace(value=0) %}
+{% for capability in nist_group.capabilities %}{% set technique_total.value = technique_total.value + (capability.technique_count or 0) %}{% endfor %}
+<div class="metrics-grid">
+    <div class="metric-card"><p class="metric-value">{{ nist_group.capabilities | length }}</p><p class="metric-label">Capabilities</p></div>
+    <div class="metric-card"><p class="metric-value">{{ technique_total.value }}</p><p class="metric-label">Techniques</p></div>
+</div>
+
+<div class="rule-scroll-region">
+<section class="card card-padded">
+    <h2 class="section-title">Description</h2>
+    <div class="md-content mt-sm">{{ (nist_group.description or 'Capability descriptions under this control family, with mapped ATT&CK techniques.') | md }}</div>
+</section>
 
 <div id="nist-capability-group-detail" data-collapse-scope="nist-capability-group-detail" class="mt-ms">
     <form method="get" action="/mitre/nist/{{ nist_group.code }}" class="filters-bar mt-md">
@@ -73,5 +81,7 @@
         </div>
     </details>
     </div>
+</div>
+</div>
 </div>
 {% endblock %}

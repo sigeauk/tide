@@ -35,14 +35,17 @@
         <span class="sys-group__chev">{{ icon('chevron-down', '14') }}</span>
         <span class="sys-group__label">{{ node.label }}</span>
         {% if node.kind in ('issue', 'fixer', 'destination', 'rule') %}{{ severity(node.severity) }}{% endif %}
-        {% if node.kind == 'cause' and node.ack_lapsed %}<span class="status-pill status-warning" title="Acknowledged, but it now affects more rules">Back</span>{% endif %}
+        {% if node.kind == 'cause' and node.ack_lapsed %}<span class="status-pill status-warning" title="Muted, but it now affects more rules">Back</span>{% endif %}
         <span class="sys-group__meta">
-            {%- if node.kind == 'acknowledged' %}{{ metrics.acknowledged }} cause{{ 's' if metrics.acknowledged != 1 }}, muted until they affect more rules · {% endif -%}
+            {%- if node.kind == 'muted' %}
+                {%- set by_cause = (metrics.muted_causes ~ ' cause' ~ ('s' if metrics.muted_causes != 1 else '')) if metrics.muted_causes else '' -%}
+                {%- set by_rule = (metrics.muted_rules ~ ' rule' ~ ('s' if metrics.muted_rules != 1 else '')) if metrics.muted_rules else '' -%}
+                {{ [by_cause, by_rule] | select | join(' and ') }} muted · {% endif -%}
             {%- if node.kind == 'issue' %}{{ node.fixer }} · {% endif -%}
             {%- if node.kind == 'cause' and node.cause %}{{ node.where }} · {% endif -%}
             {%- if node.kind == 'rule' %}{{ node.where }} · {% endif -%}
             {%- if node.kind == 'rule' %}{{ node.rows | length }} issue{{ 's' if node.rows | length != 1 }}
-            {%- elif node.rules %}{{ node.rules }} rule{{ 's' if node.rules != 1 }}
+            {%- elif node.rules %}{{ node.rules }} rule{{ 's' if node.rules != 1 }}{{ ' in all' if node.kind == 'muted' }}
             {%- else %}the whole destination{% endif -%}
             {%- if node.first_seen %} · for {{ age(node.first_seen) }}{% endif -%}
         </span>

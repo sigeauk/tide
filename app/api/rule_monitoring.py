@@ -53,7 +53,7 @@ def _mark_lazy(groups: List[Dict[str, Any]]) -> None:
 
 
 def page_context(db, client_id: str, params, user=None) -> Dict[str, Any]:
-    """The filters, their choices, and what they show; ``can_fix``: the user may acknowledge, sync and
+    """The filters, their choices, and what they show; ``can_fix``: the user may mute, sync and
     fix (who can edit Rule Health)."""
     filters = filters_from(params)
     destinations: List[Dict[str, Any]] = db.get_client_siems(client_id) or []
@@ -83,7 +83,7 @@ def page_context(db, client_id: str, params, user=None) -> Dict[str, Any]:
         "stale_days": rule_issues.STALE_DAYS,
         "can_fix": not user or user.can_write("page:rules"),
         # What every request from the page sends along: the filter bar's fields only (a dialog's
-        # fields can share their names: Acknowledge's issue, cause).
+        # fields can share their names: the Mute dialog's issue, cause).
         "filter_include": ", ".join(f"#rmon-filters [name='{n}']" for n in
                                     ("search", "scope", "severity", "fixer", "issue", "rules", "show", "group")),
     }
@@ -110,13 +110,13 @@ def rows(request: Request, db: DbDep, user: RequireUser, client_id: ActiveClient
         request, "partials/rule_monitoring_rows.html", {**ctx, "node": node})
 
 
-def _causes(groups: List[Dict[str, Any]], with_acknowledged: bool = True) -> List[Dict[str, Any]]:
+def _causes(groups: List[Dict[str, Any]], with_muted: bool = True) -> List[Dict[str, Any]]:
     """Every cause node under ``groups``, in the order shown."""
     out = []
     for node in groups:
-        if node["kind"] == "acknowledged" and not with_acknowledged:
+        if node["kind"] == "muted" and not with_muted:
             continue
-        out += [node] if node["kind"] == "cause" else _causes(node["children"], with_acknowledged)
+        out += [node] if node["kind"] == "cause" else _causes(node["children"], with_muted)
     return out
 
 
@@ -131,51 +131,91 @@ def _changed(message: str) -> HTMLResponse:
         {"rmonChanged": None, "showToast": {"message": message, "type": "success"}})})
 
 
-@router.get("/ack-form", response_class=HTMLResponse)
-def ack_form(request: Request, db: DbDep, user: RequireUser, client_id: ActiveClient):
-    """The Acknowledge dialog for one cause (on one or more SIEM records of one cluster)."""
-    keys = rule_issues.causes_from(request.query_params)
+def _cause_of(params) -> List[tuple]:
+    """The cause keys a Mute dialog names: ``cause_siem_ids`` (comma-separated, the SIEM records of
+    one cluster), with the issue, cause and space."""
+    return rule_issues.causes_from({"issue": params.get("issue"), "cause": params.get("cause"),
+                                    "space": params.get("space"), "siem_id": params.get("cause_siem_ids")})
+
+
+@router.get("/mute-form", response_class=HTMLResponse)
+def mute_form(request: Request, db: DbDep, user: RequireUser, client_id: ActiveClient):
+    """The Mute dialog. From a rule's row (``rule_id``): this problem on the rule, every problem it has,
+    or the problem's cause on every rule it affects; from a cause (``scope=cause``, ``cause_siem_ids``),
+    the cause only."""
+    p = request.query_params
+    rule = None if p.get("scope") == "cause" else rule_issues.mute_from(p)
+    keys = (rule_issues.causes_from({**p, "siem_id": rule[1]}) if rule and rule[3] else
+            _cause_of(p) if not rule else [])
     if not keys:
-        return HTMLResponse('<div class="alert alert-danger">Could not acknowledge it: that issue is not known.</div>',
+        return HTMLResponse('<div class="alert alert-danger">Could not mute it: that rule or issue is not known.</div>',
                             status_code=400)
-    issue, cause, _s, space = keys[0]
-    return request.app.state.templates.TemplateResponse(request, "components/rule_monitoring_ack.html", {
-        "issue": issue, "cause": cause, "space": space, "siem_ids": ",".join(k[2] for k in keys),
-        "title": rule_issues.KNOWN[issue].title, "label": request.query_params.get("label") or cause})
-
-
-@router.post("/ack", response_class=HTMLResponse)
-async def acknowledge(request: Request, db: DbDep, user: RequireUser, client_id: ActiveClient):
-    """Acknowledge (mute) a cause until it affects more rules than it does now."""
-    form = await request.form()
-    keys = rule_issues.causes_from(form)
-    if not keys:
-        return HTMLResponse('<p class="inline-error">Could not acknowledge it: that issue is not known.</p>', status_code=400)
-    actor = user.label if user else "Unknown"
     with db.get_connection() as conn:
-        for key in keys:
-            rule_issues.acknowledge(conn, key, str(form.get("note") or ""), actor)
-    logger.info("Rule Monitoring: %s acknowledged %s", actor, keys)
-    return _changed("Acknowledged. It comes back if it starts affecting more rules.")
+        scope = rule_issues.cause_scope(conn, db.get_client_siems(client_id) or [], keys)
+    issue, cause, _s, space = keys[0]
+    return request.app.state.templates.TemplateResponse(request, "components/rule_monitoring_mute.html", {
+        "issue": issue, "cause": cause, "space": rule[2] if rule else space,
+        "cause_siem_ids": ",".join(k[2] for k in scope["keys"]), "rules": scope["rules"], "cause_muted": scope["muted"],
+        "title": rule_issues.KNOWN[issue].title, "label": p.get("label") or cause or p.get("where") or "",
+        "rule_id": rule[0] if rule else "", "siem_id": rule[1] if rule else "",
+        "name": p.get("name") or (rule[0] if rule else ""), "where": p.get("where") or ""})
 
 
-@router.post("/unack", response_class=HTMLResponse)
-async def unacknowledge(request: Request, db: DbDep, user: RequireUser, client_id: ActiveClient):
+@router.post("/mute", response_class=HTMLResponse)
+async def mute(request: Request, db: DbDep, user: RequireUser, client_id: ActiveClient):
+    """Mute, as the dialog's ``scope`` says: ``problem``, one rule's problem, or ``rule``, every problem
+    it has, until it is unmuted; ``cause``, a cause on every rule it affects, until it affects more."""
+    form = await request.form()
+    scope, note = form.get("scope") or "problem", str(form.get("note") or "")
+    actor = user.label if user else "Unknown"
+    if scope == "cause":
+        keys = _cause_of(form)
+        if not keys:
+            return HTMLResponse('<p class="inline-error">Could not mute it: that issue is not known.</p>', status_code=400)
+        with db.get_connection() as conn:
+            for key in keys:
+                rule_issues.mute_cause(conn, key, note, actor)
+        logger.info("Rule Monitoring: %s muted the cause %s", actor, keys)
+        return _changed("Cause muted. It comes back if it starts affecting more rules.")
+    key = rule_issues.mute_from(form)
+    if not key:
+        return HTMLResponse('<p class="inline-error">Could not mute it: that rule or issue is not known.</p>', status_code=400)
+    with db.get_connection() as conn:
+        rule_issues.mute(conn, key, note, actor)
+    logger.info("Rule Monitoring: %s muted the rule %s", actor, key)
+    return _changed("Rule muted for this problem until you unmute it." if key[3]
+                    else "Rule muted for every problem, now and later, until you unmute it.")
+
+
+@router.post("/unmute-cause", response_class=HTMLResponse)
+async def unmute_cause(request: Request, db: DbDep, user: RequireUser, client_id: ActiveClient):
     """Unmute a cause: it is listed with the rest again."""
     keys = rule_issues.causes_from(await request.form())
     if not keys:
         return HTMLResponse("", status_code=400)
     with db.get_connection() as conn:
         for key in keys:
-            rule_issues.unacknowledge(conn, key)
-    logger.info("Rule Monitoring: %s unmuted %s", user.label if user else "Unknown", keys)
-    return _changed("Unmuted.")
+            rule_issues.unmute_cause(conn, key)
+    logger.info("Rule Monitoring: %s unmuted the cause %s", user.label if user else "Unknown", keys)
+    return _changed("Cause unmuted.")
+
+
+@router.post("/unmute", response_class=HTMLResponse)
+async def unmute_rule(request: Request, db: DbDep, user: RequireUser, client_id: ActiveClient):
+    """Unmute a rule's problem (or every problem it has, as it was muted): listed with the rest again."""
+    key = rule_issues.mute_from(await request.form())
+    if not key:
+        return HTMLResponse("", status_code=400)
+    with db.get_connection() as conn:
+        rule_issues.unmute(conn, key)
+    logger.info("Rule Monitoring: %s unmuted the rule %s", user.label if user else "Unknown", key)
+    return _changed("Rule unmuted.")
 
 
 def _selection(db, client_id: str, params, user) -> Dict[str, Any]:
     """What Raise issue (and Raise in GitLab) is for: one cause (issue, cause, siem_id, space);
     one issue as it is listed (``node``: its path, as JSON), every cause of it; or with ``all`` every
-    issue the filter bar shows that isn't acknowledged. ``for``: who it is for, where either role may
+    issue the filter bar shows that isn't muted. ``for``: who it is for, where either role may
     fix an issue in it (``rule_issues.audiences``; the first by default). ``params`` is the dialog's
     query string, or the same fields posted back. Returns its cause nodes, their Markdown and the
     page's context."""
@@ -183,7 +223,7 @@ def _selection(db, client_id: str, params, user) -> Dict[str, Any]:
     every = params.get("all") == "1"
     issue = None
     if every:
-        nodes = _causes(ctx["groups"], with_acknowledged=False)
+        nodes = _causes(ctx["groups"], with_muted=False)
     elif params.get("node"):
         try:
             issue = rule_issues.node_at(ctx["groups"], json.loads(params["node"]))

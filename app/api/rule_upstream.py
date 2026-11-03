@@ -4,6 +4,7 @@ built into TIDE (app/services/rule_updates.py): the comparison dialog, and takin
 sections (or none, keeping the rule as it is) to mark the update reviewed.
 """
 
+import json
 import logging
 from html import escape
 
@@ -62,7 +63,6 @@ async def unlink_upstream(request: Request, rule_id: str, db: DbDep, user: Requi
     rule_origins.unlink. The rule is then your own, so one still under Elastic's rule id is also given
     its own (promotion._own_rule_id_sync), which stays unlinked. The window reopens on the rule, under
     its new rule id when it has one."""
-    import json
     from app.api.promotion import _own_rule_id_sync, _run_in_context, _toast
     from app.api.rules import rule_window
     from app.services import rule_origins
@@ -95,26 +95,30 @@ async def unlink_upstream(request: Request, rule_id: str, db: DbDep, user: Requi
 
 @router.post("/{rule_id}/upstream", response_class=HTMLResponse)
 async def apply_update(request: Request, rule_id: str, db: DbDep, user: RequireUser, client_id: ActiveClient,
-                       siem_id: str = Query(...), space: str = Query("default")):
-    """Take the ticked sections of the upstream update (none: keep the rule as it is) and mark the
-    update reviewed. The outcome shows in the dialog."""
+                       siem_id: str = Query(...), space: str = Query("default"), back: bool = Query(False)):
+    """Take the ticked sections of the upstream update (none: keep the rule as it is), each combined
+    item by item or edited as the dialog sets it, and mark the update reviewed. Done, it says so in
+    a toast and the dialog goes: back to the rule window when it came from there (``back``), else
+    closed, leaving the list behind it refreshed. A failure shows in the dialog."""
     from app.api.promotion import _run_in_context
     from app.api.rules import rule_window
+    from app.services.rule_diff import posted_merges
 
     if not _in_scope(db, client_id, siem_id, space):
         return HTMLResponse('<div class="alert alert-danger">Rule not found.</div>')
     form = await request.form()
-    sections = [str(s) for s in form.getlist("section")] if form.get("take") == "sections" else []
+    take = form.get("take") == "sections"
+    sections = [str(s) for s in form.getlist("section")] if take else []
     actor = user.name or user.username
     status, message = await _run_in_context(
-        rule_updates.apply, db, client_id, (rule_id, siem_id, space), sections, user.id, actor)
+        rule_updates.apply, db, client_id, (rule_id, siem_id, space), sections, user.id, actor,
+        posted_merges(form) if take else None)
     if status != 200:
         return HTMLResponse(f'<div class="alert alert-danger">{escape(message)}</div>')
-    window = rule_window(rule_id, siem_id, space)
-    response = HTMLResponse(
-        f'<div class="alert alert-success"><p>{escape(message)}</p>'
-        f'<button name="Back To Rule" type="button" class="btn btn-secondary btn-sm" '
-        f'hx-get="{escape(window["url"])}" hx-target="#modal-container" hx-swap="innerHTML">Back to rule</button></div>'
-    )
-    response.headers["HX-Trigger"] = "refreshRules"
+    response = HTMLResponse("", headers={
+        "HX-Retarget": "#modal-container", "HX-Reswap": "innerHTML",
+        "HX-Trigger": json.dumps({"showToast": {"message": message, "type": "success"}, "refreshRules": None}),
+    })
+    if back:
+        response.headers["X-Tide-Rule-Window"] = json.dumps(rule_window(rule_id, siem_id, space))
     return response

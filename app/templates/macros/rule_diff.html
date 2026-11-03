@@ -2,20 +2,49 @@
   The field-by-field comparison of two rules (services/rule_diff.build_rule_diff), shared by Compare
   (components/rule_migration_diff.html) and an upstream update's review (components/rule_update_diff.html).
   ``select`` names a checkbox per section, ticked, for choosing which sections to take; the on/off
-  state is never taken, so it has none.
+  state is never taken, so it has none. With ``select``, a section a merge can combine
+  (``d.merge``) can be: a list's differing items each have a tick, the merged list being what is
+  ticked and what both have (``merge-items``, ``merge-item-<key>``); a text has Edit result, a box
+  whose text is merged in place of either side's (``merge-text-<key>``, sent only while open).
+  ``donor`` ("old" or "new") is the side taken, whose items are ticked and whose text the box holds
+  to begin with (Compare's direction moves them while untouched: app.js). rule_diff.posted_merges
+  reads them.
 #}
+{% from "macros/icons.html" import icon_text %}
 {% macro seg(segments) %}{% for text, changed in segments %}{% if changed %}<mark class="rd-mark">{{ text }}</mark>{% else %}{{ text }}{% endif %}{% endfor %}{% endmacro %}
 
-{% macro diff_fields(diffs, old_label='This rule', new_label='Linked rule', select=none) %}
-<div class="rd-fields">
+{% macro diff_fields(diffs, old_label='This rule', new_label='Linked rule', select=none, donor='new') %}
+{# A rule that becomes another type takes its query language and query with it (rule_diff.TOGETHER): their
+   ticks go together (app.js), and the rule type says how Kibana takes it. #}
+{% set retype = diffs | selectattr('key', 'equalto', 'type') | rejectattr('old', 'equalto', '—') | rejectattr('new', 'equalto', '—') | list | length > 0 %}
+<div class="rd-fields" data-donor="{{ donor }}">
   {% for d in diffs %}
   <div class="rd-field">
     <div class="rd-label">
       {% if select and d.key != 'enabled' %}
-      <label class="rd-take" title="Tick to take this section"><input type="checkbox" name="{{ select }}" value="{{ d.key }}" checked> {{ d.label }}</label>
+      <label class="rd-take" title="Tick to take this section"><input type="checkbox" name="{{ select }}" value="{{ d.key }}" checked data-merge-section{{ ' data-merge-together' if retype and d.key in ('type', 'language', 'query') }}> {{ d.label }}</label>
       {% else %}{{ d.label }}{% endif %}
     </div>
-    {% if d.kind == 'scalar' %}
+    {% if select and d.key == 'type' and retype %}
+    <p class="text-muted fs-sm rd-note">Kibana can't change a rule's type in place, so merging this deletes the rule in Kibana
+      and creates it again, under the same rule ID, with its exceptions, actions and whether it is enabled. Its past alerts
+      stay. Its rule type, query language and query go together. Elastic's prebuilt rules aren't re-created: install
+      Elastic's update in Kibana instead.</p>
+    {% endif %}
+    {% if select and d.merge == 'items' %}
+    {# Each item only one side has, ticked when the merged rule keeps it: the side taken's to begin with. #}
+    {% set long = ((d.removed + d.added) | map('string') | map('length') | max) > 60 %}
+    <div class="rd-pick{{ ' rd-pick--lines' if long }}" data-merge-pick>
+      <input type="hidden" name="merge-items" value="{{ d.key }}">
+      {% for side, items, label in (('old', d.removed, old_label), ('new', d.added, new_label)) %}{% for item in items %}
+      <label class="rd-pick__item rd-{{ side }}" title="Only on {{ label | lower }}. Ticked, the merged rule has it">
+        <input type="checkbox" name="merge-item-{{ d.key }}" value="{{ item }}" data-merge-item data-side="{{ side }}"{{ ' checked' if side == donor }}>
+        <span>{{ '−' if side == 'old' else '+' }} {{ item }}</span>
+      </label>
+      {% endfor %}{% endfor %}
+      {% if d.both %}<span class="rd-pick__both" title="Both have: {{ d.both | join(', ') }}">and {{ d.both | length }} both have</span>{% endif %}
+    </div>
+    {% elif d.kind == 'scalar' %}
     <div class="rd-inline rd-scalar">
       <span class="rd-pill rd-old">{{ d.old }}</span>&rarr;<span class="rd-pill rd-new">{{ d.new }}</span>
     </div>
@@ -53,6 +82,22 @@
         {% else %}<div class="rd-srow {{ row.type }}"><div class="rd-cell left {{ row.type }}">{% if row.left %}{{ seg(row.left) }}{% endif %}</div><div class="rd-cell right {{ row.type }}">{% if row.right %}{{ seg(row.right) }}{% endif %}</div></div>{% endif %}
       {% endfor %}
     </div>
+    {% if select and d.merge == 'text' %}
+    {# The box opens on the side taken's text; whatever it holds is merged. Its first line break is the
+       one HTML drops after <textarea>, so a text beginning with one keeps it. #}
+    <div class="rd-edit" data-merge-editor data-old="{{ d.old_text }}" data-new="{{ d.new_text }}">
+      <button type="button" class="btn btn-secondary btn-sm" data-merge-edit>{{ icon_text('pencil', 'Edit result', '13') }}</button>
+      <div class="rd-edit__box" hidden>
+        <textarea class="form-input rd-edit__text" name="merge-text-{{ d.key }}" rows="{{ 3 if d.key == 'description' else 10 }}"
+                  aria-label="Merged {{ d.label | lower }}" spellcheck="false" disabled data-merge-text>
+{{ d.new_text if donor == 'new' else d.old_text }}</textarea>
+        <div class="rd-edit__foot">
+          <span class="text-muted fs-sm">What you write here is merged, in place of either side's.</span>
+          <button type="button" class="btn btn-secondary btn-sm" data-merge-discard>Discard edit</button>
+        </div>
+      </div>
+    </div>
+    {% endif %}
     {% endif %}
   </div>
   {% endfor %}

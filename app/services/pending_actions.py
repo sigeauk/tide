@@ -233,10 +233,11 @@ def forget_copy(db, client_id: str, key: Key, copy_id: str) -> None:
 def own_rule_id_message(entry: Dict[str, Any]) -> str:
     if not entry.get("elastic_id"):     # not linked to Elastic's rule (a copy sharing a custom rule's id, or unlinked)
         return (f'Gave "{entry["name"]}" its own rule id, {entry["new_id"]}, in place of '
-                f'{entry.get("old_id") or entry["rule_id"]}. Kibana keeps its past alerts and runs with the original.')
+                f'{entry.get("old_id") or entry["rule_id"]}. Kibana keeps its past alerts and runs with the '
+                f'original.{entry.get("lists_note", "")}')
     return (f'Gave "{entry["name"]}" its own rule id, {entry["new_id"]}, in place of Elastic\'s '
             f'{entry["elastic_id"]}. Kibana keeps its past alerts and runs with the original. TIDE still shows '
-            "Elastic's updates for it.")
+            f'Elastic\'s updates for it.{entry.get("lists_note", "")}')
 
 
 def _apply_own_rule_id(db, entry: Dict[str, Any], refresh: bool) -> Tuple[str, Key]:
@@ -331,6 +332,10 @@ def _apply_move(db, entry: Dict[str, Any], refresh: bool) -> Tuple[str, Key]:
                                    "detection_rules after sync) -- link the two rows manually.", name, target_name)
                     message += " Could not link it to the source automatically — use Add link in the rule window."
             resolution = "new_id" if entry.get("new_id_used") else ""
+        if delete:
+            # The source is gone from its destination: its Rule Monitoring findings go with it.
+            from app.services import rule_issues
+            rule_issues.refresh_tenant(db, client_id, rule_keys=[src])
         if not _recorded(db, src, "moved", field="target_rule_id", value=tgt[0]):
             db.record_rule_history(
                 rule_id=src[0], siem_id=src[1], space=src[2], client_id=client_id, action="moved",

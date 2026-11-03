@@ -5,6 +5,9 @@
            system's techniques) or template (the templates': no Coverage filter, as a template
            has none until it is applied to a system).
 
+  Both group by baseline until this browser picks otherwise, so each baseline shows with its ⋮ (a
+  system's) or Manage (a template's), an empty one too.
+
   Controls carry no hx-* of their own: the page script turns any change here into one
   "sysFilter" event and the grid refetches itself with #sys-filters' inputs. Values come from
   the URL; where the URL is silent the page script fills the presentation choices (tactic sort,
@@ -17,7 +20,7 @@
 
 <div class="filters-bar sys-filters" id="sys-filters"
      {% if template %}data-base-path="/baselines" data-window-url="/api/baselines/tactics/{id}" data-pref-key="tide.templateSteps" data-default-group="baseline"
-     {% else %}data-base-path="/systems/{{ system_id }}" data-window-url="/api/systems/{{ system_id }}/steps/{id}" data-pref-key="tide.systemSteps"{% endif %}
+     {% else %}data-base-path="/systems/{{ system_id }}" data-window-url="/api/systems/{{ system_id }}/steps/{id}" data-pref-key="tide.systemSteps" data-default-group="baseline"{% endif %}
      data-url-keys="{{ ['tactic_sort' if f.tactic_sort, 'sort_name' if f.sort_name, 'group' if f.group, 'view' if f.view] | select | join(',') }}">
     <div class="filter-group grow">
         <label class="form-label" for="sys-search">Search</label>

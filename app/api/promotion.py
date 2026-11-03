@@ -106,7 +106,8 @@ def get_promotion_rule_diff(
 def _merge_rule_sync(db, client_id: str, rule_id: str, siem_id: str, space: str,
                      user_id: str, username: str, direction: str, delete_which: str,
                      target_rule_id: Optional[str] = None, target_siem_id: Optional[str] = None,
-                     target_space: Optional[str] = None, sections: Optional[list] = None):
+                     target_space: Optional[str] = None, sections: Optional[list] = None,
+                     merges: Optional[dict] = None):
     """Merge two linked rules: one side's content overwrites the other's, in the other's own
     SIEM (blocking). ``direction`` is ``"source_over_target"`` (this rule's content overwrites
     the linked rule) or ``"target_over_source"`` (the reverse) -- "source" always means this
@@ -118,6 +119,8 @@ def _merge_rule_sync(db, client_id: str, rule_id: str, siem_id: str, space: str,
     Merging never switches a detection on or off -- whichever side is overwritten keeps its own
     enabled state. ``sections`` (Compare's ticked sections, rule_diff keys) limits the merge to
     those fields, written to the rule as Kibana holds it now; None copies the whole rule over.
+    ``merges`` (rule_diff.posted_merges) combines a section rather than taking it: the items of
+    both kept as ticked, a text as edited.
 
     Returns ``(status_code, message, refresh_scope, survivor)``; 200 means merged. ``survivor`` is
     ``(rule_id, siem_id, space)`` of the copy to show afterwards: the one that received the merge,
@@ -156,6 +159,7 @@ def _merge_rule_sync(db, client_id: str, rule_id: str, siem_id: str, space: str,
         return 400, "Both destinations must still be linked to this client to merge.", None, None
 
     hook = db.kibana_recreate_hook(client_id, dest_id, dest_siem, dest_space, username, user_id)
+    by_hand: list = []
     if sections is None:
         payload = copy.deepcopy(donor_rule.raw_data)
         payload["enabled"] = bool((dest_rule.raw_data or {}).get("enabled", False))
@@ -184,9 +188,15 @@ def _merge_rule_sync(db, client_id: str, rule_id: str, siem_id: str, space: str,
         friendly = f'Merged — "{dest_rule.name}" now matches "{donor_rule.name}".{actions_note}'
     elif sections:
         from app.elastic_helper import apply_rule_changes
-        from app.services.rule_diff import build_rule_diff, section_changes
-        labels = {d["key"]: d["label"] for d in build_rule_diff(dest_rule.raw_data or {}, donor_rule.raw_data)}
-        changes, remove = section_changes(dest_rule.raw_data or {}, donor_rule.raw_data, sections)
+        from app.services.rule_diff import (build_rule_diff, combined_by_hand, merge_problem, section_changes, taken_text,
+                                            together_problem)
+        merges = {k: v for k, v in (merges or {}).items() if k in sections}
+        diffs = build_rule_diff(dest_rule.raw_data or {}, donor_rule.raw_data)
+        problem = merge_problem(merges, sections) or together_problem(diffs, sections)
+        if problem:
+            return 400, problem, None, None
+        by_hand = combined_by_hand(dest_rule.raw_data or {}, donor_rule.raw_data, merges, sections)
+        changes, remove = section_changes(dest_rule.raw_data or {}, donor_rule.raw_data, sections, merges)
         outcome, message, _live = apply_rule_changes(
             dest_id, changes, remove, space=dest_space, kibana_url=dest_siem_row.get("kibana_url"),
             api_key=dest_siem_row.get("api_token_enc"), cached=dest_rule.raw_data or {}, on_recreated=hook,
@@ -196,9 +206,10 @@ def _merge_rule_sync(db, client_id: str, rule_id: str, siem_id: str, space: str,
                          "Sync it, then compare again."), None, None
         if outcome != "updated":
             return 400, f"Could not merge: {message}", None, None
-        taken = ", ".join(labels.get(s, s) for s in sections)
-        merged = f'Merged {taken} from "{donor_rule.name}".'
-        friendly = f'Merged — "{dest_rule.name}" took {taken} from "{donor_rule.name}".'
+        taken = taken_text(diffs, sections, by_hand)
+        kibana_note = f" {message}" if message else ""     # such as re-creating a rule that changed type
+        merged = f'Merged {taken} from "{donor_rule.name}".{kibana_note}'
+        friendly = f'Merged — "{dest_rule.name}" took {taken} from "{donor_rule.name}".{kibana_note}'
     else:
         merged, friendly = "", "Nothing was merged."
     if merged:
@@ -206,7 +217,7 @@ def _merge_rule_sync(db, client_id: str, rule_id: str, siem_id: str, space: str,
             rule_id=dest_id, siem_id=dest_siem, space=dest_space, client_id=client_id,
             action="link_synced", actor_user_id=user_id, actor_name=username,
             detail={"message": merged, "source_rule_id": donor_id, "source_siem_id": donor_siem,
-                    "source_space": donor_space, "sections": sections},
+                    "source_space": donor_space, "sections": sections, "combined": by_hand},
         )
 
     refresh_scope = (dest_siem, dest_space, dest_id) if merged else None
@@ -267,12 +278,14 @@ async def merge_linked_rule(
     delete_which = str(form.get("delete_which") or "none")
     if delete_which not in {"none", "source", "target"}:
         delete_which = "none"
-    # Only the ticked sections (Compare unticked some), else the whole rule.
+    # Only the ticked sections (Compare unticked some, or combined one), else the whole rule.
     sections = [str(s) for s in form.getlist("section")] if form.get("by_section") else None
+    from app.services.rule_diff import posted_merges
+    merges = posted_merges(form) if sections is not None else None
     username = user.name or user.username if user else "Unknown"
     status, message, refresh_scope, survivor = await _run_in_context(
         _merge_rule_sync, db, client_id, rule_id, siem_id, space, user.id, username, direction, delete_which,
-        target_rule_id, target_siem_id, target_space, sections,
+        target_rule_id, target_siem_id, target_space, sections, merges,
     )
     if status != 200:
         return HTMLResponse(f'<div class="alert alert-danger">{escape(message)}</div>', status_code=status)
@@ -441,7 +454,7 @@ def _own_rule_id_sync(db, user_id: str, username: str, client_id: str, rule_id: 
     entry = {"kind": "own_rule_id", "client_id": client_id, "siem_id": siem_id, "space": space, "rule_id": rule_id,
              "copy_id": copy_id, "new_id": str(created.get("rule_id") or uuid.uuid4()), "object_id": created.get("id"),
              "name": name, "elastic_id": elastic_id, "old_id": old_id, "version": version,
-             "created_version": created.get("version")}
+             "created_version": created.get("version"), "lists_note": message}
     return _own_rule_id_result(pending_actions.finish(db, entry, user_id, username), entry)
 
 

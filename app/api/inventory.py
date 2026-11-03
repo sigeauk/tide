@@ -2183,10 +2183,8 @@ def api_apply_baseline(request: Request, baseline_id: str, system_id: str, user:
         copy = apply_baseline(system_id, baseline_id, client_id=client_id, actor=_actor(user))
     except ValueError as e:
         return HTMLResponse(str(e), status_code=400)
-    if request.query_params.get("return") == "system-dialog":
-        resp = _baselines_dialog(request, system_id, client_id)
-        resp.headers["HX-Trigger"] = "stepsChanged"
-        return resp
+    if request.query_params.get("return") == "system-dialog":     # the system page's Add baseline
+        return _system_page_reload()
     # From the template's page: show the system with its new copy.
     resp = HTMLResponse("")
     resp.headers["HX-Redirect"] = f"/systems/{system_id}?baseline_id={copy.playbook_id}"
@@ -2195,14 +2193,13 @@ def api_apply_baseline(request: Request, baseline_id: str, system_id: str, user:
 
 @router.delete("/api/baselines/{baseline_id}/apply/{system_id}", response_class=HTMLResponse)
 def api_remove_baseline(request: Request, baseline_id: str, system_id: str, user: RequireUser, client_id: ActiveClient):
-    """Remove a system's own baseline (``baseline_id`` is the system's copy, not the template)."""
+    """Remove a system's own baseline (``baseline_id`` is the system's copy, not the template), from
+    its ⋮ on the system page, then reload the page."""
     try:
         remove_baseline(system_id, baseline_id, client_id=client_id, actor=_actor(user))
     except ValueError as e:
         return HTMLResponse(str(e), status_code=400)
-    resp = _baselines_dialog(request, system_id, client_id)
-    resp.headers["HX-Trigger"] = "stepsChanged"
-    return resp
+    return _system_page_reload()
 
 
 def _system_step_or_404(system_id: str, step_id: str, client_id: str) -> None:
@@ -2709,8 +2706,9 @@ def api_system_technique_remove(request: Request, system_id: str, step_id: str, 
 def api_system_steps_grid(
     request: Request, system_id: str, user: CurrentUser, client_id: ActiveClient,
 ):
-    """The filtered, sorted and optionally grouped technique grid (or table) for one system."""
-    from app.inventory_engine import get_system_steps, group_system_steps
+    """The filtered, sorted and optionally grouped technique grid (or table) for one system. Each
+    card's ring is its strongest counted rule's score, as in its window."""
+    from app.inventory_engine import attach_step_evidence, get_system_steps, group_system_steps
 
     missing = _system_not_found(system_id, client_id)
     if missing:
@@ -2722,9 +2720,19 @@ def api_system_steps_grid(
         status=f["status"], mapping=f["mapping"], baseline_id=f["baseline_id"],
         tactic_sort=tactic_sort, sort_name=f["sort_name"],
     )
+    if (f["view"] or "cards") == "cards":
+        attach_step_evidence(system_id, data["steps"], client_id=client_id)
+    groups = group_system_steps(data["steps"], f["group"], tactic_sort)
+    # Grouped by baseline, one with no techniques yet still shows, with its ⋮, as a template does.
+    narrowed = bool(f["search"] or f["tactic"] or f["status"] or f["mapping"])
+    if "baseline" in f["group"] and not narrowed:
+        shown = {g["key"] for g in groups}
+        groups += [{"key": b["id"], "kind": "baseline", "label": b["name"], "steps": [], "groups": [], "total": 0}
+                   for b in data["baselines"]
+                   if b["id"] not in shown and (not f["baseline_id"] or b["id"] == f["baseline_id"])]
+        groups.sort(key=lambda g: (g["label"] or "").lower())
     return _render("partials/system_steps_grid.html", request, {
-        "system_id": system_id, **data,
-        "groups": group_system_steps(data["steps"], f["group"], tactic_sort),
+        "system_id": system_id, **data, "groups": groups, "narrowed": narrowed, "baseline_id": f["baseline_id"],
         "view": f["view"] or "cards",
         "tactic_sort": tactic_sort, "sort_name": f["sort_name"],
     })
@@ -2794,13 +2802,17 @@ def api_siem_coverage_dialog(request: Request, system_id: str, user: CurrentUser
 
 
 def _baselines_dialog(request: Request, system_id: str, client_id: str):
-    """Manage baselines: this system's own (edit, remove), every template (apply, again if need
-    be: a second copy is named "<name> (copy)"), and starting an empty one."""
+    """Add baseline: apply a template (again if need be: a second copy is named "<name> (copy)"),
+    or start an empty one. Each baseline's own ⋮ on the page edits or removes it."""
     return _render("partials/system_baselines_dialog.html", request, {
-        "system_id": system_id,
-        "applied": get_system_baselines(system_id, include_detection_details=False, client_id=client_id),
-        "available": list_playbooks(client_id=client_id),
+        "system_id": system_id, "available": list_playbooks(client_id=client_id),
     })
+
+
+def _system_page_reload() -> HTMLResponse:
+    """A baseline added, renamed or removed changes more of the system page than its grid (the
+    count, the metric strip, the Baseline filter, the heatmap's baselines): reload it."""
+    return HTMLResponse("", headers={"HX-Refresh": "true"})
 
 
 @router.post("/api/systems/{system_id}/baselines", response_class=HTMLResponse)
@@ -2808,16 +2820,14 @@ def api_system_baseline_create(
     request: Request, system_id: str, user: RequireUser, client_id: ActiveClient,
     name: str = Form(...), description: str = Form(""),
 ):
-    """Start an empty baseline of this system's own, from the Manage baselines window."""
+    """Start an empty baseline of this system's own, from the Add baseline window."""
     missing = _system_not_found(system_id, client_id)
     if missing:
         return missing
     if not name.strip():
         raise HTTPException(status_code=422, detail="A baseline needs a name")
     create_system_baseline(system_id, name.strip(), description.strip(), client_id=client_id, actor=_actor(user))
-    resp = _baselines_dialog(request, system_id, client_id)
-    resp.headers["HX-Trigger"] = "stepsChanged"
-    return resp
+    return _system_page_reload()
 
 
 @router.get("/api/systems/{system_id}/baselines/{baseline_id}/edit", response_class=HTMLResponse)
@@ -2839,8 +2849,8 @@ def api_system_baseline_update(
     request: Request, system_id: str, baseline_id: str, user: RequireUser, client_id: ActiveClient,
     name: str = Form(...), description: str = Form(""),
 ):
-    """Rename this system's own baseline, then return to Manage baselines. Only this system's
-    baseline changes; templates and other systems keep their own name and description."""
+    """Rename this system's own baseline (its ⋮ › Edit baseline), then reload the page. Only this
+    system's baseline changes; templates and other systems keep their own name and description."""
     missing = _system_not_found(system_id, client_id)
     if missing:
         return missing
@@ -2849,14 +2859,12 @@ def api_system_baseline_update(
     if not name.strip():
         raise HTTPException(status_code=422, detail="A baseline needs a name")
     update_playbook(baseline_id, name=name.strip(), description=description.strip(), client_id=client_id)
-    resp = _baselines_dialog(request, system_id, client_id)
-    resp.headers["HX-Trigger"] = "stepsChanged"
-    return resp
+    return _system_page_reload()
 
 
 @router.get("/api/systems/{system_id}/baselines-dialog", response_class=HTMLResponse)
 def api_system_baselines_dialog(request: Request, system_id: str, user: CurrentUser, client_id: ActiveClient):
-    """Apply a baseline to this system, or remove one."""
+    """The Add baseline window: apply a template to this system, or start an empty baseline."""
     missing = _system_not_found(system_id, client_id)
     if missing:
         return missing

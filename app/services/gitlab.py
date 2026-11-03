@@ -45,7 +45,7 @@ def uses(link: Dict[str, Any]) -> List[str]:
 
 
 def _session(link: Dict[str, Any]) -> requests.Session:
-    session = requests.Session()
+    session = tls.Session()
     session.headers["PRIVATE-TOKEN"] = link.get("token") or ""
     session.verify = tls.verify_arg(link.get("tls_verify"))
     return session

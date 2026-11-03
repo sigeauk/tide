@@ -8,24 +8,23 @@
 {{ breadcrumb(items=[('Home', '/'), ('MITRE', '/mitre'), ('NIST', none)]) }}
 
 
+{# As Rule Health (rule-browser-page): the header, figures and search stay put; the families scroll. #}
+<div class="rule-browser-page">
 <div class="page-header flex items-start justify-between gap-md">
     <div>
         <h1 class="page-title-hero">NIST 800-53 {{ help_button('nist') }}</h1>
         <p class="page-subtitle">Control families and mapped capability descriptions served from the bundled NIST mappings file.</p>
     </div>
-    <div class="page-split__side">
-        <aside class="card card-padded">
-            <h2 class="section-title">Details</h2>
-            <div class="mt-sm grid gap-xs">
-                <div><strong>Families:</strong> {{ nist_groups | length }}</div>
-                <div><strong>Capabilities:</strong> {{ nist_overview.capabilities or 0 }}</div>
-                <div><strong>Techniques:</strong> {{ nist_overview.techniques or 0 }}</div>
-            </div>
-        </aside>
-    </div>
 </div>
 
-<form method="get" action="/mitre/nist" class="filters-bar mt-md">
+<div class="rule-browser-controls">
+<div class="metrics-grid">
+    <div class="metric-card"><p class="metric-value">{{ nist_groups | length }}</p><p class="metric-label">Families</p></div>
+    <div class="metric-card"><p class="metric-value">{{ nist_overview.capabilities or 0 }}</p><p class="metric-label">Capabilities</p></div>
+    <div class="metric-card"><p class="metric-value">{{ nist_overview.techniques or 0 }}</p><p class="metric-label">Techniques</p></div>
+</div>
+
+<form method="get" action="/mitre/nist" class="filters-bar">
     <div class="filter-group grow">
         <label class="form-label">Search families</label>
         <input class="form-input" type="text" name="q" value="{{ query or '' }}" placeholder="Search by control code or family name">
@@ -34,8 +33,10 @@
         <button class="btn btn-primary" type="submit">Apply</button>
     </div>
 </form>
+</div>
 
-<div id="nist-groups" class="cve-list mt-ms">
+<div class="rule-scroll-region">
+<div id="nist-groups" class="cve-list">
     {% for group in nist_groups %}
     <details class="cve-card-item cve-card-item--available block" data-collapse-key="nist-family-{{ group.code }}">
         <summary class="row-grid row-grid--top cursor-pointer">
@@ -76,5 +77,7 @@
     {% if not nist_groups %}
     <div class="card card-padded text-muted">No NIST capability families matched the current search.</div>
     {% endif %}
+</div>
+</div>
 </div>
 {% endblock %}

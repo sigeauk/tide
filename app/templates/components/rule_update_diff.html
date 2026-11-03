@@ -3,14 +3,16 @@
   version into it section by section (GET/POST /api/rules/{id}/upstream, app/services/rule_updates.py).
   Laid out like Compare (components/rule_migration_diff.html): the differences with a tick per
   section, then Merge. Merge writes the ticked sections only (keep your query, take the new
-  investigation guide); "Keep this rule as it is" takes none. Either marks the update as reviewed.
+  investigation guide), a list as its items are ticked and a text as edited (macros/rule_diff.html);
+  "Keep this rule as it is" takes none. Either marks the update as reviewed.
   An Elastic prebuilt rule takes sections too: Kibana marks it customised. When nothing compared
   differs (Elastic raised the version for something outside the rule), "Move to version N" marks it.
   A custom rule that differs from the Elastic rule TIDE links it to (``unconfirmed``, the sections that
   differ; Rule Monitoring's elastic_link_differs) is said to be so: Keep the link marks it reviewed, and
   Unlink from Elastic (``can_unlink``) makes it the tenant's own, under a rule id of its own when it
   holds Elastic's (``holds_elastic_id``). ``back`` (from the rule window) offers Back to rule rather
-  than Close.
+  than Close. Merge, Keep and Move end in a toast, back in the rule window when the dialog came from
+  it, else with the dialog closed; only a failure shows in the dialog (#rule-update-result).
   Context: rule, status (rule_origins.statuses), diffs, note, sections, unconfirmed, siem_id, space,
   dest_name, can_apply, can_unlink, holds_elastic_id, back.
 #}
@@ -18,6 +20,8 @@
 {% from "macros/rule_diff.html" import diff_fields %}
 {% from "macros/modal.html" import close_button %}
 {% set scope_qs = 'siem_id=' ~ (siem_id | urlencode) ~ '&space=' ~ (space | urlencode) %}
+{# Done, the window goes back to the rule when it came from there, else closes (rule_upstream.apply_update). #}
+{% set post_qs = scope_qs ~ ('&back=1' if back else '') %}
 {% set upstream_label = ((status.source ~ "'s version " ~ status.to_version) if status and status.to_version
                          else (status.source ~ "'s rule now") if status else 'Upstream') %}
 {% set this_label = (rule.name ~ ' (' ~ dest_name ~ ')') if rule else 'This rule' %}
@@ -76,7 +80,7 @@
         <div class="modal-actions">
           {{ leave() }}
           <button type="button" class="btn btn-primary" data-update-move
-                  hx-post="/api/rules/{{ rule.rule_id }}/upstream?{{ scope_qs }}" hx-vals='{"take": "none"}'
+                  hx-post="/api/rules/{{ rule.rule_id }}/upstream?{{ post_qs }}" hx-vals='{"take": "none"}'
                   hx-target="#rule-update-result" hx-swap="innerHTML" hx-disabled-elt="this">{{ icon_text('git-branch', move_label, '13') }}</button>
         </div>
       </div>
@@ -85,8 +89,10 @@
         <p class="rd-label mb-sm">Merge</p>
         <p class="text-muted fs-md mb-sm">
           Merging writes {{ upstream_label }} of each ticked section into this rule, in its own SIEM. Untick a section
-          to keep it as this rule has it: keep your query, say, and take the new investigation guide. Whether it is
-          enabled, its exceptions and its actions never change.
+          to keep it as this rule has it: keep your query, say, and take the new investigation guide. To combine a
+          list, tick each item the merged rule should have: keep your own highlighted fields and add
+          {{ status.source }}'s new ones. To combine a text, use <strong>Edit result</strong> and write it as it
+          should be. Whether it is enabled, its exceptions and its actions never change.
           {% if status.prebuilt %}This is one of Elastic's prebuilt rules: Kibana keeps it as Elastic's and marks it
           customised, and when Kibana later installs Elastic's update itself, it asks how to combine the two.{% endif %}
           Either way the update is marked as reviewed, and the rule shows <strong>Update available</strong> again only
@@ -102,10 +108,10 @@
                   hx-confirm="Unlink this rule from Elastic's &quot;{{ status.name or status.upstream_id }}&quot;? TIDE then treats it as your own rule and no longer shows Elastic's updates for it.{% if holds_elastic_id %} It also gives it its own rule id, in place of Elastic's: TIDE creates it again in Kibana under a new rule id and deletes this one. Kibana keeps this rule's past alerts and runs with the original.{% else %} Nothing changes in Kibana.{% endif %}">{{ icon_text('unlink', 'Unlink from Elastic', '13') }}</button>{% endif %}
           {{ leave() }}
           {% if status.state == 'update' or unconfirmed %}<button type="button" class="btn btn-secondary" data-update-keep
-                  hx-post="/api/rules/{{ rule.rule_id }}/upstream?{{ scope_qs }}" hx-vals='{"take": "none"}'
+                  hx-post="/api/rules/{{ rule.rule_id }}/upstream?{{ post_qs }}" hx-vals='{"take": "none"}'
                   hx-target="#rule-update-result" hx-swap="innerHTML" hx-disabled-elt="this">{{ 'Keep this rule as it is' if status.state == 'update' else 'Keep the link' }}</button>{% endif %}
           {% if diffs %}<button type="button" class="btn btn-primary" data-update-take
-                  hx-post="/api/rules/{{ rule.rule_id }}/upstream?{{ scope_qs }}" hx-include="#rule-update-form" hx-vals='{"take": "sections"}'
+                  hx-post="/api/rules/{{ rule.rule_id }}/upstream?{{ post_qs }}" hx-include="#rule-update-form" hx-vals='{"take": "sections"}'
                   hx-target="#rule-update-result" hx-swap="innerHTML" hx-disabled-elt="this"
                   hx-confirm="Merge the ticked sections of {{ upstream_label }} into {{ this_label }}? Its other sections stay as they are.">{{ icon_text('git-branch', 'Merge ticked sections', '13') }}</button>{% endif %}
         </div>

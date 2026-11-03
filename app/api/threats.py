@@ -4,8 +4,9 @@ API routes for Threat Landscape page.
 
 from fastapi import APIRouter, Request, Query, BackgroundTasks
 from fastapi.responses import HTMLResponse
+from types import SimpleNamespace
 from typing import Optional, List, Any
-from dataclasses import dataclass
+from urllib.parse import urlencode
 import re
 import json
 
@@ -127,29 +128,79 @@ def get_iso_code(text: str) -> Optional[str]:
     return None
 
 
-@dataclass
-class TTPWithCoverage:
-    """TTP with coverage status and rule count for display."""
-    id: str
-    covered: bool
-    rule_count: int = 0
+# A threat actor on Threat Landscape is shown as an ATT&CK group is on the MITRE Groups page: the
+# same card (components/mitre_card.html), grid and window (components/mitre_window.html), with the
+# actor's own techniques (OpenCTI's merged onto MITRE's).
+ACTOR_SPEC = SimpleNamespace(key="actor", title="Threat actors", singular="Threat actor",
+                             window_body="components/mitre_window_actor.html")
+# An actor's sources as source pills: an ATT&CK domain as on the MITRE pages, OpenCTI as CTI, any
+# other connector by its own name.
+_MITRE_SOURCE = re.compile(r"^MITRE:\s*(\w+)$", re.I)
+_OPENCTI = {"octi", "opencti", "stix"}
 
 
-@dataclass
-class ActorWithCoverage:
-    """Threat actor with calculated coverage for display."""
-    name: str
-    description: Optional[str]
-    aliases: Optional[str]
-    origin: Optional[str]
-    source: List[str]
-    ttp_count: int
-    ttps: List[str]
-    covered_count: int
-    coverage_pct: int
-    ttps_with_coverage: List[TTPWithCoverage]
-    iso_code: Optional[str] = None  # For flag SVG path
-    group_url: Optional[str] = None
+def _actor_sources(sources) -> List[str]:
+    out = []
+    for src in sources or []:
+        text = str(src).strip()
+        m = _MITRE_SOURCE.match(text)
+        key = m.group(1).lower() if m else ("OpenCTI" if text.lower() in _OPENCTI else text)
+        if key and key not in out:
+            out.append(key)
+    return out
+
+
+def _source_meta() -> dict:
+    from app.services import mitre_catalog as catalog
+    return {**catalog.SOURCE_META, "OpenCTI": {"label": "OpenCTI", "code": "CTI", "pill_class": "src-opencti"}}
+
+
+def _group_ids(db) -> dict:
+    """ATT&CK Enterprise groups by lower-case name and alias -> group id: an actor of the same name
+    (or alias) is that group."""
+    lookup = {}
+    try:
+        for grp in db.list_mitre_groups(domain="enterprise"):
+            gid = (grp.get("id") or "").strip().upper()
+            if not gid:
+                continue
+            for key in [grp.get("name") or ""] + str(grp.get("aliases") or "").split(","):
+                key = key.strip().lower()
+                if key and key not in lookup:
+                    lookup[key] = gid
+    except Exception:
+        logger.warning("ATT&CK groups unavailable for Threat Landscape", exc_info=True)
+    return lookup
+
+
+def _actor_group(actor, groups: dict) -> str:
+    keys = [actor.name or ""] + str(actor.aliases or "").split(",")
+    return next((groups[k.strip().lower()] for k in keys if k.strip().lower() in groups), "")
+
+
+def _ttps(actor) -> set:
+    return {str(t).strip().upper() for t in actor.ttps or [] if str(t).strip()}
+
+
+def actor_item(actor, covered: set) -> dict:
+    """An actor as a card (components/mitre_card.html): flag, aliases, sources, coverage of its
+    techniques by the client's enabled rules, and its counts."""
+    from app.services import mitre_catalog as catalog
+    ttps = _ttps(actor)
+    aliases = [a.strip() for a in str(actor.aliases or "").split(",") if a.strip() and a.strip() != actor.name]
+    meta = [("crosshair", f"{len(ttps)} technique{'s' if len(ttps) != 1 else ''}", "ATT&CK techniques this actor uses")]
+    return {
+        "id": "",
+        "dom_id": catalog.dom_id("actor", actor.name),
+        "window_url": f"/api/threats/window?{urlencode({'name': actor.name})}",
+        "name": actor.name,
+        "flag": get_iso_code(f"{actor.origin or ''} {actor.name} {actor.description or ''}"),
+        "sub": ", ".join(aliases),
+        "sources": _actor_sources(actor.source),
+        "coverage": catalog.coverage_of(ttps, covered),
+        "ttp_count": len(ttps),
+        "meta": meta,
+    }
 
 
 @router.get("", response_class=HTMLResponse)
@@ -163,155 +214,96 @@ def list_threats(
     source: Optional[str] = Query(None),
     sort_by: str = Query("ttp_desc"),
     page: int = Query(1, ge=1),
-    page_size: int = Query(24, ge=1, le=100),
 ):
-    """List threat actors with filtering and pagination."""
+    """The actors as cards, one page at a time: the next loads as the end of the grid scrolls into
+    view, as on the MITRE pages."""
+    from app.services import mitre_catalog as catalog
     try:
-        # Get all actors visible to the active tenant (OpenCTI-only actors are
-        # hidden when this client has no OpenCTI link — see DB layer).
+        # OpenCTI-only actors are hidden when this client has no OpenCTI link (see the DB layer).
         actors = db.get_threat_actors(client_id=client_id)
-
-        # Get covered TTPs and rule counts scoped to active client
-        covered_ttps = db.get_all_covered_ttps(client_id=client_id)
-        technique_rule_counts = db.get_ttp_rule_counts(client_id=client_id)
-    except Exception as e:
-        # Fallback if database not ready
-        actors = []
-        covered_ttps = set()
-        technique_rule_counts = {}
-    
-    # Apply text/origin/source filters FIRST on lightweight actor objects
-    # before computing coverage (which is more expensive per actor)
-    if search:
-        search_lower = search.lower()
-        actors = [
-            a for a in actors
-            if search_lower in a.name.lower() or
-               (a.aliases and search_lower in a.aliases.lower()) or
-               (a.description and search_lower in a.description.lower())
-        ]
-    
-    if origin:
-        actors = [
-            a for a in actors
-            if a.origin and origin.lower() in a.origin.lower()
-        ]
-    
-    if source:
-        actors = [
-            a for a in actors
-            if source in a.source
-        ]
-    
-    # Calculate coverage only for filtered actors
-    actors_with_coverage = []
-
-    # Best-effort MITRE group URL resolution so actor titles can deep-link
-    # to group detail pages when the actor maps to a known ATT&CK group.
-    group_lookup = {}
-    try:
-        for grp in db.list_mitre_groups(domain="enterprise"):
-            gid = (grp.get("id") or "").strip().upper()
-            if not gid:
-                continue
-            group_url = f"/mitre/groups/{gid}"
-
-            name_key = (grp.get("name") or "").strip().lower()
-            if name_key and name_key not in group_lookup:
-                group_lookup[name_key] = group_url
-
-            aliases_raw = grp.get("aliases") or ""
-            for alias in str(aliases_raw).split(","):
-                alias_key = alias.strip().lower()
-                if alias_key and alias_key not in group_lookup:
-                    group_lookup[alias_key] = group_url
     except Exception:
-        group_lookup = {}
+        logger.warning("Threat actors unavailable", exc_info=True)
+        actors = []
+    covered, _counts = catalog.coverage_for(db, client_id)
 
-    for actor in actors:
-        actor_ttps = {str(t).strip().upper() for t in actor.ttps}
-        covered_count = len(actor_ttps.intersection(covered_ttps))
-        coverage_pct = int((covered_count / len(actor_ttps) * 100)) if actor_ttps else 0
-        
-        # Build TTPs with coverage status and rule count, sorted (covered first, then gaps)
-        ttps_with_coverage = []
-        for ttp in sorted(actor.ttps):
-            ttp_upper = str(ttp).strip().upper()
-            ttps_with_coverage.append(TTPWithCoverage(
-                id=ttp_upper,
-                covered=ttp_upper in covered_ttps,
-                rule_count=technique_rule_counts.get(ttp_upper, 0)
-            ))
-        
-        # Sort: covered first, then gaps
-        ttps_with_coverage.sort(key=lambda x: (not x.covered, x.id))
-        
-        # Get ISO code from origin, name, or description
-        text_to_check = f"{actor.origin or ''} {actor.name} {actor.description or ''}"
-        iso_code = get_iso_code(text_to_check)
+    if search:
+        needle = search.lower()
+        actors = [a for a in actors if needle in a.name.lower() or needle in (a.aliases or "").lower()
+                  or needle in (a.description or "").lower()]
+    if origin:
+        actors = [a for a in actors if a.origin and origin.lower() in a.origin.lower()]
+    if source:
+        actors = [a for a in actors if source in a.source]
 
-        # Resolve actor title link to MITRE group detail by matching actor
-        # canonical name and aliases to the MITRE groups catalog.
-        group_url = None
-        actor_keys = [(actor.name or "").strip().lower()]
-        if actor.aliases:
-            actor_keys.extend(
-                [a.strip().lower() for a in str(actor.aliases).split(",") if a.strip()]
-            )
-        for key in actor_keys:
-            hit = group_lookup.get(key)
-            if hit:
-                group_url = hit
-                break
-        
-        actors_with_coverage.append(ActorWithCoverage(
-            name=actor.name,
-            description=actor.description,
-            aliases=actor.aliases,
-            origin=actor.origin,
-            source=actor.source,
-            ttp_count=actor.ttp_count,
-            ttps=actor.ttps,
-            covered_count=covered_count,
-            coverage_pct=coverage_pct,
-            ttps_with_coverage=ttps_with_coverage,
-            iso_code=iso_code,
-            group_url=group_url,
-        ))
-    
-    # Apply sorting
+    items = [actor_item(a, covered) for a in actors]
+
+    def pct(it):
+        return it["coverage"]["pct"] if it["coverage"] else 0
+
     sort_map = {
-        "ttp_desc": lambda x: -x.ttp_count,
-        "ttp_asc": lambda x: x.ttp_count,
-        "name_asc": lambda x: x.name.lower(),
-        "coverage_desc": lambda x: -x.coverage_pct,
-        "coverage_asc": lambda x: x.coverage_pct,
+        "ttp_desc": (lambda it: it["ttp_count"], True),
+        "ttp_asc": (lambda it: it["ttp_count"], False),
+        "name_asc": (lambda it: it["name"].lower(), False),
+        "coverage_desc": (pct, True),
+        "coverage_asc": (pct, False),
     }
-    sort_fn = sort_map.get(sort_by, lambda x: -x.ttp_count)
-    actors_with_coverage.sort(key=sort_fn)
-    
-    # Pagination
-    total = len(actors_with_coverage)
-    total_pages = max(1, (total + page_size - 1) // page_size)
-    offset = (page - 1) * page_size
-    paginated_actors = actors_with_coverage[offset:offset + page_size]
-    
-    logger.info(f"Fetched {len(paginated_actors)} actors (total: {total}, page: {page}/{total_pages})")
-    
-    templates = request.app.state.templates
-    context = {
-        "actors": paginated_actors,
-        "total": total,
-        "page": page,
-        "page_size": page_size,
-        "total_pages": total_pages,
-        "search": search or "",
-        "origin": origin or "",
-        "source": source or "",
-        "sort_by": sort_by,
-        "user": user,
+    key, reverse = sort_map.get(sort_by, sort_map["ttp_desc"])
+    items.sort(key=key, reverse=reverse)
+
+    start = (page - 1) * catalog.PAGE_SIZE
+    params = {"search": search or "", "origin": origin or "", "source": source or "", "sort_by": sort_by}
+    more = start + catalog.PAGE_SIZE < len(items)
+    return request.app.state.templates.TemplateResponse(request, "partials/threats_grid.html", {
+        "items": items[start:start + catalog.PAGE_SIZE], "total": len(items), "page": page,
+        "next_url": f"/api/threats?{urlencode({**params, 'page': page + 1})}" if more else "",
+        "spec": ACTOR_SPEC, "source_meta": _source_meta(), "filtered": bool(search or origin or source),
+    })
+
+
+@router.get("/window", response_class=HTMLResponse)
+def actor_window(request: Request, db: DbDep, user: CurrentUser, client_id: ActiveClient, name: str = Query(...)):
+    """One threat actor's window, built as an ATT&CK group's: its details and the ATT&CK group it
+    is, coverage, description and techniques; "…" › Create baseline."""
+    from app.services import mitre_catalog as catalog
+    actor = next((a for a in db.get_threat_actors(client_id=client_id) if a.name == name), None)
+    if not actor:
+        return HTMLResponse(f"No threat actor named {name}.", status_code=404)
+    covered, counts = catalog.coverage_for(db, client_id)
+    ttps = sorted(_ttps(actor))
+    names, tactics = db.get_technique_names(), db.get_technique_map()
+    tactic_names = {short: name for short, (_id, name, _order) in catalog._tactic_index(db, "enterprise").items()}
+    item = actor_item(actor, covered)
+    gid = _actor_group(actor, _group_ids(db))
+    group = None
+    if gid:
+        found = db.get_mitre_group_detail(gid, domain="enterprise") or {}
+        group = {"id": gid, "name": found.get("name") or gid}
+    ctx = {
+        "spec": ACTOR_SPEC,
+        "detail": {
+            "id": "", "name": actor.name, "flag": item["flag"], "description": actor.description,
+            # OpenCTI gives a country's code: shown as one (KP), anything longer as it is
+            "aliases": item["sub"], "origin": (actor.origin.upper() if len(actor.origin) <= 3 else actor.origin)
+                                               if actor.origin else "",
+            "sources": item["sources"],
+            "techniques": [{"id": t, "name": names.get(t, ""),
+                            "tactic": ", ".join(tactic_names.get(x.strip(), x.strip()) for x in (tactics.get(t) or "").split(",") if x.strip())}
+                           for t in ttps],
+            "group": group,
+        },
+        "dom_id": item["dom_id"],
+        "coverage": item["coverage"],
+        "uncovered_count": len(set(ttps) - covered),
+        "covered_ttps": covered,
+        "ttp_rule_counts": counts,
+        "window_kinds": list(catalog.KINDS),
+        **catalog.source_context("enterprise"),
+        "source_meta": _source_meta(),
     }
-    return templates.TemplateResponse(request, "partials/threats_grid.html", context)
+    if ttps and (user is None or user.can_write("page:baselines")):
+        ctx.update(baseline_from=len(ttps), baseline_url="/api/heatmap/generate-baseline",
+                   baseline_fields=[("actor_names", actor.name), ("actor_group_ids", gid)])
+    return request.app.state.templates.TemplateResponse(request, "components/mitre_window.html", ctx)
 
 
 @router.get("/metrics", response_class=HTMLResponse)

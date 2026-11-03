@@ -75,6 +75,7 @@ DDL = (
         finished_at TIMESTAMP,
         status      VARCHAR,
         message     VARCHAR,
+        notes       VARCHAR[],
         commit_url  VARCHAR,
         added       INTEGER DEFAULT 0,
         changed     INTEGER DEFAULT 0,
@@ -92,6 +93,8 @@ def ensure(conn) -> None:
         conn.execute(ddl)
     if "link_id" not in {r[0] for r in conn.execute("DESCRIBE gitlab_backup_files").fetchall()}:
         conn.execute("ALTER TABLE gitlab_backup_files ADD COLUMN link_id VARCHAR")
+    if "notes" not in {r[0] for r in conn.execute("DESCRIBE gitlab_backup_runs").fetchall()}:
+        conn.execute("ALTER TABLE gitlab_backup_runs ADD COLUMN notes VARCHAR[]")
 
 
 def blob_id(data: bytes) -> str:
@@ -184,19 +187,22 @@ def _rules(conn, siem_id: str, space: str) -> List[Dict[str, Any]]:
     return out
 
 
-def _exception_lists(dest: Dict[str, Any], rules: List[Dict[str, Any]]) -> Tuple[Dict[str, str], List[str]]:
-    """``({list_id: file}, list ids Kibana didn't give)`` for the lists the destination's rules use."""
+def _exception_lists(dest: Dict[str, Any], rules: List[Dict[str, Any]]) -> Tuple[Dict[str, str], Dict[str, List[str]]]:
+    """``({list_id: file}, {list_id: names of the rules using it})`` for the lists the destination's
+    rules use: those Kibana gave, and those it didn't."""
     from app import elastic_helper
     wanted: Dict[str, str] = {}
+    used_by: Dict[str, List[str]] = {}
     for r in rules:
         for ref in r["raw"].get("exceptions_list") or []:
             if ref.get("list_id"):
                 wanted.setdefault(ref["list_id"], ref.get("namespace_type") or "single")
+                used_by.setdefault(ref["list_id"], []).append(r["name"] or r["rule_id"])
     if not wanted:
-        return {}, []
+        return {}, {}
     session = elastic_helper._make_session(dest.get("api_token_enc") or "", dest.get("kibana_url") or "")
     base, space = (dest.get("kibana_url") or "").rstrip("/"), str(dest.get("space") or "default")
-    files, missing = {}, []
+    files, missing = {}, {}
     for list_id, namespace in sorted(wanted.items()):
         try:
             meta = elastic_helper.get_exception_list(list_id, space, session, base, namespace_type=namespace)
@@ -206,10 +212,21 @@ def _exception_lists(dest: Dict[str, Any], rules: List[Dict[str, Any]]) -> Tuple
             logger.warning("Backup: exception list %s not read from %s", list_id, dest.get("name"), exc_info=True)
             meta = items = None
         if meta is None or items is None:
-            missing.append(list_id)
+            missing[list_id] = used_by[list_id]
         else:
             files[list_id] = exception_json(meta, items)
     return files, missing
+
+
+def _missing_note(destination: str, rule_names: List[str]) -> str:
+    """What the backup says of an exception list Kibana didn't give: by the rules using it, as its
+    list id means nothing to the reader."""
+    if len(rule_names) == 1:
+        return (f"{destination}: Kibana didn't give the exceptions of {rule_names[0]}, so their backup was left "
+                "as it was.")
+    shown = ", ".join(rule_names[:5]) + (f" and {len(rule_names) - 5} more" if len(rule_names) > 5 else "")
+    return (f"{destination}: Kibana didn't give the exception list used by {len(rule_names)} rules ({shown}), "
+            "so its backup was left as it was.")
 
 
 def _renamed(conn) -> Dict[Tuple[str, str, str], str]:
@@ -259,8 +276,9 @@ def run(db, client_id: str, link: Dict[str, Any], destinations: Optional[Iterabl
         trigger: str = "manual") -> Dict[str, Any]:
     """Back up the client's destinations (``destinations``: (siem_id, space) pairs; all when None) to
     the backup project ``link``. Needs the client's database context. Returns ``{"status": "done" |
-    "nothing" | "failed" | "running", "message", "commit_url", "added", "changed", "deleted",
-    "overwritten"}``; never raises for GitLab or Kibana refusing."""
+    "nothing" | "failed" | "running", "message", "notes", "commit_url", "added", "changed", "deleted",
+    "overwritten"}``: ``notes`` are what it left as it was, and why. Never raises for GitLab or Kibana
+    refusing."""
     lock = _lock(link["id"])
     if not lock.acquire(blocking=False):
         return {"status": "running", "message": "A backup to this project is already running."}
@@ -290,7 +308,8 @@ def _run_held(db, client_id: str, link: Dict[str, Any], destinations, trigger: s
         result = {"status": "failed", "message": f"{type(exc).__name__}: {str(exc)[:200]}"}
     with db.get_connection() as conn:
         _record_run(conn, run_id, finished_at=datetime.now(), status=result["status"],
-                    message=result.get("message", "")[:2000], commit_url=result.get("commit_url"),
+                    message=result.get("message", "")[:2000], notes=result.get("notes") or None,
+                    commit_url=result.get("commit_url"),
                     **{k: result.get(k, 0) for k in ("added", "changed", "deleted", "overwritten")})
         conn.execute("DELETE FROM gitlab_backup_runs WHERE link_id = ? AND id NOT IN (SELECT id FROM "
                      "gitlab_backup_runs WHERE link_id = ? ORDER BY started_at DESC LIMIT ?)",
@@ -346,11 +365,9 @@ def _backup(db, client_id: str, link: Dict[str, Any], chosen: Optional[Set[Tuple
         for list_id, text in lists.items():
             desired[f"{folder}/exceptions/{_safe(list_id)}.json"] = (
                 text, {"kind": "exception", "siem_id": key[0], "space": key[1], "name": list_id})
-        for list_id in missing:
+        for list_id, users in missing.items():
             keep.add(f"{folder}/exceptions/{_safe(list_id)}.json")
-        if missing:
-            notes.append(f"{d.get('name') or key[1]}: Kibana didn't give exception list(s) {', '.join(missing)}, "
-                         "so their files were left as they were.")
+            notes.append(_missing_note(d.get("name") or key[1], users))
     desired[readme_path] = (_readme(all_dests, dirs, rules_by_dest, skip), {"kind": "readme", "name": "README"})
     # Folders TIDE wrote before for these destinations (a destination renamed), or, backing up all,
     # for destinations no longer linked: what is there goes, or moves. A destination not backed up
@@ -417,7 +434,7 @@ def _backup(db, client_id: str, link: Dict[str, Any], chosen: Optional[Set[Tuple
     if not (creates or updates or deletes or moves):
         with db.get_connection() as conn:
             _remember(conn, link["id"], settled, {}, gone_from_state, None)
-        return {"status": "nothing", "message": " ".join(["The backup already matches Kibana."] + notes),
+        return {"status": "nothing", "message": "The backup already matches Kibana.", "notes": notes,
                 "added": 0, "changed": 0, "deleted": 0, "overwritten": 0}
 
     # Who changed what TIDE puts back.
@@ -448,7 +465,7 @@ def _backup(db, client_id: str, link: Dict[str, Any], chosen: Optional[Set[Tuple
     summary = (f"Backed up to {link['project']}: {added} added, {changed} changed, {deleted} removed"
                f"{f', {len(overwritten)} changed in GitLab put back to Kibana' if overwritten else ''}"
                f"{f' ({len(chunks)} commits)' if len(chunks) > 1 else ''}.")
-    return {"status": "done", "message": " ".join([summary] + notes), "commit_url": last and last.get("web_url"),
+    return {"status": "done", "message": summary, "notes": notes, "commit_url": last and last.get("web_url"),
             "added": added, "changed": changed, "deleted": deleted, "overwritten": len(overwritten)}
 
 

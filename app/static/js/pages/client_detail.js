@@ -46,8 +46,8 @@
 
     // ── Linked SIEMs ──
     // A destination's edit popover ("…"): one open at a time, closed by a click anywhere else.
-    // From a row's ⋮ (Edit) or the box's Cancel. The click goes on, so the ⋮ menu closes; the
-    // listener below leaves the box open for it.
+    // From a row's ⋮ (Edit), the box's Cancel, or a GitLab project's ⚠ (why it needs attention).
+    // The click goes on, so the ⋮ menu closes; the listener below leaves the box open for it.
     function toggleEdit(e, btn) {
         var el = $(btn.dataset.target);
         if (!el) return;

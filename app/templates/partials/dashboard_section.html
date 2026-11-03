@@ -14,7 +14,7 @@
 <p class="dash-section-note">{{ view.empty }}</p>
 {% elif src == 'rule_health' %}
     {% set metrics = view.metrics %}{% set last_sync_time = view.last_sync_time %}{% set last_sync = view.last_sync %}
-    {% set scope_labels = view.scope_labels %}{% set space_labels = view.space_labels %}{% set changes = view.changes or {} %}
+    {% set scope_labels = view.scope_labels %}{% set space_labels = view.space_labels %}{% set changes = view.changes or {} %}{% set flows = view.flows or {} %}
     {% include "partials/metrics_row.html" %}
 {% elif src == 'rule_monitoring' %}
     {% set metrics = view.metrics %}{% set filters = view.filters %}{% set stale_days = view.stale_days %}{% set flows = view.flows or {} %}

@@ -1,7 +1,7 @@
 {% extends "base.html" %}
-{% from "macros/icons.html" import icon, icon_text %}
+{% from "macros/icons.html" import icon %}
 {% from "macros/filters.html" import filter_choice %}
-{% from "macros/modal.html" import close_button %}
+{% from "macros/menu.html" import more_button %}
 {% from "macros/help.html" import help_button with context %}
 
 {% block title %}Threat Landscape | TIDE{% endblock %}
@@ -9,25 +9,26 @@
 {% block head %}{% endblock %}
 
 {% block content %}
-<div class="page-header flex items-start justify-between gap-md">
-    <div>
-        <h1 class="page-title-hero">
-            Threat Landscape
-            {{ help_button('threat-landscape') }}
-        </h1>
+{# As Rule Health (rule-browser-page): the header, metrics and filters stay put; the actors scroll. #}
+<div class="rule-browser-page">
+<div class="page-header sys-header">
+    <div class="sys-header__main">
+        <h1 class="page-title-hero">Threat Landscape {{ help_button('threat-landscape') }}</h1>
         <p class="page-subtitle">Maps known threat actor TTPs directly against active SIEM detection rules.</p>
     </div>
-    <div class="flex items-center gap-sm shrink-0">
-        <button name="Submit Sync"
-            class="btn btn-primary"
-            hx-post="/api/threats/sync"
-            hx-target="#toast-container"
-            hx-swap="beforeend">
-            {{ icon_text('refresh-cw', 'Sync Threats', '16') }}
-        </button>
+    <div class="rh-more" data-more>
+        {{ more_button('More actions', title='Sync threats', attrs='name="Threat Landscape Actions"') }}
+        <div class="rh-more__menu" role="menu" hidden>
+            <button name="Submit Sync" type="button" role="menuitem" class="rh-more__item"
+                    title="Refresh the actors from ATT&amp;CK and the client's threat feeds"
+                    hx-post="/api/threats/sync" hx-target="#toast-container" hx-swap="beforeend">
+                {{ icon('refresh-cw', '15') }}<span>Sync threats</span>
+            </button>
+        </div>
     </div>
 </div>
 
+<div class="rule-browser-controls">
 <!-- Metrics Row -->
 {% if metrics_error %}
 <div class="alert alert-warning mb-md">
@@ -64,59 +65,23 @@
     {{ filter_choice('tl-sort', 'sort_by', 'Sort by', [('ttp_desc', 'TTPs (High → Low)'), ('ttp_asc', 'TTPs (Low → High)'), ('name_asc', 'Name (A → Z)'),
                      ('coverage_desc', 'Coverage (High → Low)'), ('coverage_asc', 'Coverage (Low → High)')], 'ttp_desc', attrs=tl_hx) }}
 </div>
+</div>
 
 <!-- Threats Grid - Load on page load via HTMX -->
-<div name="Open Threats" id="threats-grid"
+<div class="rule-scroll-region">
+<div name="Open Threats" id="threats-grid" data-rule-list
      hx-get="/api/threats"
      hx-trigger="load, refreshThreats from:body"
      hx-swap="innerHTML">
     {% from "components/ui/loading_state.html" import loading_state %}
     {{ loading_state("Loading threat actors\u2026") }}
 </div>
+</div>
+</div>
 
 <!-- Slide Panel Container (for TTP detail popups) -->
 <div id="slide-panel-container"></div>
 
-
-
-<!-- ── Generate Baseline Modal (per actor) ─────────────────────────── -->
-<div id="actor-baseline-overlay"
-     class="modal-overlay" style="display:none;">
-    <div class="modal-content modal-sm">
-        <div class="modal-header">
-            <h3 class="modal-title">
-                {{ icon('check-square', '16', 'modal-title__icon') }}
-                Create Assurance Baseline
-            </h3>
-            {{ close_button('name="Close Actor Baseline Modal" data-click="threats.baselineClose"') }}
-        </div>
-
-        <form   name="Generate Baseline Form" method="post" action="/api/heatmap/generate-baseline" hx-boost="false">
-            <input type="hidden" id="actor-bl-actors" name="actor_names" value="">
-            <input type="hidden" id="actor-bl-group-ids" name="actor_group_ids" value="">
-            <div class="mb-md">
-                <label class="form-label">
-                    Baseline name
-                </label>
-                <input id="actor-bl-name" name="baseline_name" required
-                       class="form-input">
-            </div>
-            <div class="mb-lg">
-                <label class="form-label">
-                    Description (optional)
-                </label>
-                <textarea id="actor-bl-desc" name="description" rows="3"
-                          placeholder="Brief description…"
-                          class="form-input"></textarea>
-            </div>
-            <div class="modal-actions">
-                <button name="Cancel" type="button" data-click="threats.baselineClose" class="btn btn-secondary"
-                       >Cancel</button>
-                <button name="Generate Baseline" type="submit" class="btn btn-primary">Generate Baseline</button>
-            </div>
-        </form>
-    </div>
-</div>
 
 {% endblock %}
 

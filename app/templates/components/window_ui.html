@@ -40,6 +40,28 @@
 <span class="rm-tag{% if kind %} rm-tag--{{ kind }}{% endif %}"{% if color %} style="--tag-color: {{ color }};"{% endif %}{% if title %} title="{{ title }}"{% endif %}>{{ text }}</span>
 {%- endmacro %}
 
+{# A baseline technique's ring on one system, on its card and in its window's header: its strongest
+   counted rule's own score (``ev``, app/scoring.py; ``rule`` its name), coloured as a rule's. One no
+   rule covers shows an empty ring in its status's colour: covered by a dashboard, report or log,
+   a known gap (rule scores don't count while it stands), not applicable, or no coverage. #}
+{% macro technique_ring(status, ev, rule, cls='') -%}
+{% if ev is not none %}
+{% set tone = 'success' if ev >= 80 else ('warning' if ev >= 50 else 'danger') %}
+{% set title = 'Strongest rule protecting this system: ' ~ rule ~ ', scored ' ~ ev ~ '%' %}
+{% else %}
+{% set tone = {'green': 'success', 'amber': 'warning', 'grey': 'muted'}.get(status, 'danger') %}
+{% set title = {
+    'green': 'Covered by a dashboard, report or log: no rule score applies',
+    'amber': 'Known gap: rule scores do not count while the gap stands',
+    'grey': 'Not applicable: no rule score applies',
+}.get(status, 'No rule is protecting this system yet') %}
+{% endif %}
+<div class="score-ring score-ring--{{ tone }}{{ ' score-ring--empty' if ev is none }}{{ ' ' ~ cls if cls }}" style="--score: {{ ev or 0 }}"
+     title="{{ title }}" role="img" aria-label="{{ title }}">
+    <span class="score-ring__value">{{ ev if ev is not none else '–' }}</span>
+</div>
+{%- endmacro %}
+
 {# A rule as one card, inside an .rm-item: score ring (e: its evidence -- pct, tone, applicable,
    how), the name opening the rule window, its destination, state and validation, and whether its
    fields exist in the SIEM. d is inventory_engine.rule_card plus name, rule_id, siem_id, space
@@ -112,15 +134,32 @@
 </div>
 {%- endmacro %}
 
+{# "…" › an item that opens a short form in place of the menu's items, as Sections opens its panel
+   (Create baseline): sub_item among the menu's items, its sub_panel (a call block holding the
+   form) passed to window_menu as ``panels``. Back returns; the menu opens on its items next time. #}
+{% macro sub_item(name, label, icon_name, title) -%}
+<button name="{{ label | title }}" type="button" role="menuitem" class="rh-more__item rm-menu__sub" data-rm-sub-open="{{ name }}" data-keep-open
+        aria-haspopup="true" title="{{ title }}">{{ icon(icon_name, '14') }}<span>{{ label }}</span>{{ icon('chevron-right', '14') }}</button>
+{%- endmacro %}
+
+{% macro sub_panel(name, label) -%}
+<div class="rm-layout__menu rm-sub" data-rm-sub="{{ name }}" data-keep-open hidden>
+    <button name="Back to Actions" type="button" class="rh-more__item rm-menu__back" data-rm-sub-back>{{ icon('chevron-left', '14') }}<span>{{ label }}</span></button>
+    <div class="rh-more__sep" role="separator"></div>
+    {{ caller() }}
+</div>
+{%- endmacro %}
+
 {# A window's header "…" menu: the window's own actions from a call block, which places
-   sections_item() among them, or Sections alone. The dots turn into a spinner while an item with
-   hx-indicator="closest .rm-overflow" runs. #}
-{% macro window_menu() -%}
+   sections_item() among them, or Sections alone; ``panels``, any sub_panel its items open. The
+   dots turn into a spinner while an item with hx-indicator="closest .rm-overflow" runs. #}
+{% macro window_menu(panels='') -%}
 <div class="rh-more rm-overflow" data-more data-rm-layout>
     {{ more_button('More actions', attrs='name="More Actions"', busy=true) }}
     <div class="rh-more__menu" role="menu" hidden>
         <div class="rm-menu__main" data-rm-menu-main>{% if caller is defined %}{{ caller() }}{% else %}{{ sections_item() }}{% endif %}</div>
         {{ sections_panel() }}
+        {{ panels }}
     </div>
 </div>
 {%- endmacro %}
