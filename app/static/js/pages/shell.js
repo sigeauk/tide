@@ -60,11 +60,6 @@
         lookupKind: function (e, sel) { sel.form.q.placeholder = sel.selectedOptions[0].dataset.hint; },
         // (form.client would also find the enhanced select's button, which carries the same name.)
         accessAction: function (e, sel) { sel.form.querySelector('select[name="client"]').hidden = !sel.value.endsWith('_support'); },
-        // Generate baselines: the button counts the ticked ones.
-        genCount: function () {
-            var a = document.getElementById('gen-preview-area'), b = a.querySelector('.gen-btn-count');
-            if (b) b.textContent = a.querySelectorAll('input[name=selected_baselines]:checked').length;
-        },
         // A system's Add baseline: apply the picked template (the page then reloads).
         sysBaselineApply: function (e, btn) {
             htmx.ajax('POST', '/api/baselines/' + encodeURIComponent(document.getElementById('sys-bl-apply').value) +

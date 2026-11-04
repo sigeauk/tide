@@ -4,7 +4,7 @@ inventory_engine.py - Asset Inventory & CVE Mapping Engine (Phase 2: Enterprise)
 from __future__ import annotations
 import json, logging, os, re, shutil, xml.etree.ElementTree as ET
 from datetime import date, datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from app.config import get_settings
 from app.models.inventory import (
     AffectedHost, AppliedDetection, Baseline, BaselineCreate, BaselineTactic, BlindSpot, Classification, CveMatch,
@@ -2215,6 +2215,15 @@ def list_playbooks(client_id: str = None) -> List[Playbook]:
     return result
 
 
+def template_names(client_id: str = None) -> List[Tuple[str, str]]:
+    """(id, name) of every template, A → Z: a list to pick one from, without their techniques."""
+    frag, params = _cf("", client_id)
+    with _get_conn() as conn:
+        return [(r[0], r[1]) for r in conn.execute(
+            "SELECT id, name FROM playbooks WHERE system_id IS NULL" + frag + " ORDER BY lower(name)", params,
+        ).fetchall()]
+
+
 def count_playbooks(client_id: str = None) -> int:
     """Lightweight COUNT(*) of templates.
 
@@ -2361,7 +2370,7 @@ def _get_playbook_steps(playbook_id: str) -> List[PlaybookStep]:
     with _get_conn() as conn:
         rows = conn.execute(
             "SELECT id, playbook_id, step_number, title, technique_id, required_rule, description, tactic, "
-            "priority, category "
+            "priority, category, source_library, source_rule_id "
             "FROM playbook_steps WHERE playbook_id = ? ORDER BY step_number",
             [playbook_id],
         ).fetchall()
@@ -2400,9 +2409,9 @@ def _get_playbook_steps(playbook_id: str) -> List[PlaybookStep]:
         step = PlaybookStep(
             id=step_id, playbook_id=r[1], step_number=r[2], title=r[3],
             technique_id=r[4] or "", required_rule=r[5] or "", description=r[6] or "",
-            tactic=r[7] or "", **_risk_fields(r[8:10]),
+            tactic=r[7] or "", **_risk_fields(r[8:10]), **_source_fields(r[10:12]),
         )
-        step.techniques = step_techs.get(step_id, [])
+        step.techniques = _main_first(step_techs.get(step_id, []), step.technique_id)
         step.detections = step_dets.get(step_id, [])
         steps.append(step)
     return steps
@@ -2415,6 +2424,13 @@ def _get_step_techniques(step_id: str) -> List[StepTechnique]:
             [step_id],
         ).fetchall()
     return [StepTechnique(id=r[0], step_id=r[1], technique_id=r[2]) for r in rows]
+
+
+def _main_first(techniques: List[StepTechnique], main: str) -> List[StepTechnique]:
+    """A technique's ATT&CK ids with its main one (``technique_id``) first, the rest A → Z: cards
+    show the first two, and a technique made from a rule is made for its main one."""
+    main = (main or "").strip().upper()
+    return sorted(techniques, key=lambda t: ((t.technique_id or "").upper() != main, t.technique_id or ""))
 
 
 def _get_step_detections(step_id: str) -> List[StepDetection]:
@@ -2524,6 +2540,94 @@ def generate_baseline_from_actor(
     return playbook
 
 
+def generate_baseline_from_rules(
+    rules: List[Dict[str, Any]],
+    library: str,
+    baseline_name: str = "",
+    description: str = "",
+    playbook_id: str = "",
+    client_id: str = None,
+) -> Tuple[Optional[Playbook], int, int]:
+    """A template with one technique per library rule (Create baseline on the Sigma or Elastic page),
+    or those techniques added to the end of the template ``playbook_id``. Each technique is titled
+    and described as its rule is, carries every ATT&CK id the rule does and remembers the rule
+    (``source_library``, ``source_rule_id``). A rule already in that template is skipped.
+
+    ``rules``: ``{rule_id, title, description, techniques, tactics}``, in the order wanted, with
+    ``technique`` (the main one: rule_baselines.main_technique) and ``tactic`` (the one the rule
+    puts it under) when known; without them the first sub-technique, or else the first id, is the
+    main one, and the rule's first tactic its tactic.
+    Returns (the template, techniques added, rules skipped); no template when ``playbook_id`` isn't
+    one of this client's templates. One statement per table, however many rules."""
+    import uuid
+    from app.attack_tactics import tactic_name
+
+    with _get_conn() as conn:
+        if playbook_id:
+            frag, params = _cf("", client_id)
+            row = conn.execute(
+                "SELECT id, name, description, created_at, updated_at FROM playbooks "
+                "WHERE id = ? AND system_id IS NULL" + frag, [playbook_id] + params,
+            ).fetchone()
+            if not row:
+                return None, 0, 0
+            playbook = Playbook(id=row[0], name=row[1], description=row[2] or "", created_at=row[3], updated_at=row[4])
+            have = {r[0] for r in conn.execute(
+                "SELECT source_rule_id FROM playbook_steps WHERE playbook_id = ? AND source_library = ?",
+                [playbook_id, library]).fetchall()}
+            number = conn.execute("SELECT COALESCE(MAX(step_number), 0) FROM playbook_steps WHERE playbook_id = ?",
+                                  [playbook_id]).fetchone()[0]
+        else:
+            r = conn.execute(
+                "INSERT INTO playbooks (name, description, client_id) VALUES (?, ?, ?) "
+                "RETURNING id, name, description, created_at, updated_at",
+                [baseline_name.strip(), description.strip(), client_id],
+            ).fetchone()
+            playbook = Playbook(id=r[0], name=r[1], description=r[2] or "", created_at=r[3], updated_at=r[4])
+            have, number = set(), 0
+
+        steps = {k: [] for k in ("id", "number", "title", "technique", "description", "tactic", "rule_id")}
+        step_ids, tech_ids, skipped = [], [], 0
+        for rule in rules:
+            rule_id = str(rule.get("rule_id") or "")
+            if not rule_id or rule_id in have:
+                skipped += 1
+                continue
+            have.add(rule_id)
+            techniques = list(dict.fromkeys(t.strip().upper() for t in rule.get("techniques") or [] if t and t.strip()))
+            tactics = [t for t in rule.get("tactics") or [] if t]
+            main = str(rule.get("technique") or "").strip().upper()
+            if main not in techniques:
+                main = next((t for t in techniques if "." in t), techniques[0] if techniques else "")
+            tactic = rule.get("tactic") or (tactics[0] if tactics else "")
+            number += 1
+            step_id = str(uuid.uuid4())
+            steps["id"].append(step_id)
+            steps["number"].append(number)
+            steps["title"].append(rule.get("title") or rule_id)
+            steps["technique"].append(main)
+            steps["description"].append((rule.get("description") or "").strip())
+            steps["tactic"].append((tactic_name(tactic) or tactic) if tactic else "")
+            steps["rule_id"].append(rule_id)
+            step_ids += [step_id] * len(techniques)
+            tech_ids += techniques
+        if steps["id"]:
+            conn.execute(
+                "INSERT INTO playbook_steps (id, playbook_id, step_number, title, technique_id, required_rule, "
+                "description, tactic, source_library, source_rule_id) "
+                "SELECT unnest(?::VARCHAR[]), ?, unnest(?::INTEGER[]), unnest(?::VARCHAR[]), unnest(?::VARCHAR[]), '', "
+                "unnest(?::VARCHAR[]), unnest(?::VARCHAR[]), ?, unnest(?::VARCHAR[])",
+                [steps["id"], playbook.id, steps["number"], steps["title"], steps["technique"],
+                 steps["description"], steps["tactic"], library, steps["rule_id"]],
+            )
+        if tech_ids:
+            conn.execute("INSERT INTO step_techniques (step_id, technique_id) "
+                         "SELECT unnest(?::VARCHAR[]), unnest(?::VARCHAR[])", [step_ids, tech_ids])
+        if playbook_id and steps["id"]:
+            conn.execute("UPDATE playbooks SET updated_at = now() WHERE id = ?", [playbook_id])
+    return playbook, len(steps["id"]), skipped
+
+
 def _delete_steps(conn, step_ids: List[str]) -> int:
     """Delete steps and everything recorded on them: ATT&CK techniques, rule mappings (and where
     they were applied), and known gaps and N/A. Their history is kept, so a past figure still
@@ -2580,10 +2684,10 @@ def _copy_playbook(src, tgt, playbook_id: str, *, name: str, client_id: str,
     connection. Returns (new baseline id, number of techniques).
 
     With ``system_id`` the copy is that system's own and keeps nothing of the template but each
-    technique's title, ATT&CK techniques (its tactic follows the first), description and risks
-    (priority and category, the system's to change) -- no link back to the template, no Sigma
-    suggestions (the technique window suggests those from its ATT&CK ids), no required rule. A
-    template copied to another client keeps everything."""
+    technique's title, ATT&CK techniques (its tactic follows the first), description, risks
+    (priority and category, the system's to change) and the library rule it was made from -- no
+    link back to the template, no Sigma suggestions (the technique window suggests those from its
+    ATT&CK ids), no required rule. A template copied to another client keeps everything."""
     import uuid
     new_id = str(uuid.uuid4())
     desc = src.execute("SELECT description FROM playbooks WHERE id = ?", [playbook_id]).fetchone()
@@ -2592,18 +2696,20 @@ def _copy_playbook(src, tgt, playbook_id: str, *, name: str, client_id: str,
         [new_id, name, (desc[0] if desc else "") or "", client_id, system_id],
     )
     steps = src.execute(
-        "SELECT id, step_number, title, technique_id, required_rule, description, tactic, priority, category "
-        "FROM playbook_steps WHERE playbook_id = ?",
+        "SELECT id, step_number, title, technique_id, required_rule, description, tactic, priority, category, "
+        "source_library, source_rule_id FROM playbook_steps WHERE playbook_id = ?",
         [playbook_id],
     ).fetchall()
     for step in steps:
         new_step = str(uuid.uuid4())
-        _sid, number, title, technique_id, required_rule, step_desc, tactic, priority, category = step
+        (_sid, number, title, technique_id, required_rule, step_desc, tactic, priority, category,
+         source_library, source_rule_id) = step
         tgt.execute(
             "INSERT INTO playbook_steps (id, playbook_id, step_number, title, technique_id, required_rule, "
-            "description, tactic, priority, category) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "description, tactic, priority, category, source_library, source_rule_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [new_step, new_id, number, title, technique_id, "" if system_id else required_rule, step_desc, tactic,
-             priority or "", category or ""],
+             priority or "", category or "", source_library or "", source_rule_id or ""],
         )
         for (tech,) in src.execute("SELECT technique_id FROM step_techniques WHERE step_id = ?", [step[0]]).fetchall():
             tgt.execute("INSERT INTO step_techniques (step_id, technique_id) VALUES (?, ?)", [new_step, tech])
@@ -2622,17 +2728,20 @@ def _copy_playbook(src, tgt, playbook_id: str, *, name: str, client_id: str,
 
 def add_playbook_step(playbook_id: str, step_number: int, title: str,
                       technique_id: str = "", required_rule: str = "",
-                      description: str = "", tactic: str = "", client_id: str = None) -> PlaybookStep:
+                      description: str = "", tactic: str = "", client_id: str = None,
+                      source_library: str = "", source_rule_id: str = "") -> PlaybookStep:
     normalized_technique_id = normalize_technique_id(technique_id)
     with _get_conn() as conn:
         r = conn.execute(
-            "INSERT INTO playbook_steps (playbook_id, step_number, title, technique_id, required_rule, description, tactic) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id, playbook_id, step_number, title, technique_id, required_rule, description, tactic",
-            [playbook_id, step_number, title, normalized_technique_id, required_rule, description, tactic],
+            "INSERT INTO playbook_steps (playbook_id, step_number, title, technique_id, required_rule, description, tactic, "
+            "source_library, source_rule_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "RETURNING id, playbook_id, step_number, title, technique_id, required_rule, description, tactic",
+            [playbook_id, step_number, title, normalized_technique_id, required_rule, description, tactic,
+             source_library, source_rule_id],
         ).fetchone()
     step = PlaybookStep(id=r[0], playbook_id=r[1], step_number=r[2], title=r[3],
                         technique_id=r[4] or "", required_rule=r[5] or "", description=r[6] or "",
-                        tactic=r[7] or "")
+                        tactic=r[7] or "", source_library=source_library, source_rule_id=source_rule_id)
     # Auto-populate junction tables from legacy single fields
     if normalized_technique_id:
         add_step_technique(step.id, normalized_technique_id)
@@ -2855,7 +2964,15 @@ def get_step_detail_for_system(step_id: str, system_id: str, client_id: str = No
     step = get_playbook_step(step_id, client_id=client_id)
     if not step:
         return None
-    return _step_detail(step, _step_detail_context(system_id, [step], client_id=client_id))
+    detail = _step_detail(step, _step_detail_context(system_id, [step], client_id=client_id))
+    # The library rule it was made from, and that rule's copies in this client's SIEMs: only for
+    # one window (get_system_step_details builds every card's details, and this looks each up).
+    if step.source_rule_id:
+        from app.services.rule_baselines import made_from
+        mapped = {(x["rule_ref"], x["siem_id"], x["space"] or "default") for x in detail["detections"]
+                  if x["source"] == "siem" and x["siem_id"]}
+        detail["made_from"] = made_from(step, mapped, client_id)
+    return detail
 
 
 def get_system_step_details(system_id: str, playbook_ids: List[str], client_id: str = None) -> Dict[str, Dict]:
@@ -3194,6 +3311,10 @@ COVERAGE_KINDS = [("dashboard", "Dashboard"), ("report", "Report"), ("log", "Log
 
 def _risk_fields(values) -> Dict[str, str]:
     return {k: (v or "") for k, v in zip(("priority", "category"), values)}
+
+
+def _source_fields(values) -> Dict[str, str]:
+    return {k: (v or "") for k, v in zip(("source_library", "source_rule_id"), values)}
 
 
 def _technique_status(covered: bool, has_gap: bool, has_na: bool, non_alerting: bool = False) -> str:
@@ -4242,7 +4363,7 @@ def get_playbook_step(step_id: str, client_id: str = None) -> Optional[PlaybookS
     with _get_conn() as conn:
         r = conn.execute(
             "SELECT id, playbook_id, step_number, title, technique_id, required_rule, description, tactic, "
-            "priority, category "
+            "priority, category, source_library, source_rule_id "
             "FROM playbook_steps WHERE id = ?",
             [step_id],
         ).fetchone()
@@ -4251,9 +4372,9 @@ def get_playbook_step(step_id: str, client_id: str = None) -> Optional[PlaybookS
     step = PlaybookStep(
         id=r[0], playbook_id=r[1], step_number=r[2], title=r[3],
         technique_id=r[4] or "", required_rule=r[5] or "", description=r[6] or "",
-        tactic=r[7] or "", **_risk_fields(r[8:10]),
+        tactic=r[7] or "", **_risk_fields(r[8:10]), **_source_fields(r[10:12]),
     )
-    step.techniques = _get_step_techniques(step_id)
+    step.techniques = _main_first(_get_step_techniques(step_id), step.technique_id)
     step.detections = _get_step_detections(step_id)
     return step
 

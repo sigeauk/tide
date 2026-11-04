@@ -2,22 +2,38 @@
   Elastic Rules: Elastic's detection rules from github.com/elastic/detection-rules, bundled in the
   image (app/services/elastic_rules.py), laid out like the Sigma and Hunting pages: Deploy's settings
   across the top, a filtered browser on the left and the open rule on the right (library.js). ?rule=
-  opens one on arrival. Their hunting queries are on the Hunting page.
+  opens one on arrival. Their hunting queries are on the Hunting page. Each browser filter takes
+  any number of choices (picked: what the address ticks), with the number beside each choice
+  (filter_counts) following the other filters.
 #}
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon %}
-{% from "macros/filters.html" import filter_choice %}
+{% from "macros/filters.html" import filter_choice, filter_multi %}
 {% from "macros/modal.html" import empty_state %}
+{% from "macros/menu.html" import more_button %}
 {% from "macros/help.html" import help_button with context %}
 
 {% block title %}Elastic Rules | TIDE{% endblock %}
 
 {% block content %}
-<div class="page-header">
+<div class="rule-browser-page lib-page">
+<div class="page-header flex items-start justify-between gap-md">
     <div class="page-header__text">
         <h1 class="page-title-hero">Elastic Rules {{ help_button('elastic') }}</h1>
         <p class="page-subtitle">Elastic's detection rules, built into TIDE{% if source.date %} from Elastic's repository as of {{ source.date }}{% endif %}. Their hunting queries are on the <a href="/hunting">Hunting</a> page.</p>
     </div>
+    {% if facets.rule_count and (not user or user.can_write('page:baselines')) %}
+    <div class="rh-more" data-more>
+        {{ more_button('More actions', title='Create a baseline', attrs='name="Elastic Actions"') }}
+        <div class="rh-more__menu" role="menu" hidden>
+            <button name="Create Baseline" type="button" role="menuitem" class="rh-more__item"
+                    hx-get="/api/baselines/from-rules/elastic" hx-include="#elastic-filters" hx-target="#modal-container" hx-swap="innerHTML"
+                    title="Make a baseline of the rules the browser lists, one technique per rule">
+                {{ icon('plus', '15') }}<span>Create baseline</span>
+            </button>
+        </div>
+    </div>
+    {% endif %}
 </div>
 
 {% if not facets.rule_count %}
@@ -55,15 +71,23 @@
                     <label class="form-label" for="elastic-technique">MITRE technique</label>
                     <input type="text" id="elastic-technique" name="technique" placeholder="e.g., T1059" value="{{ technique_filter }}">
                 </div>
-                {% set plat_opts = [('', 'All')] %}{% for p in facets.platforms %}{% set _ = plat_opts.append((p, p | replace('_', ' '))) %}{% endfor %}
-                {{ filter_choice('elastic-platform', 'platform', 'Platform', plat_opts, '', wrap='browser-filter') }}
-                {% set int_opts = [('', 'All')] %}{% for i in facets.integrations %}{% set _ = int_opts.append((i, i)) %}{% endfor %}
-                {{ filter_choice('elastic-integration', 'integration', 'Integration', int_opts, '', wrap='browser-filter') }}
-                {% set type_opts = [('', 'All')] %}{% for t in facets.types %}{% set _ = type_opts.append((t, t | replace('_', ' '))) %}{% endfor %}
-                {{ filter_choice('elastic-type', 'type', 'Type', type_opts, '', wrap='browser-filter') }}
-                {% set sev_opts = [('', 'All')] %}{% for s in severities %}{% set _ = sev_opts.append((s, s | title)) %}{% endfor %}
-                {{ filter_choice('elastic-severity', 'severity', 'Severity', sev_opts, '', wrap='browser-filter') }}
-                {{ filter_choice('elastic-status', 'status', 'Status', [('', 'All')] + statuses | list, '', wrap='browser-filter') }}
+                {% set fc = filter_counts %}
+                {% set plat_opts = [] %}{% for p in facets.platforms %}{% set _ = plat_opts.append((p, p | replace('_', ' '))) %}{% endfor %}
+                {{ filter_multi('elastic-platform', 'platform', 'Platform', plat_opts, picked.platform, 'All', fc.platform or {}, wrap='browser-filter') }}
+                {{ filter_multi('elastic-data-source', 'data_source', 'Data source', facets.data_sources, picked.data_source, 'All', fc.data_source or {}, wrap='browser-filter') }}
+                {% set int_opts = [] %}{% for i in facets.integrations %}{% set _ = int_opts.append((i, i)) %}{% endfor %}
+                {{ filter_multi('elastic-integration', 'integration', 'Integration', int_opts, picked.integration, 'All', fc.integration or {}, wrap='browser-filter') }}
+                {% set tac_opts = [] %}{% for t in facets.tactics %}{% set _ = tac_opts.append((t, t)) %}{% endfor %}
+                {{ filter_multi('elastic-tactic', 'tactic', 'Tactic', tac_opts, picked.tactic, 'All', fc.tactic or {}, wrap='browser-filter') }}
+                {% set type_opts = [] %}{% for t in facets.types %}{% set _ = type_opts.append((t, t | replace('_', ' '))) %}{% endfor %}
+                {{ filter_multi('elastic-type', 'type', 'Type', type_opts, picked.type, 'All', fc.type or {}, wrap='browser-filter') }}
+                {% set sev_opts = [] %}{% for s in severities %}{% set _ = sev_opts.append((s, s | title)) %}{% endfor %}
+                {{ filter_multi('elastic-severity', 'severity', 'Severity', sev_opts, picked.severity, 'All', fc.severity or {}, wrap='browser-filter') }}
+                {{ filter_multi('elastic-status', 'status', 'Status', statuses | list, picked.status, 'All', fc.status or {}, wrap='browser-filter') }}
+                {{ filter_multi('elastic-profile', 'profile', 'Profile', facets.profiles, picked.profile, 'All', fc.profile or {}, wrap='browser-filter',
+                                titles={'none': 'Rules Elastic gives no Profile tag'}) }}
+                {{ filter_multi('elastic-noise', 'noise', 'Noise', facets.noise, picked.noise, 'All', fc.noise or {}, wrap='browser-filter',
+                                titles={'none': 'Rules Elastic gives no Noise tag'}) }}
                 <input type="hidden" name="selected" value="{{ selected_id }}">
             </form>
             <div id="elastic-list" class="lib-list">
@@ -84,4 +108,5 @@
 {% endif %}
 
 <div id="slide-panel-container"></div>
+</div>
 {% endblock %}

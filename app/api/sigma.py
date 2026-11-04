@@ -27,16 +27,22 @@ _QUERY_LANGUAGE = {"elasticsearch": "lucene", "eql": "eql", "esql": "esql", "spl
                    "microsoft365defender": "kuery"}
 
 
-def rules_list_context(query: str = "", technique: str = "", category: str = "", level: str = "",
-                       status: str = "", limit: int = 100, offset: int = 0) -> dict:
+def picked_filters(request: Request) -> dict:
+    """The rule browser's filters in the address, each with every value ticked (``?level=high&level=critical``)."""
+    return sigma.picked_filters({name: request.query_params.getlist(name) for name in sigma.FILTERS})
+
+
+def rules_list_context(query: str = "", technique: str = "", filters: dict = None,
+                       limit: int = 100, offset: int = 0) -> dict:
     """The rule browser's rows (``partials/sigma_rules_list.html``), ``limit`` of them from
-    ``offset`` on, and how many match; shared with the page route."""
-    matches = sigma.search_rules(query=query, technique_filter=technique, category_filter=category,
-                                 level_filter=level, status_filter=status, limit=0)
+    ``offset`` on, and how many match; shared with the page route. ``filter_counts``: the number
+    beside each filter choice (sigma.filter_counts), only with the first rows."""
+    matches = sigma.search_rules(query=query, technique_filter=technique, filters=filters, limit=0)
     rows = matches[offset:offset + limit]
     shown = offset + len(rows)
     return {"rules": rows, "matching": len(matches), "total_count": len(sigma.load_all_rules()),
-            "offset": offset, "next_offset": shown if shown < len(matches) else 0}
+            "offset": offset, "next_offset": shown if shown < len(matches) else 0,
+            "filter_counts": {} if offset else sigma.filter_counts(query, technique, filters)}
 
 
 @router.get("/rules", response_class=HTMLResponse)
@@ -47,19 +53,17 @@ def search_rules(
     client_id: ActiveClient,
     query: str = Query("", alias="q"),
     technique: str = Query(""),
-    category: str = Query(""),
-    level: str = Query(""),
-    status: str = Query(""),
     selected: str = Query(""),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ):
-    """The rule browser's list, filtered; from ``offset`` on, the next rows as it is scrolled."""
+    """The rule browser's list, filtered (every filter in sigma.FILTERS, each any number of times);
+    from ``offset`` on, the next rows as it is scrolled."""
     return request.app.state.templates.TemplateResponse(
         request,
         "partials/sigma_rules_list.html",
         {
-            **rules_list_context(query, technique, category, level, status, limit, offset),
+            **rules_list_context(query, technique, picked_filters(request), limit, offset),
             "covered_ttps": db.get_all_covered_ttps(client_id=client_id),
             "ttp_rule_counts": db.get_ttp_rule_counts(client_id=client_id),
             "selected_rule_id": selected,

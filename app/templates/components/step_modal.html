@@ -317,6 +317,36 @@
             {% endcall %}
             {% endif %}
           </div>
+          {# A technique made from a library rule (Create baseline on the Sigma or Elastic page):
+             that rule, and its copies in this client's SIEMs not yet mapped here, each offered to
+             map (never mapped for you). With none, where to deploy it from. #}
+          {% set mf = detail.made_from %}
+          {% if mf and not new %}
+          <div class="sm-made-from">
+            <p class="sm-made-from__text">{{ icon('link', '13') }}
+              <span>Made from {{ mf.label }}'s rule <a href="{{ mf.url }}" title="Open it on the {{ mf.label }} page">{{ mf.name }}</a>.{% if mf.gone %}
+              <span class="sm-made-from__gone">{{ icon('triangle-alert', '12') }} {{ mf.gone }}</span>{% endif %}</span></p>
+            {% set unmapped = mf.copies | rejectattr('mapped') | list %}
+            {% for c in unmapped %}
+            <form class="sm-made-from__copy" hx-post="/api/baselines/tactics/{{ step.id }}/detections"
+                  hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
+              <input type="hidden" name="rule_ref" value="{{ c.rule_id }}">
+              <input type="hidden" name="rule_scope" value="{{ c.siem_id }}|{{ c.space }}">
+              <input type="hidden" name="note" value="{{ c.name }}">
+              <input type="hidden" name="source" value="siem">
+              <input type="hidden" name="system_id" value="{{ system_id }}">
+              <span class="sm-made-from__name" title="{{ c.name }}">{{ c.name }}</span>
+              <span class="status-pill dest-pill-sm{% if c.color %} dest-tinted{% endif %}"{% if c.color %} style="--dest: {{ c.color }}"{% endif %}
+                    title="Destination: {{ c.destination }}">{{ c.destination }}</span>
+              <span class="siem-rule-state state-dot{{ ' state-dot--on' if c.enabled else ' siem-rule-state--off' }}">{{ 'Enabled' if c.enabled else 'Disabled' }}</span>
+              <button name="Map Own Rule" type="submit" class="btn btn-secondary btn-xs" title="Map this copy to the technique on this system">{{ icon('plus', '12') }} Map</button>
+            </form>
+            {% endfor %}
+            {% if not mf.copies and not mf.gone %}
+            <p class="sm-made-from__hint">It isn't in this client's SIEMs yet: {{ 'deploy' if mf.library == 'elastic' else 'convert' }} it from <strong>{{ mf.label }} rules</strong> below, then map it here.</p>
+            {% endif %}
+          </div>
+          {% endif %}
           {% if detail.blind_spots or detail.detections or detail.watched %}
           <div class="rm-items">
             {% for gap in detail.blind_spots %}

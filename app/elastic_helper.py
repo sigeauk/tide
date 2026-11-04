@@ -659,7 +659,13 @@ def normalize_rule_language(language):
 
 
 def extract_esql(query):
-    """Extract index-resolvable field names from an ES|QL query.
+    """Index-resolvable field names in an ES|QL query (see ``_esql_names``)."""
+    return _esql_names(query)[0]
+
+
+def _esql_names(query):
+    """``(fields, emitted)`` of an ES|QL query: the fields it reads from its indexes, and the names it
+    makes itself, which are columns of its alerts but in no index mapping.
 
     Walks the pipe stages in order, maintaining two sets:
       * ``emitted`` — names introduced inside the query (EVAL aliases, STATS
@@ -670,13 +676,13 @@ def extract_esql(query):
       * ``referenced`` — names read from the document stream (WHERE/SORT/KEEP
         operands, RHS of EVAL/STATS, RENAME source, ENRICH match field).
 
-    The returned set is ``referenced − emitted − grammar/function tokens``.
+    ``fields`` is ``referenced − emitted − grammar/function tokens``.
 
     See CLAUDE.md (no hardcoded field exclusion lists). The filter set is
     grammar tokens only; field names are still discovered dynamically.
     """
     if not query:
-        return set()
+        return set(), set()
 
     query = strip_query_comments(query)
 
@@ -862,7 +868,7 @@ def extract_esql(query):
 
     # Final scrub: anything emitted is always removed from the validator set.
     fields = {f for f in referenced if f and f not in emitted and not f[0].isdigit()}
-    return fields
+    return fields, emitted
 
 
 def _split_top_level_commas(text: str):
@@ -1189,12 +1195,12 @@ def _process_rules(session, base_url, all_rules, check_mappings=True, catalogue=
             r.pop('data_view_id', None)
             r.pop('dataViewId', None)
 
-        fields = set()
+        fields, created = set(), set()
         if check_mappings:
             if language in ["kuery", "lucene"]:
                 fields = extract_kuery_lucene(query)
             elif language == "esql":
-                fields = extract_esql(query)
+                fields, created = _esql_names(query)
             elif language == "eql":
                 fields = extract_eql(query)[0]
 
@@ -1221,7 +1227,7 @@ def _process_rules(session, base_url, all_rules, check_mappings=True, catalogue=
                 p for p in clean_indices + threat_indices if not p.startswith(('_', '-')) and p.lower() not in IGNORED_INDICES
             )
 
-        rule_meta_list.append({"raw": r, "fields": fields, "indices": clean_indices, "sample": sample,
+        rule_meta_list.append({"raw": r, "fields": fields, "created": created, "indices": clean_indices, "sample": sample,
                                "threat_indices": threat_indices, "threat_fields": threat_fields})
 
     if check_mappings and wanted_patterns:
@@ -1261,7 +1267,9 @@ def _process_rules(session, base_url, all_rules, check_mappings=True, catalogue=
                 threat_facts, threat_rows = catalogue.check(meta["threat_indices"], meta["threat_fields"])
                 results = list(results) + list(threat_rows)
                 field_facts = {**threat_facts, **field_facts}
-            aux = set(aggregate_fields) | {str(f) for f in investigation_fields}
+            # A column an ES|QL query makes itself (a STATS count, an EVAL) is on its alerts, so it can be
+            # highlighted or grouped on though no index has it: it is not looked up, so never missing.
+            aux = (set(aggregate_fields) | {str(f) for f in investigation_fields}) - meta["created"]
             if r.get('timestamp_override') == 'event.ingested':
                 aux.add('event.ingested')
             aux_facts, _ = catalogue.check(meta["indices"], aux - set(meta["fields"]))

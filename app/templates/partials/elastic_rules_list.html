@@ -1,14 +1,16 @@
 {#
   The Elastic Rules page's rule browser list (GET /api/elastic/rules). Each row opens the rule in
   the detail pane. Context: rules, matching, total_count, offset, next_offset, selected_id,
-  covered_ttps, ttp_rule_counts, status_labels. With an offset, only the next rows: the list's last
-  row loads them when it scrolls into view (components/library_more.html).
+  covered_ttps, ttp_rule_counts, status_labels, filter_counts (the number beside each filter choice,
+  which app.js moves into the filters: too many for a header). With an offset, only the next rows:
+  the list's last row loads them when it scrolls into view (components/library_more.html).
 #}
 {% from "macros/icons.html" import icon %}
 {% from "components/mitre_pill.html" import mitre_pill %}
 {% from "macros/modal.html" import empty_state %}
 {% set _more = offset | default(0) > 0 %}
 {% if not _more %}
+{% if filter_counts %}<script type="application/json" data-filter-counts>{{ filter_counts | tojson }}</script>{% endif %}
 <div class="rules-count">
     {% if matching != total_count %}{{ matching }} of {{ total_count }} rules match
     {% else %}{{ total_count }} rules{% endif %}

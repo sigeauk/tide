@@ -40,6 +40,8 @@ Versions
   4  an indicator match rule's lines include its threat mapping: each entry's field in the rule's
      indexes and its indicator field in the indicator indexes. A machine learning rule has no
      timestamp override or query language, so neither is scored for it (not applicable).
+  5  highlighted fields count only against the ones that are missing: a rule with none set earns full
+     points, and a column an ES|QL query makes itself (a STATS count, an EVAL) is never missing.
 """
 from __future__ import annotations
 
@@ -48,7 +50,7 @@ from datetime import datetime, timezone
 from statistics import median
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-SCORING_VERSION = 4
+SCORING_VERSION = 5
 
 # Facts about one field: state is "found" | "missing" | "unknown".
 #   found    - present in the mapping of at least one of the rule's indexes
@@ -109,7 +111,8 @@ COMPONENTS = (
      "30% for at least one MITRE tactic and 70% for at least one technique."),
     ("author", "Author", "meta", 5, "Full points when an author is set."),
     ("highlights", "Highlighted fields", "meta", 5,
-     "Full points when custom highlighted fields are set, scaled by the share that exist in the mapping. "
+     "The share of custom highlighted fields that exist in the mapping, or that the rule's ES|QL query makes "
+     "itself, such as a STATS count. A rule with none set loses nothing: full points. "
      "Alert-suppression fields do not count."),
     ("description", "Description", "meta", 0,
      "Scored on length: none 0, under 30 characters 25%, under 100 50%, under 200 75%, 200 or more full points."),
@@ -444,7 +447,7 @@ def score_rule(rule_data: Dict[str, Any], weights: Optional[Dict[str, Any]] = No
             text += f"; missing from the mapping: {_names(gone)}"
         put("highlights", (len(hl) - len(gone)) / len(hl), text + ".")
     else:
-        put("highlights", 0.0, "No custom highlighted fields set.")
+        put("highlights", 1.0, "No custom highlighted fields set, so none are missing: full marks.")
 
     # Operations: is the rule healthy in its SIEM?
     last_exec = ((raw.get("execution_summary") or {}).get("last_execution") or {}) if isinstance(raw.get("execution_summary"), dict) else {}

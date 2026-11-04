@@ -380,14 +380,24 @@ console.debug('TIDE app.js loading...');
         if (btn) btn.setAttribute('aria-expanded', opening ? 'true' : 'false');
         sinkDropdown(dd);
         if (opening) {
-            var rect = dd.getBoundingClientRect();
-            if (rect.right > window.innerWidth) {
+            var rect = dd.getBoundingClientRect(), clip = clipBox(dd);
+            if (rect.right > Math.min(window.innerWidth, clip ? clip.getBoundingClientRect().right : Infinity)) {
                 dd.style.left = 'auto';
                 dd.style.right = '0';
             }
             if (box && btn && box.scrollHeight > tall) floatDropdown(dd, btn);
         }
     };
+
+    // The box that would cut a panel off at its right: its nearest ancestor that clips sideways (a
+    // rule library's browser), if any.
+    function clipBox(el) {
+        for (var p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+            var ox = getComputedStyle(p).overflowX;
+            if (ox === 'auto' || ox === 'scroll' || ox === 'hidden' || ox === 'clip') return p;
+        }
+        return null;
+    }
 
     // The box a panel scrolls with: its nearest ancestor that scrolls or clips (a dialog's body, a
     // system page section's body), if any.
@@ -564,12 +574,14 @@ console.debug('TIDE app.js loading...');
 
     // A filter bar's counts once its filters change: the server's "filterCounts" event (HX-Trigger),
     // {field name: {choice: n}}, puts each number beside its choice. The bar itself isn't redrawn.
+    // A rule library's browser has too many choices for a header: its list carries them instead
+    // (<script type="application/json" data-filter-counts>), read once the list is swapped in.
     document.addEventListener('filterCounts', function (e) {
         var counts = e.detail || {};
         Object.keys(counts).forEach(function (name) {
             var of = counts[name];
             if (!of || typeof of !== 'object' || of.nodeType) return;
-            document.querySelectorAll('.filters-bar [name="' + name + '"]').forEach(function (field) {
+            document.querySelectorAll('.filters-bar [name="' + name + '"], .browser-filters [name="' + name + '"]').forEach(function (field) {
                 var group = field.matches('select[data-filter-choice]') && field.closest('[data-filter-choices]');
                 var picks = group ? group.querySelectorAll('input[data-filter-pick]') : field.type === 'checkbox' ? [field] : [];
                 Array.prototype.forEach.call(picks, function (input) {
@@ -578,6 +590,24 @@ console.debug('TIDE app.js loading...');
                 });
             });
         });
+        hideEmptyChoices();
+    });
+    // A rule library's browser leaves out the choices that would show no rules (some of its filters
+    // have over a hundred), but never one that is ticked.
+    function hideEmptyChoices() {
+        document.querySelectorAll('.browser-filters .tide-filter-dropdown label.rh-checkbox-row').forEach(function (row) {
+            var n = row.querySelector('.rh-checkbox-count'), box = row.querySelector('input[type=checkbox]');
+            if (n && box) row.classList.toggle('is-empty-choice', n.textContent.trim() === '0' && !box.checked);
+        });
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', hideEmptyChoices);
+    else hideEmptyChoices();
+    document.addEventListener('htmx:afterSwap', function (e) {
+        var t = e.detail && e.detail.target, held = t && t.querySelector && t.querySelector('script[data-filter-counts]');
+        if (!held) return;
+        try {
+            document.dispatchEvent(new CustomEvent('filterCounts', { detail: JSON.parse(held.textContent) }));
+        } catch (err) { /* not JSON: the counts stay as they were */ }
     });
 
     // A list whose filters are kept in the address ([data-keep-url], the page's path): after a request
@@ -1846,10 +1876,47 @@ console.debug('TIDE app.js loading...');
     document.addEventListener('htmx:load', function(e) { initMitrePickers(e.target); });
 
     // "…" menus (data-more > [data-more-toggle] + .rh-more__menu). Rule Health wires its own.
+    // A menu opens below its ⋮. One that wouldn't fit there -- in the box that scrolls or clips it (a
+    // system's or the Baselines page's grid), or the window -- floats over them by its ⋮ instead:
+    // below if the window has room, else above. Like a floating filter dropdown, a scroll outside
+    // it or a resize closes it.
+    function sinkMoreMenu(menu) {
+        menu.classList.remove('rh-more__menu--float');
+        ['top', 'bottom', 'right', 'left'].forEach(function (k) { menu.style[k] = ''; });
+    }
+    function placeMoreMenu(menu, toggle) {
+        sinkMoreMenu(menu);
+        var bottom = window.innerHeight;
+        for (var p = menu.parentElement; p && p !== document.body; p = p.parentElement) {
+            var oy = getComputedStyle(p).overflowY;
+            if (oy === 'auto' || oy === 'scroll' || oy === 'hidden' || oy === 'clip') {
+                bottom = Math.min(bottom, p.getBoundingClientRect().bottom);
+                break;
+            }
+        }
+        var m = menu.getBoundingClientRect();
+        if (m.bottom <= bottom) return;
+        var t = toggle.getBoundingClientRect(), gap = 4;
+        menu.classList.add('rh-more__menu--float');
+        menu.style.right = (window.innerWidth - t.right) + 'px';
+        if (window.innerHeight - t.bottom - gap >= m.height || window.innerHeight - t.bottom >= t.top) {
+            menu.style.top = (t.bottom + gap) + 'px';
+        } else {
+            menu.style.top = 'auto';
+            menu.style.bottom = (window.innerHeight - t.top + gap) + 'px';
+        }
+    }
+    function closeFloatingMore(e) {
+        var open = document.querySelector('.rh-more__menu--float:not([hidden])');
+        if (open && !(e.target && e.target.nodeType === 1 && open.contains(e.target))) closeMoreMenus(null);
+    }
+    document.addEventListener('scroll', closeFloatingMore, true);
+    window.addEventListener('resize', closeFloatingMore);
     function closeMoreMenus(except) {
         document.querySelectorAll('[data-more] .rh-more__menu:not([hidden])').forEach(function(m) {
             if (m === except) return;
             m.hidden = true;
+            sinkMoreMenu(m);
             showSectionsPanel(m, false);
             var t = m.parentElement.querySelector('[data-more-toggle]');
             if (t) t.setAttribute('aria-expanded', 'false');
@@ -1862,6 +1929,7 @@ console.debug('TIDE app.js loading...');
             closeMoreMenus(menu);
             menu.hidden = !menu.hidden;
             toggle.setAttribute('aria-expanded', menu.hidden ? 'false' : 'true');
+            if (!menu.hidden) placeMoreMenu(menu, toggle);
             return;
         }
         // Picking an item, or clicking anywhere else, closes any open menu. Deferred so the item's

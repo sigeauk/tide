@@ -848,15 +848,14 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/api/diagnostics": "page:diagnostics",
     }
 
-    # Baseline templates are the Baselines page's; anything that reads or changes a system --
-    # applying a template to one (from either page) or removing it, generating a system's
-    # baselines, mapping rules to its techniques -- is the Systems page's. Once
-    # applied, a system's copy has no link to the template, so the two never overlap. "*" is one
-    # path segment; the most specific match wins.
+    # Baseline templates are the Baselines page's, including one made from a rule library's rules
+    # (/api/baselines/from-rules/); anything that reads or changes a system -- applying a template
+    # to one (from either page) or removing it, mapping rules to its techniques -- is the Systems
+    # page's. Once applied, a system's copy has no link to the template, so the two never overlap.
+    # "*" is one path segment; the most specific match wins.
     _BASELINE_RESOURCES = {
         "/api/baselines": "page:baselines",
         "/api/baselines/*/apply/": "page:systems",
-        "/api/baselines/generate": "page:systems",
         "/api/baselines/tactics/*/detections": "page:systems",
         "/api/baselines/tactics/detections/": "page:systems",
         "/api/baselines/tactics/*/siem-rules": "page:systems",
@@ -2503,11 +2502,12 @@ def create_app() -> FastAPI:
         technique: str = "",
         rule: str = "",
     ):
-        """Sigma Convert page."""
+        """Sigma Convert page. The browser's filters can be given in the address as its list takes
+        them (``?product=windows&level=high``)."""
         from app import sigma_helper as sigma_mod
-        
+        from app.api.sigma import picked_filters
+
         # Load initial data
-        categories = sigma_mod.get_rule_categories()
         backends = sigma_mod.get_available_backends()
         pipelines = sigma_mod.get_available_pipelines()
         
@@ -2516,7 +2516,8 @@ def create_app() -> FastAPI:
         
         # The rule browser's first rows (filtered by technique when the URL gives one)
         from app.api.sigma import rules_list_context as _sigma_rows
-        rows = _sigma_rows(technique=technique)
+        filters = picked_filters(request)
+        rows = _sigma_rows(technique=technique, filters=filters)
 
         # Resolve active client and pin tenant context BEFORE any
         # detection_rules read — rules are per-tenant since 4.1.13 and the
@@ -2547,7 +2548,8 @@ def create_app() -> FastAPI:
                 "user": user,
                 "active_page": "sigma",
                 **rows,
-                "categories": categories,
+                "picked": filters,
+                "filter_options": sigma_mod.filter_options(),
                 "backends": backends,
                 "pipelines": pipelines,
                 "formats": formats,
@@ -2571,8 +2573,9 @@ def create_app() -> FastAPI:
         rule: str = "",
         hunt: str = "",
     ):
-        """Elastic Rules page: Elastic's detection rules bundled in the image."""
-        from app.api.elastic import rules_list_context
+        """Elastic Rules page: Elastic's detection rules bundled in the image. The browser's filters
+        can be given in the address as its list takes them (``?platform=windows&severity=high``)."""
+        from app.api.elastic import picked_filters, rules_list_context
         from app.services import elastic_rules as er
 
         if tab == "hunting":        # Elastic's hunting queries moved to the Hunting page
@@ -2583,6 +2586,7 @@ def create_app() -> FastAPI:
             # A reference DB built before Elastic's rules were bundled has no such tables.
             if er.index_ready(conn):
                 facets = er.rule_facets(conn)
+        filters = picked_filters(request)
         return render_template(
             "pages/rules/elastic.html",
             request,
@@ -2590,6 +2594,7 @@ def create_app() -> FastAPI:
                 "user": user,
                 "active_page": "elastic",
                 "technique_filter": technique,
+                "picked": filters,
                 "facets": facets,
                 "severities": er.SEVERITIES,
                 "statuses": er.STATUSES,
@@ -2598,7 +2603,7 @@ def create_app() -> FastAPI:
                 "destinations": [{"value": f"{s['id']}|{s.get('space') or 'default'}",
                                   "label": s.get("name") or s.get("space") or s.get("label")}
                                  for s in db.get_client_siems(client_id) or []],
-                **rules_list_context(db, client_id, technique=technique, selected=rule),
+                **rules_list_context(db, client_id, technique=technique, filters=filters, selected=rule),
             },
         )
 

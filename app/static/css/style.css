@@ -2795,6 +2795,8 @@ a:hover { color: var(--color-primary); }
   font-size: 0.875rem;
 }
 .tide-filter-dropdown { max-height: min(60vh, 420px); overflow-y: auto; }
+/* A rule library's browser: a choice that would show no rules (app.js hideEmptyChoices) */
+.tide-filter-dropdown label.rh-checkbox-row.is-empty-choice { display: none; }
 /* A filter dropdown in a rule library's settings row, and in its browser: sized like their inputs */
 .sigma-select-group .tide-filter-btn { min-width: 140px; height: auto; min-height: 0; padding: 0.4rem 0.6rem; font-size: 0.8rem; background: var(--color-bg-action); border: 1px solid var(--color-border); border-radius: var(--radius-sm); }
 .browser-filter > input, .browser-filter .tide-filter-btn { height: 1.9rem; }
@@ -2820,8 +2822,8 @@ a:hover { color: var(--color-primary); }
 .tide-filter-dropdown label.rh-checkbox-row.is-disabled { opacity: 0.5; cursor: default; }
 /* "All" / "None" under a dropdown's tick boxes */
 .tide-filter-links { display: flex; gap: 0.75rem; margin-top: 0.3rem; padding: 0.4rem 0.4rem 0; border-top: 1px solid var(--color-border); font-size: 0.8rem; }
-/* The count at the end of a list row: filter dropdown rows, the baseline generator's rows */
-.tide-filter-dropdown .rh-checkbox-count, .gen-tech-count, .gen-preview-row__count {
+/* The count at the end of a filter dropdown's row */
+.tide-filter-dropdown .rh-checkbox-count {
   margin-left: auto; padding-left: 0.75rem; min-width: 2rem; text-align: right; font-size: 0.75rem; color: var(--color-text-muted);
 }
 
@@ -6132,166 +6134,6 @@ body.is-resizing-slide-panel {
   background: var(--color-bg-action-hover);
 }
 
-/* ================================================================
- * GENERATE BASELINES — Card-Grid Tech Selector
- * ================================================================ */
-.gen-card-scroll {
-  max-height: 420px;
-  overflow-y: auto;
-  padding-right: 0.25rem;
-}
-
-.gen-card-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.75rem;
-}
-
-.gen-card {
-  background: var(--bg-level-2-subcard);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: 0.65rem 0.75rem;
-}
-
-.gen-card-header {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.82rem;
-  font-weight: 600;
-  color: var(--color-primary);
-  padding-bottom: 0.45rem;
-  margin-bottom: 0.4rem;
-  border-bottom: 1px solid var(--color-border);
-}
-
-.gen-card-badge {
-  margin-left: auto;
-  font-size: 0.7rem;
-  font-weight: 500;
-  color: var(--color-text-muted);
-  background: var(--bg-level-3-inner);
-  padding: 0.1rem 0.45rem;
-  border-radius: var(--radius-sm);
-}
-
-.gen-card-body {
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-}
-
-.gen-tech-row {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
-  padding: 0.35rem 0.45rem;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  font-size: 0.82rem;
-  transition: background 0.15s;
-}
-
-.gen-tech-row:hover {
-  background: var(--bg-level-3-inner);
-}
-
-.gen-tech-icon {
-  display: inline-flex;
-  align-items: center;
-  color: var(--color-text-muted);
-  flex-shrink: 0;
-}
-
-.gen-tech-row:hover .gen-tech-icon,
-.gen-tech-row:has(input:checked) .gen-tech-icon {
-  color: var(--color-primary);
-}
-
-.gen-tech-label {
-  flex: 1;
-  color: var(--color-text);
-}
-
-.gen-tech-row:has(input:checked) {
-  background: var(--color-primary-muted);
-}
-
-.gen-tech-row:has(input:checked) .gen-tech-label {
-  color: var(--color-primary);
-}
-
-.gen-tech-row:has(input:checked) .gen-tech-count {
-  color: var(--color-primary);
-}
-
-.gen-tech-row input[type="checkbox"] {
-  accent-color: var(--color-primary);
-  width: 14px;
-  height: 14px;
-  flex-shrink: 0;
-}
-
-/* No Sigma index yet: a compact empty state inside the dialog. */
-
-/* Button row + "working…" indicator, shared by the dialog and its preview. */
-.gen-actions {
-  display: flex;
-  gap: 0.5rem;
-  justify-content: flex-end;
-  align-items: center;
-  margin-top: 1rem;
-}
-.gen-actions--tight { margin-top: 0.75rem; }
-.gen-indicator { font-size: 0.82rem; color: var(--color-text-muted); }
-.gen-indicator svg { animation: spin 1s linear infinite; }
-
-/* Generation preview (rendered into #gen-preview-area) */
-.gen-preview {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: 0.75rem 1rem;
-  margin-top: 0.75rem;
-}
-.gen-preview__title { font-size: 0.9rem; margin: 0 0 0.5rem; color: var(--color-primary); }
-.gen-preview__summary { font-size: 0.82rem; color: var(--color-text-muted); margin: 0 0 0.5rem; }
-.gen-preview__empty { font-size: 0.85rem; color: var(--color-warning); margin: 0; }
-.gen-preview__list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-  max-height: 240px;
-  overflow-y: auto;
-}
-
-/* Preview baseline rows */
-.gen-preview-row {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
-  padding: 0.3rem 0.5rem;
-  border-radius: var(--radius-sm);
-  font-size: 0.82rem;
-  cursor: pointer;
-}
-.gen-preview-row input[type="checkbox"] {
-  accent-color: var(--color-primary);
-  width: 13px;
-  height: 13px;
-  flex-shrink: 0;
-}
-.gen-preview-row__name { flex: 1; color: var(--color-text); }
-.gen-preview-exists .gen-preview-row__name { opacity: 0.6; }
-.gen-preview-row__flag { font-size: 0.72rem; color: var(--color-warning); margin-left: 0.3rem; }
-.gen-preview-row:hover {
-  background: var(--color-bg-layer-4-hover);
-}
-
-.gen-preview-exists {
-  border-left: 2px solid var(--color-warning);
-}
-
 
 /* ============================================================
  * Management hub � collapsible sections, tenant chips, status pills
@@ -7746,6 +7588,9 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
   border-radius: var(--radius-md); box-shadow: var(--shadow-lg);
 }
 .rh-more__menu[hidden] { display: none; }
+/* One that wouldn't fit in the box it scrolls in, or the window, floats over them by its ⋮ (app.js
+   placeMoreMenu), as a filter dropdown does */
+.rh-more__menu.rh-more__menu--float { position: fixed; z-index: 300; }
 .rh-more__item {
   display: flex; align-items: center; gap: 0.6rem; width: 100%; padding: 0.5rem 0.7rem;
   background: transparent; border: 0; border-radius: var(--radius-sm); cursor: pointer;
@@ -8069,6 +7914,14 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .sm-sigma__group { margin: 0.6rem 0 0.3rem; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--color-text-muted); }
 .sm-sigma { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.35rem; max-height: 18rem; overflow-y: auto; }
 .sm-sigma__item { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.35rem 0.5rem; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--bg-level-3-inner); }
+.sm-sigma__gone, .sm-made-from__gone { display: inline-flex; align-items: center; gap: 0.25rem; color: var(--color-warning); font-size: 0.75rem; }
+/* A technique made from a library rule: that rule, and its copies to map (step_modal.html) */
+.sm-made-from { display: flex; flex-direction: column; gap: 0.35rem; margin: 0 0 0.6rem; font-size: 0.82rem; }
+.sm-made-from__text { display: flex; align-items: flex-start; gap: 0.35rem; margin: 0; color: var(--color-text-secondary); }
+.sm-made-from__text svg { flex-shrink: 0; margin-top: 0.15rem; }
+.sm-made-from__copy { display: flex; align-items: center; gap: 0.45rem; padding: 0.3rem 0.5rem; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--bg-level-3-inner); }
+.sm-made-from__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.sm-made-from__hint { margin: 0; font-size: 0.78rem; color: var(--color-text-muted); }
 .sm-sigma__title { min-width: 0; font-size: 0.78rem; color: var(--color-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sm-sigma__title:hover { color: var(--color-primary); }
 .sm-sigma__meta { display: inline-flex; align-items: center; gap: 0.35rem; flex-shrink: 0; font-size: 0.7rem; }
@@ -8081,10 +7934,6 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .mitre-picker__empty { margin: 0; font-size: 0.78rem; }
 .mitre-picker__add { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 0.5rem; }
 .tf-inline .modal-actions { margin-top: 0; }
-.sys-dialog__new { margin: 0 0 1rem; }
-.sys-dialog__new > summary { list-style: none; display: inline-flex; }
-.sys-dialog__new > summary::-webkit-details-marker { display: none; }
-.sys-dialog__new[open] > summary { margin-bottom: 0.5rem; }
 
 /* ── SYSTEM PAGE (Rule Health shape) ─────────────────────────────
    Header with a "…" menu, page-level metric strip, then sections that collapse and reorder
@@ -8275,7 +8124,6 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 /* Dialogs from the Baselines "…" menu */
 .sys-dialog__form { display: flex; flex-direction: column; gap: 0.45rem; }
 .sys-dialog__form[hidden] { display: none; }
-.tpl-delete { margin-right: auto; }
 .sys-dialog__row { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; }
 .sys-dialog__saved { margin: 0.35rem 0 0; font-size: 0.8rem; color: var(--color-success); }
 .sys-dialog__apply { margin-bottom: 1rem; }
@@ -8510,8 +8358,23 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .btn.btn-h38 { height: 38px; }
 .sigma-select.sigma-select--wide { min-width: 180px; }
 .browser-filter.browser-filter--wide { flex: 2; }
-/* The Sigma, Elastic and Hunting browsers: one filter grid, a wide search then four columns, wrapping alike */
-.lib-workbench .browser-filters { display: grid; grid-template-columns: minmax(0, 2fr) repeat(4, minmax(0, 1fr)); }
+/* The Sigma, Elastic and Hunting browsers: one filter grid of five columns, the search two wide, wrapping alike */
+.lib-workbench .browser-filters { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.lib-workbench .browser-filter--wide { grid-column: span 2; }
+/* A library page fits the window, as Rule Health does (rule-browser-page): the header and settings
+   stay put, and the browser and the open item reach the bottom of the page */
+.lib-page > * { flex: 0 0 auto; }
+.lib-page > .lib-workbench { flex: 1 1 auto; height: auto; min-height: 320px; max-height: none; margin-bottom: 1rem; }
+@media (max-width: 960px) {
+  .main-content:has(.lib-page) { display: block; height: auto; min-height: 100vh; overflow-y: visible; }
+  .lib-page { display: block; }
+}
+/* Create baseline from a library's rules (components/rule_baseline_dialog.html) */
+.rule-baseline__filters { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.25rem 0.75rem; margin: 0 0 1rem; font-size: 0.82rem; }
+.rule-baseline__filters dt { color: var(--color-text-muted); }
+.rule-baseline__filters dd { margin: 0; overflow-wrap: anywhere; }
+.rule-baseline__warn { display: flex; align-items: flex-start; gap: 0.5rem; margin-bottom: 1rem; padding: 0.6rem 0.75rem; border-radius: var(--radius-md); font-size: 0.82rem; }
+.rule-baseline__warn svg { flex-shrink: 0; margin-top: 0.1rem; }
 .lib-workbench .browser-filter { min-width: 0; }
 .sigma-workbench { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1rem; align-items: stretch; height: calc(100vh - 280px); min-height: 520px; max-height: 700px; }
 .sigma-workbench > .rule-browser { height: 100%; min-height: 0; }

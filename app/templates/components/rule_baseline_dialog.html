@@ -1,0 +1,62 @@
+{#
+  Create baseline on the Sigma and Elastic pages (GET /api/baselines/from-rules/{library}): one
+  technique per rule the browser lists for its filters. Context: library, library_label, count,
+  left_out (deprecated, or Sigma's unsupported, rules listed but not used), warn (count at
+  rule_baselines.WARN_AT or more), parts ((label, values) filtered), q, technique, filters (sent back
+  as JSON, so what is made is what was counted), name, description (suggested), templates ((id,
+  name): Add to). Opened from the page's ⋮ into #modal-container; Create opens Baselines on it.
+#}
+{% from "macros/icons.html" import icon, icon_text %}
+{% from "macros/modal.html" import close_button %}
+<div name="Create Baseline From Rules" class="modal-overlay" data-click="backdrop.remove">
+    <div class="modal-content modal-md" data-stop-click>
+        <div class="modal-header">
+            <h3 class="modal-title">{{ icon('plus', '16') }} Create baseline</h3>
+            {{ close_button('name="Close" data-click="modal.remove"') }}
+        </div>
+        {% set _left = left_out ~ (' deprecated or unsupported' if library == 'sigma' else ' deprecated') ~ (' rules' if left_out != 1 else ' rule') %}
+        {% if not count %}
+        <p class="modal-intro">No {{ library_label }} rules to make a baseline from: {% if left_out %}the {{ _left }} the browser lists {{ 'are' if left_out != 1 else 'is' }} left out{% else %}the browser lists none for these filters{% endif %}. Change the filters and try again.</p>
+        <div class="modal-actions">
+            <button name="Close" type="button" class="btn btn-secondary" data-click="modal.remove">Close</button>
+        </div>
+        {% else %}
+        <p class="modal-intro">One baseline technique for each of the <strong>{{ count }}</strong> {{ library_label }} rule{{ 's' if count != 1 }} the browser lists, titled and described as the rule is, with its ATT&amp;CK techniques. Each remembers the rule it was made from.{% if left_out %} {{ _left | capitalize }} {{ 'are' if left_out != 1 else 'is' }} left out.{% endif %}</p>
+        {% if parts %}
+        <dl class="rule-baseline__filters">
+            {% for label, values in parts %}<dt>{{ label }}</dt><dd>{{ values | join(', ') }}</dd>{% endfor %}
+        </dl>
+        {% endif %}
+        {% if warn %}
+        <div class="alert alert-warning rule-baseline__warn" role="alert">
+            {{ icon('triangle-alert', '15') }}
+            <span>{{ count }} techniques is a big baseline: each is worked through on every system it's applied to. Narrowing the filters, to a product or data source, a technique or a severity, makes it smaller.</span>
+        </div>
+        {% endif %}
+        <form name="Submit Create Baseline From Rules" class="sys-dialog__form" hx-post="/api/baselines/from-rules/{{ library }}"
+              hx-swap="none" hx-disabled-elt="find button[type='submit']">
+            <input type="hidden" name="q" value="{{ q }}">
+            <input type="hidden" name="technique" value="{{ technique }}">
+            <input type="hidden" name="filters" value="{{ filters | tojson | forceescape }}">
+            {% if templates %}
+            <label class="form-label" for="rb-into">Add to</label>
+            <select id="rb-into" name="baseline_id" class="form-input form-select" data-change="library.baselineTarget">
+                <option value="">— Create new baseline —</option>
+                {% for id, template_name in templates %}<option value="{{ id }}">{{ template_name }}</option>{% endfor %}
+            </select>
+            <p class="text-muted sys-dialog__hint">Adding to a baseline leaves out the rules already in it.</p>
+            {% endif %}
+            <div class="sys-dialog__form" data-new-baseline>
+                <label class="form-label" for="rb-name">Baseline name</label>
+                <input id="rb-name" name="baseline_name" class="form-input" required value="{{ name }}">
+                <label class="form-label" for="rb-desc">Description</label>
+                <textarea id="rb-desc" name="description" class="form-input" rows="3">{{ description }}</textarea>
+            </div>
+            <div class="modal-actions">
+                <button name="Cancel" type="button" class="btn btn-secondary" data-click="modal.remove">Cancel</button>
+                <button name="Create" type="submit" class="btn btn-primary">{{ icon_text('plus', 'Create', '13') }}</button>
+            </div>
+        </form>
+        {% endif %}
+    </div>
+</div>

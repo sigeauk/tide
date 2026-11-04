@@ -3,11 +3,13 @@
   Hunting pages: the conversion settings in a row across the top, a filtered browser on the left, the
   open rule on the right (GET /api/sigma/rules/{id}/view, library.js) with its query converted with
   those settings. ?rule= opens one on arrival. A rule of your own is pasted in from the ⋮ menu
-  (Add your own Sigma rule) and shown the same way (POST /api/sigma/render). sigma.js.
+  (Add your own Sigma rule) and shown the same way (POST /api/sigma/render). sigma.js. Each browser
+  filter takes any number of choices (picked: what the address ticks; product, category and service
+  are the rule's logsource), with the number beside each choice (filter_counts) following the others.
 #}
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon, icon_text %}
-{% from "macros/filters.html" import filter_dropdown, filter_choice %}
+{% from "macros/filters.html" import filter_dropdown, filter_choice, filter_multi %}
 {% from "macros/modal.html" import close_button, empty_state %}
 {% from "macros/menu.html" import more_button %}
 {% from "macros/help.html" import help_button with context %}
@@ -21,14 +23,22 @@
 {% endblock %}
 
 {% block content %}
+<div class="rule-browser-page lib-page">
 <div class="page-header flex items-start justify-between gap-md">
     <div class="page-header__text">
         <h1 class="page-title-hero">Sigma Rules {{ help_button('sigma') }}</h1>
         <p class="page-subtitle">SigmaHQ's detection rules, built into TIDE. Pick one to see it converted for your SIEM with the settings below; Convert opens it in the rule form to deploy.</p>
     </div>
     <div class="rh-more" data-more>
-        {{ more_button('More actions', title='Add a Sigma rule of your own', attrs='name="Sigma Actions"') }}
+        {{ more_button('More actions', title='Create a baseline, add a Sigma rule of your own', attrs='name="Sigma Actions"') }}
         <div class="rh-more__menu" role="menu" hidden>
+            {% if not user or user.can_write('page:baselines') %}
+            <button name="Create Baseline" type="button" role="menuitem" class="rh-more__item"
+                    hx-get="/api/baselines/from-rules/sigma" hx-include="#sigma-filters" hx-target="#modal-container" hx-swap="innerHTML"
+                    title="Make a baseline of the rules the browser lists, one technique per rule">
+                {{ icon('plus', '15') }}<span>Create baseline</span>
+            </button>
+            {% endif %}
             <button name="Add Your Own Sigma Rule" type="button" role="menuitem" class="rh-more__item" data-click="sigma.ownRule">
                 {{ icon('file-code', '15') }}<span>Add your own Sigma rule</span>
             </button>
@@ -93,10 +103,13 @@
                     <label class="form-label" for="technique-filter">MITRE technique</label>
                     <input type="text" id="technique-filter" name="technique" placeholder="e.g., T1059" value="{{ technique_filter }}">
                 </div>
-                {% set cat_opts = [('', 'All')] %}{% for cat in categories %}{% set _ = cat_opts.append((cat, cat | title)) %}{% endfor %}
-                {{ filter_choice('category-filter', 'category', 'Category', cat_opts, '', wrap='browser-filter') }}
-                {{ filter_choice('level-filter', 'level', 'Level', [('', 'All'), ('critical', 'Critical'), ('high', 'High'), ('medium', 'Medium'), ('low', 'Low'), ('informational', 'Info')], '', wrap='browser-filter') }}
-                {{ filter_choice('status-filter', 'status', 'Status', [('', 'All'), ('stable', 'Stable'), ('test', 'Test'), ('experimental', 'Experimental'), ('deprecated', 'Deprecated'), ('unsupported', 'Unsupported')], '', wrap='browser-filter') }}
+                {% set fc = filter_counts %}
+                {{ filter_multi('product-filter', 'product', 'Product', filter_options.product, picked.product, 'All', fc.product or {}, wrap='browser-filter') }}
+                {{ filter_multi('category-filter', 'category', 'Category', filter_options.category, picked.category, 'All', fc.category or {}, wrap='browser-filter') }}
+                {{ filter_multi('service-filter', 'service', 'Service', filter_options.service, picked.service, 'All', fc.service or {}, wrap='browser-filter') }}
+                {{ filter_multi('tactic-filter', 'tactic', 'Tactic', filter_options.tactic, picked.tactic, 'All', fc.tactic or {}, wrap='browser-filter') }}
+                {{ filter_multi('level-filter', 'level', 'Level', [('critical', 'Critical'), ('high', 'High'), ('medium', 'Medium'), ('low', 'Low'), ('informational', 'Info')], picked.level, 'All', fc.level or {}, wrap='browser-filter') }}
+                {{ filter_multi('status-filter', 'status', 'Status', [('stable', 'Stable'), ('test', 'Test'), ('experimental', 'Experimental'), ('deprecated', 'Deprecated'), ('unsupported', 'Unsupported')], picked.status, 'All', fc.status or {}, wrap='browser-filter') }}
                 <input type="hidden" id="selected-rule-id" name="selected" value="{{ selected_rule_id | default('', true) }}">
             </form>
             <div id="rules-list" class="lib-list">
@@ -140,4 +153,5 @@
 
 <!-- Slide panel for technique details -->
 <div id="slide-panel-container"></div>
+</div>
 {% endblock %}

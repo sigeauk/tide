@@ -25,24 +25,30 @@ def _coverage(db, client_id: str):
     return db.get_all_covered_ttps(client_id=client_id), db.get_ttp_rule_counts(client_id=client_id)
 
 
-def rules_list_context(db, client_id: str, q: str = "", technique: str = "", platform: str = "",
-                       integration: str = "", rule_type: str = "", severity: str = "", status: str = "",
+def picked_filters(request: Request) -> dict:
+    """The rule browser's filters in the address, each with every value ticked (``?severity=high&severity=critical``)."""
+    return er.picked({name: request.query_params.getlist(name) for name in er.FILTERS})
+
+
+def rules_list_context(db, client_id: str, q: str = "", technique: str = "", filters: dict = None,
                        selected: str = "", limit: int = 100, offset: int = 0) -> dict:
     """What ``partials/elastic_rules_list.html`` needs; shared with the page route. From ``offset``
-    on, only the next rows (the list scrolled to its end)."""
-    rules, matching, total = [], 0, 0
+    on, only the next rows (the list scrolled to its end). ``counts``: the number beside each filter
+    choice (er.filter_counts), only with the first rows."""
+    rules, matching, total, counts = [], 0, 0, {}
     with db.get_shared_connection() as conn:
         if er.index_ready(conn):
-            rules, matching = er.search_rules(conn, q=q, technique=technique, platform=platform,
-                                              integration=integration, rule_type=rule_type,
-                                              severity=severity, status=status, limit=limit, offset=offset)
+            rules, matching = er.search_rules(conn, q=q, technique=technique, filters=filters,
+                                              limit=limit, offset=offset)
             total = conn.execute("SELECT COUNT(*) FROM elastic_rules_index").fetchone()[0]
+            if not offset:
+                counts = er.filter_counts(conn, q, technique, filters)
     covered_ttps, ttp_rule_counts = _coverage(db, client_id)
     shown = offset + len(rules)
     return {"rules": rules, "matching": matching, "total_count": total, "selected_id": selected,
             "offset": offset, "next_offset": shown if shown < matching else 0,
             "covered_ttps": covered_ttps, "ttp_rule_counts": ttp_rule_counts,
-            "status_labels": dict(er.STATUSES)}
+            "status_labels": dict(er.STATUSES), "filter_counts": counts}
 
 
 @router.get("/rules", response_class=HTMLResponse)
@@ -53,20 +59,15 @@ def search_rules(
     client_id: ActiveClient,
     q: str = Query(""),
     technique: str = Query(""),
-    platform: str = Query(""),
-    integration: str = Query(""),
-    rule_type: str = Query("", alias="type"),
-    severity: str = Query(""),
-    status: str = Query(""),
     selected: str = Query(""),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
 ):
-    """The rule browser's list, filtered; from ``offset`` on, the next rows as it is scrolled."""
+    """The rule browser's list, filtered (every filter in er.FILTERS, each any number of times);
+    from ``offset`` on, the next rows as it is scrolled."""
     return request.app.state.templates.TemplateResponse(
         request, "partials/elastic_rules_list.html",
-        rules_list_context(db, client_id, q, technique, platform, integration, rule_type, severity,
-                           status, selected, limit, offset),
+        rules_list_context(db, client_id, q, technique, picked_filters(request), selected, limit, offset),
     )
 
 

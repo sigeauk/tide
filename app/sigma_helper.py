@@ -416,7 +416,8 @@ def load_all_rules(force_reload: bool = False) -> List[Dict]:
                 if rule:
                     # Add extracted metadata
                     rule['_techniques'] = extract_mitre_techniques(rule)
-                    rule['_category'] = os.path.relpath(root, rules_path).split(os.sep)[0] if root != rules_path else 'root'
+                    rule['_tactics'] = extract_mitre_tactics(rule)
+                    rule['_category'] =os.path.relpath(root, rules_path).split(os.sep)[0] if root != rules_path else 'root'
                     rules.append(rule)
     
     _rules_cache = rules
@@ -424,15 +425,78 @@ def load_all_rules(force_reload: bool = False) -> List[Dict]:
     return rules
 
 
+# The rule browser's filters, by the name the page sends each under: the rule's logsource (product,
+# category, service), its ATT&CK tactics, level and status. Each takes any number of values and a
+# rule matches when it has any of them.
+FILTERS = ("product", "category", "service", "tactic", "level", "status")
+
+
+def _filter_values(rule: Dict) -> Dict[str, List[str]]:
+    """What a rule has for each of FILTERS: lower case, but tactics as ATT&CK names them."""
+    logsource = rule.get("logsource") if isinstance(rule.get("logsource"), dict) else {}
+
+    def low(value) -> List[str]:
+        return [str(value).strip().lower()] if value not in (None, "") else []
+
+    tactics = rule["_tactics"] if "_tactics" in rule else extract_mitre_tactics(rule)
+    return {"product": low(logsource.get("product")), "category": low(logsource.get("category")),
+            "service": low(logsource.get("service")), "tactic": list(tactics),
+            "level": low(rule.get("level")), "status": low(rule.get("status"))}
+
+
+def picked_filters(filters: Optional[Dict] = None) -> Dict[str, List[str]]:
+    """``filters`` as the browser's filters take them: each of FILTERS with its values (one value or
+    several), blanks left out, lower case but for tactics."""
+    out: Dict[str, List[str]] = {}
+    for name in FILTERS:
+        value = (filters or {}).get(name) or []
+        values = [str(v).strip() for v in ([value] if isinstance(value, str) else value) if str(v).strip()]
+        out[name] = values if name == "tactic" else [v.lower() for v in values]
+    return out
+
+
+def _passes(values: Dict[str, List[str]], wanted: Dict[str, List[str]]) -> Dict[str, bool]:
+    return {name: not wanted[name] or bool(set(values[name]) & set(wanted[name])) for name in FILTERS}
+
+
+def filter_counts(query: str = "", technique_filter: str = "", filters: Optional[Dict] = None) -> Dict[str, Dict[str, int]]:
+    """How many rules each filter choice would show, with the search, the technique and the other
+    filters as they are (a filter's own choices never narrow its counts): {filter: {value: n}}."""
+    wanted = picked_filters(filters)
+    counts: Dict[str, Dict[str, int]] = {name: {} for name in FILTERS}
+    for rule in _searched(load_all_rules(), query, technique_filter):
+        values = _filter_values(rule)
+        passes = _passes(values, wanted)
+        for name in FILTERS:
+            if all(ok for other, ok in passes.items() if other != name):
+                for value in values[name]:
+                    counts[name][value] = counts[name].get(value, 0) + 1
+    return counts
+
+
+def filter_options() -> Dict[str, List[Tuple[str, str]]]:
+    """(value, label) for each logsource and tactic filter: every value the rules have, A → Z (tactics
+    in ATT&CK's order). Level and status are Sigma's own fixed lists."""
+    from app.attack_tactics import ORDER
+
+    seen: Dict[str, set] = {name: set() for name in ("product", "category", "service", "tactic")}
+    for rule in load_all_rules():
+        values = _filter_values(rule)
+        for name in seen:
+            seen[name].update(values[name])
+    options = {name: [(v, v) for v in sorted(seen[name])] for name in ("product", "category", "service")}
+    options["tactic"] = [(t, t) for t in sorted(seen["tactic"], key=lambda t: (ORDER.index(t) if t in ORDER else len(ORDER), t))]
+    return options
+
+
 def search_rules(
     query: str = "",
     technique_filter: str = "",
-    category_filter: str = "",
-    level_filter: str = "",
-    status_filter: str = "",
+    filters: Optional[Dict] = None,
     limit: int = 100
 ) -> List[Dict]:
-    """Search Sigma rules by various criteria."""
+    """Rules matching the search, the technique and every filter in ``filters`` ({name in FILTERS:
+    values}), stable first then by title."""
     status_order = {
         "stable": 0,
         "test": 1,
@@ -446,18 +510,25 @@ def search_rules(
         title = str(rule.get("title") or "").strip().lower()
         return (status_order.get(status, len(status_order)), status, title)
 
-    rules = load_all_rules()
-    results = []
-    
+    wanted = picked_filters(filters)
+    results = [rule for rule in _searched(load_all_rules(), query, technique_filter)
+               if all(_passes(_filter_values(rule), wanted).values())]
+    results.sort(key=_status_sort_key)
+    if limit > 0:
+        return results[:limit]
+    return results
+
+
+def _searched(rules: List[Dict], query: str = "", technique_filter: str = ""):
+    """The rules matching the search (title, description, id, tags) and the MITRE technique."""
     query_lower = query.lower().strip()
     # Normalize technique filter - remove T prefix if present for flexible matching
     technique_filter = technique_filter.upper().strip()
-    status_filter = status_filter.lower().strip()
     if technique_filter.startswith('T'):
         technique_filter_num = technique_filter[1:]  # Just the number part
     else:
         technique_filter_num = technique_filter
-    
+
     for rule in rules:
         # Filter by search query (title, description, name)
         if query_lower:
@@ -484,28 +555,8 @@ def search_rules(
             
             if not technique_match and not tag_match:
                 continue
-        
-        # Filter by category (windows, linux, etc.)
-        if category_filter:
-            if rule.get('_category', '').lower() != category_filter.lower():
-                continue
-        
-        # Filter by level (critical, high, medium, low, informational)
-        if level_filter:
-            if rule.get('level', '').lower() != level_filter.lower():
-                continue
 
-        # Filter by Sigma rule status (stable, test, experimental, deprecated, unsupported)
-        if status_filter:
-            if str(rule.get('status', '')).lower() != status_filter:
-                continue
-        
-        results.append(rule)
-
-    results.sort(key=_status_sort_key)
-    if limit > 0:
-        return results[:limit]
-    return results
+        yield rule
 
 
 def log_sources(rules: List[Dict], limit: int = 8) -> List[Dict]:

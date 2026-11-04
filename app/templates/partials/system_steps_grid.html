@@ -1,13 +1,14 @@
 {#
   A system's techniques, or (template) every template's on the Baselines page, as cards or a
   table, flat or grouped (baseline, tactic, or tactics inside each baseline). Swapped by the
-  filter bar. Templates show no coverage (they have none until applied to a system); a
-  template's group heading opens its Manage window, and an empty template still shows.
+  filter bar. Templates show no coverage (they have none until applied to a system), and an
+  empty template still shows.
 
   Context: steps, groups (from group_system_steps; empty = flat), view, tactic_sort, sort_name,
            and system_id + coverage_undefined + narrowed + baseline_id (a system) or template.
-  A system's baseline group has a ⋮ (Edit baseline, Add technique, Remove baseline); grouped by
-  baseline, an empty one still shows.
+  Every baseline group has a ⋮: a system's has Edit baseline, Add technique and Remove baseline; a
+  template's has Edit baseline, Add technique, Apply to a system, Import techniques, Export and
+  Delete template. Grouped by baseline, an empty one still shows.
 #}
 {% from "macros/icons.html" import icon, icon_text, tactic_icon %}
 {% from "components/mitre_pill.html" import mitre_pill %}
@@ -88,10 +89,37 @@
         </span>
         {% if g.kind == 'baseline' %}
         {% if template %}
-        {# Inside <summary>: stop the click folding the group, then open the window. #}
-        <button name="Manage Baseline" type="button" class="btn btn-secondary btn-sm"
-                data-click="steps.openDialog" data-url="/api/baselines/{{ g.key }}/manage"
-                title="Rename {{ g.label }}, add a technique, apply it to a system, import, export or delete it">{{ icon_text('settings', 'Manage', '12') }}</button>
+        {# Inside <summary>, as a system's: steps.inGroupHead keeps a click on the ⋮ or its menu from
+           folding the group. Each item but Add technique and Delete opens its part of the
+           template's dialog (template_manage_dialog.html). #}
+        <div class="rh-more" data-more data-click="steps.inGroupHead">
+            {{ more_button(g.label ~ ' actions', title='Edit ' ~ g.label ~ ', add a technique, apply it to a system, import, export or delete it', attrs='name="Baseline Menu"') }}
+            <div class="rh-more__menu" role="menu" hidden>
+                <button name="Edit Baseline" type="button" role="menuitem" class="rh-more__item"
+                        hx-get="/api/baselines/{{ g.key }}/manage?show=edit" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
+                    {{ icon('pencil', '15') }}<span>Edit baseline</span>
+                </button>
+                <button name="Add Technique" type="button" role="menuitem" class="rh-more__item"
+                        hx-get="/api/baselines/techniques-new?baseline_id={{ g.key }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
+                    {{ icon('plus', '15') }}<span>Add technique</span>
+                </button>
+                {% for show, name, ico, label in [('apply', 'Apply Baseline', 'layers', 'Apply to a system'),
+                                                   ('import', 'Import Techniques', 'upload', 'Import techniques'),
+                                                   ('export', 'Export Baseline', 'download', 'Export')] %}
+                <button name="{{ name }}" type="button" role="menuitem" class="rh-more__item"
+                        hx-get="/api/baselines/{{ g.key }}/manage?show={{ show }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
+                    {{ icon(ico, '15') }}<span>{{ label }}</span>
+                </button>
+                {% endfor %}
+                <div class="rh-more__sep" role="separator"></div>
+                <button name="Delete Template" type="button" role="menuitem" class="rh-more__item rh-more__item--danger"
+                        hx-delete="/api/baselines/{{ g.key }}" hx-swap="none" hx-include="unset"
+                        data-confirm-title="Delete template" data-confirm-label="Delete"
+                        hx-confirm="Delete the template {{ g.label }} and its techniques? Systems it was applied to keep their own copy.">
+                    {{ icon('trash-2', '15') }}<span>Delete template</span>
+                </button>
+            </div>
+        </div>
         {% else %}
         {# Inside <summary>: steps.inGroupHead keeps a click on the ⋮ or its menu from folding the group. #}
         <div class="rh-more" data-more data-click="steps.inGroupHead">

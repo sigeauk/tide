@@ -425,12 +425,47 @@ def rows_as_dicts(cursor) -> List[Dict[str, Any]]:
 
 _STATUS_ORDER = "CASE status WHEN 'production' THEN 0 WHEN 'building_block' THEN 1 ELSE 2 END"
 
+# The rule browser's filters, by the name the page sends each under. Each takes any number of values
+# and a rule matches when it has any of them: a column holds one value per rule, a list several,
+# and a tag filter reads the rule's "<prefix> <value>" tags without case ("none": no such tag).
+_COLUMN_FILTERS = {"platform": "platform", "type": "rule_type", "severity": "severity", "status": "status"}
+_LIST_FILTERS = {"integration": "integrations", "tactic": "tactics"}
+_TAG_FILTERS = {"data_source": "Data Source:", "profile": "Profile:", "noise": "Noise:"}
+FILTERS = (*_COLUMN_FILTERS, *_LIST_FILTERS, *_TAG_FILTERS)
+NO_TAG = "none"
+# Tag values in the order their filter lists them; any others follow A → Z.
+_TAG_ORDER = {"profile": ("recommended", "beta", "aggressive"), "noise": ("low", "medium", "high", "unknown")}
 
-def search_rules(conn, q: str = "", technique: str = "", platform: str = "", integration: str = "",
-                 rule_type: str = "", severity: str = "", status: str = "",
-                 limit: int = 200, deployable: bool = False, offset: int = 0) -> Tuple[List[Dict[str, Any]], int]:
-    """Rules matching every given filter, production first then by name (``limit`` of them from
-    ``offset`` on), and how many match. ``deployable`` leaves out deprecated rules (suggestions)."""
+
+def _tag_values_sql(prefix: str) -> str:
+    """A rule's values of its "<prefix> <value>" tags, lower case and each once (SQL)."""
+    return (f"list_distinct(list_transform(list_filter(tags, lambda t: lower(t) LIKE '{prefix.lower()}%'), "
+            f"lambda t: lower(trim(substr(t, {len(prefix) + 1})))))")
+
+
+def _values_sql(name: str) -> str:
+    """The list of values a rule has for filter ``name`` (SQL)."""
+    if name in _COLUMN_FILTERS:
+        return f"[{_COLUMN_FILTERS[name]}]"
+    if name in _LIST_FILTERS:
+        return f"list_distinct({_LIST_FILTERS[name]})"
+    values = _tag_values_sql(_TAG_FILTERS[name])
+    return f"(CASE WHEN len({values}) = 0 THEN ['{NO_TAG}'] ELSE {values} END)"
+
+
+def picked(filters: Optional[Dict[str, Any]]) -> Dict[str, List[str]]:
+    """``filters`` as the browser's filters take them: each of FILTERS with its values (one value or
+    several), blanks left out and tag values in lower case."""
+    out: Dict[str, List[str]] = {}
+    for name in FILTERS:
+        value = (filters or {}).get(name) or []
+        values = [str(v).strip() for v in ([value] if isinstance(value, str) else value) if str(v).strip()]
+        out[name] = [v.lower() for v in values] if name in _TAG_FILTERS else values
+    return out
+
+
+def _where(q: str, technique: str, filters: Optional[Dict[str, Any]], deployable: bool = False,
+           skip: str = "") -> Tuple[str, List[Any]]:
     where: List[str] = ["status <> 'deprecated'"] if deployable else []
     params: List[Any] = []
     if q.strip():
@@ -440,15 +475,19 @@ def search_rules(conn, q: str = "", technique: str = "", platform: str = "", int
         params += [like] * 5
     if technique.strip():
         where.append(technique_clause("techniques", technique, params))
-    for column, value in (("platform", platform), ("rule_type", rule_type), ("severity", severity),
-                          ("status", status)):
-        if value:
-            where.append(f"{column} = ?")
-            params.append(value)
-    if integration:
-        where.append("list_contains(integrations, ?)")
-        params.append(integration)
-    clause = f"WHERE {' AND '.join(where)}" if where else ""
+    for name, values in picked(filters).items():
+        if values and name != skip:
+            where.append(f"list_has_any({_values_sql(name)}, ?::VARCHAR[])")
+            params.append(values)
+    return (f"WHERE {' AND '.join(where)}" if where else ""), params
+
+
+def search_rules(conn, q: str = "", technique: str = "", filters: Optional[Dict[str, Any]] = None,
+                 limit: int = 200, deployable: bool = False, offset: int = 0) -> Tuple[List[Dict[str, Any]], int]:
+    """Rules matching the search, the technique and every filter in ``filters`` ({name in FILTERS:
+    values}), production first then by name (``limit`` of them from ``offset`` on), and how many
+    match. ``deployable`` leaves out deprecated rules (suggestions)."""
+    clause, params = _where(q, technique, filters, deployable)
     total = conn.execute(f"SELECT COUNT(*) FROM elastic_rules_index {clause}", params).fetchone()[0]
     rows = rows_as_dicts(conn.execute(
         f"SELECT rule_id, name, description, severity, rule_type, status, platform, techniques "
@@ -458,16 +497,87 @@ def search_rules(conn, q: str = "", technique: str = "", platform: str = "", int
     return rows, total
 
 
+def tactics_by_technique(threat: Any) -> Dict[str, str]:
+    """{ATT&CK technique or sub-technique id: the tactic a rule's ``threat`` mapping puts it under}
+    (the first, when it is under several)."""
+    out: Dict[str, str] = {}
+    for entry in threat if isinstance(threat, list) else []:
+        tactic = ((entry or {}).get("tactic") or {}).get("name") or ""
+        for tech in (entry or {}).get("technique") or []:
+            for t in [tech, *((tech or {}).get("subtechnique") or [])]:
+                tid = str((t or {}).get("id") or "").strip().upper()
+                if tid and tactic:
+                    out.setdefault(tid, tactic)
+    return out
+
+
+def rules_for_baseline(conn, q: str = "", technique: str = "",
+                       filters: Optional[Dict[str, Any]] = None) -> Tuple[List[Dict[str, Any]], int]:
+    """The rules the browser lists for these filters, less deprecated ones, in its order, with what
+    a baseline technique takes from each (Create baseline; ``tactic_of``: tactics_by_technique);
+    and how many deprecated rules were left out."""
+    clause, params = _where(q, technique, filters, deployable=True)
+    rows = rows_as_dicts(conn.execute(
+        f"SELECT rule_id, name, description, techniques, tactics, "
+        f"json_extract(rule_json, '$.false_positives') AS false_positives, json_extract(rule_json, '$.threat') AS threat "
+        f"FROM elastic_rules_index {clause} ORDER BY {_STATUS_ORDER}, lower(name), rule_id", params))
+    for row in rows:
+        for col in ("false_positives", "threat"):
+            value = row.get(col)
+            if isinstance(value, str):
+                try:
+                    value = json.loads(value)
+                except ValueError:
+                    value = [value] if col == "false_positives" else []
+            row[col] = value if isinstance(value, list) else []
+        row["tactic_of"] = tactics_by_technique(row.pop("threat"))
+    clause, params = _where(q, technique, filters)
+    listed = conn.execute(f"SELECT COUNT(*) FROM elastic_rules_index {clause}", params).fetchone()[0]
+    return rows, listed - len(rows)
+
+
+def filter_counts(conn, q: str = "", technique: str = "",
+                  filters: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, int]]:
+    """How many rules each filter choice would show, with the search, the technique and the other
+    filters as they are (a filter's own choices never narrow its counts): {filter: {value: n}}."""
+    counts: Dict[str, Dict[str, int]] = {}
+    for name in FILTERS:
+        clause, params = _where(q, technique, filters, skip=name)
+        counts[name] = {v: n for v, n in conn.execute(
+            f"SELECT v, COUNT(*) FROM (SELECT unnest({_values_sql(name)}) AS v FROM elastic_rules_index {clause}) "
+            f"WHERE v IS NOT NULL GROUP BY v", params).fetchall()}
+    return counts
+
+
+def _tag_options(conn, name: str) -> List[Tuple[str, str]]:
+    """(value, label) for a tag filter: each value once, labelled as most rules spell it."""
+    prefix = _TAG_FILTERS[name]
+    rows = conn.execute(
+        f"SELECT lower(v), arg_max(v, n) FROM (SELECT trim(substr(t, {len(prefix) + 1})) AS v, COUNT(*) AS n "
+        f"FROM elastic_rules_index, unnest(tags) AS u(t) WHERE lower(t) LIKE '{prefix.lower()}%' GROUP BY 1) "
+        f"GROUP BY 1").fetchall()
+    order = _TAG_ORDER.get(name, ())
+    return sorted(((v, label) for v, label in rows if v),
+                  key=lambda o: (order.index(o[0]) if o[0] in order else len(order), o[1].lower()))
+
+
 def rule_facets(conn) -> Dict[str, Any]:
     """The values each list filter offers, and the overall counts."""
+    from app.attack_tactics import ORDER
+
     def distinct(sql: str) -> List[str]:
         return [r[0] for r in conn.execute(sql).fetchall() if r[0]]
 
+    tactics = distinct("SELECT DISTINCT unnest(tactics) FROM elastic_rules_index")
     return {
         "platforms": distinct("SELECT DISTINCT platform FROM elastic_rules_index ORDER BY 1"),
         "integrations": distinct(
             "SELECT DISTINCT unnest(integrations) AS i FROM elastic_rules_index ORDER BY 1"),
         "types": distinct("SELECT DISTINCT rule_type FROM elastic_rules_index ORDER BY 1"),
+        "tactics": sorted(tactics, key=lambda t: (ORDER.index(t) if t in ORDER else len(ORDER), t)),
+        "data_sources": _tag_options(conn, "data_source"),
+        "profiles": _tag_options(conn, "profile") + [(NO_TAG, "None")],
+        "noise": _tag_options(conn, "noise") + [(NO_TAG, "Not tagged")],
         "rule_count": conn.execute("SELECT COUNT(*) FROM elastic_rules_index").fetchone()[0],
         "hunt_count": conn.execute("SELECT COUNT(*) FROM elastic_hunts_index").fetchone()[0],
     }

@@ -36,5 +36,13 @@
             url.searchParams.set(workbench.getAttribute('data-library'), id);
             history.replaceState(history.state, '', url);
         },
+        // Create baseline (components/rule_baseline_dialog.html): adding to a baseline already
+        // made needs no name or description for a new one.
+        baselineTarget: function (e, sel) {
+            var fields = sel.form && sel.form.querySelector('[data-new-baseline]');
+            if (!fields) return;
+            fields.hidden = !!sel.value;
+            fields.querySelectorAll('input').forEach(function (i) { i.required = !sel.value; });
+        },
     });
 })();

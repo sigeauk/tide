@@ -15,7 +15,7 @@
   group, view) are also remembered per browser.
 
   Every baseline is managed here: the Baselines ⋮ has Add baseline (apply a template, or start an
-  empty one), Add technique, Generate baselines and SIEM coverage; each baseline's own ⋮, in the
+  empty one), Add technique and SIEM coverage; each baseline's own ⋮, in the
   grid grouped by baseline (the default here), has Edit baseline, Add technique and Remove baseline.
   The Baseline filter narrows the grid to one baseline. As Rule Health (rule-browser-page), the page
   fills the window: the header and metric strip stay put, every section's heading is always in view,
@@ -87,7 +87,7 @@
         {{ collapse_ctl('baselines') }}
         <h2 class="section-title sys-section__title">{{ icon('check-square', '18') }} Baselines <span class="rm-fold__count">{{ bl_count }}</span></h2>
         <div class="rh-more" data-more>
-            {{ more_button('Baseline actions', title='Add a baseline or a technique, generate baselines, choose SIEM coverage', attrs='name="Baseline Actions"') }}
+            {{ more_button('Baseline actions', title='Add a baseline or a technique, choose SIEM coverage', attrs='name="Baseline Actions"') }}
             <div class="rh-more__menu" role="menu" hidden>
                 <button name="Add Baseline" type="button" role="menuitem" class="rh-more__item"
                         title="Apply a template to this system, or start an empty baseline"
@@ -101,12 +101,6 @@
                     {{ icon('plus', '15') }}<span>Add technique</span>
                 </button>
                 {% endif %}
-                <button name="Generate Baselines" type="button" role="menuitem" class="rh-more__item"
-                        hx-get="/api/baselines/generate-form?system_id={{ system.id }}"
-                        hx-target="#generate-baselines-modal" hx-swap="innerHTML" hx-include="unset"
-                        data-click="el.show" data-target="generate-baselines-modal">
-                    {{ icon('zap', '15') }}<span>Generate baselines</span>
-                </button>
                 <div class="rh-more__sep" role="separator"></div>
                 <button name="SIEM Coverage" type="button" role="menuitem" class="rh-more__item"
                         title="Which SIEM destinations count toward this system's coverage"
@@ -363,10 +357,6 @@
 </div>
 <!-- Required for mitre_pill slide panel -->
 <div id="slide-panel-container"></div>
-
-<!-- Generate Baselines modal (loaded via HTMX) -->
-<div name="Generate Baselines Modal" id="generate-baselines-modal" class="modal-overlay" style="display:none;"
-     data-click="backdrop.hide"></div>
 
 {% endblock %}
 

@@ -43,11 +43,11 @@
     </div>
     {% if can_edit and not editing %}
     <div class="flex gap-sm items-center">
-        <a name="Edit Dashboard" class="btn btn-secondary btn-sm" href="/dashboard/{{ dashboard.id }}?edit=1"
-           title="Name this dashboard, and add, arrange and filter its sections">{{ icon('pencil', '14') }} Edit</a>
         <div class="rh-more" data-more>
             {{ more_button('More actions', attrs='name="Dashboard Actions"') }}
             <div class="rh-more__menu" role="menu" hidden>
+                <a name="Edit Dashboard" role="menuitem" class="rh-more__item" href="/dashboard/{{ dashboard.id }}?edit=1"
+                   title="Name this dashboard, and add, arrange and filter its sections">{{ icon('pencil', '14') }}<span>Edit dashboard</span></a>
                 <button name="New Dashboard" type="button" role="menuitem" class="rh-more__item"
                         hx-post="/api/dashboard/new" hx-include="unset">{{ icon('plus', '14') }}<span>New dashboard</span></button>
                 <button name="Duplicate Dashboard" type="button" role="menuitem" class="rh-more__item"
@@ -103,7 +103,7 @@
 </div>
 {% if not items and not editing %}
 {% call empty_state() %}
-    <p>Nothing is on this dashboard yet.{% if can_edit %} Use <strong>Edit</strong> to add sections.{% endif %}</p>
+    <p>Nothing is on this dashboard yet.{% if can_edit %} Use <strong>⋮ › Edit dashboard</strong> to add sections.{% endif %}</p>
 {% endcall %}
 {% endif %}
 

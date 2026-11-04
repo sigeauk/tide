@@ -148,7 +148,7 @@ def in_validated_range(rule, lo: Optional[datetime], hi: Optional[datetime], sta
 
 
 # Schema version for migrations
-SCHEMA_VERSION = 96
+SCHEMA_VERSION = 97
 
 # The per-client role that opens Diagnostics for that client. Only a super admin can grant or
 # revoke it (set_user_roles(grant_support=...)).
@@ -4073,6 +4073,38 @@ class DatabaseService:
             self._set_schema_version(conn, 96)
             logger.info("Migration 96: client_gitlab_projects can pause backups and skip destinations.")
 
+        # ── Migration 97: a baseline technique remembers the library rule it was made from (6.3.4) ──
+        # Create baseline on the Sigma and Elastic pages makes one technique per rule; source_library
+        # ("sigma" / "elastic") and source_rule_id (that rule's upstream id) say which, so the rule
+        # can be found again. Per tenant DB, as migration 76. Additive only: existing techniques
+        # have none.
+        if current_version < 97:
+            try:
+                rows = conn.execute(
+                    "SELECT id, name, db_filename FROM clients WHERE db_filename IS NOT NULL"
+                ).fetchall()
+            except Exception as exc:
+                logger.warning(f"Migration 97: could not list tenant DBs: {exc}")
+                rows = []
+            data_dir = os.path.dirname(self.db_path)
+            migrated = 0
+            for cid, cname, fname in rows:
+                tdb_path = os.path.join(data_dir, fname)
+                if not os.path.exists(tdb_path):
+                    logger.warning(f"Migration 97: tenant DB missing for client {cname} ({cid[:8]}) — skipping")
+                    continue
+                try:
+                    tconn = duckdb.connect(tdb_path)
+                    try:
+                        self.add_step_source_columns(tconn)
+                        migrated += 1
+                    finally:
+                        tconn.close()
+                except Exception as exc:
+                    logger.error(f"Migration 97: failed on {fname} ({cname}): {exc}")
+            self._set_schema_version(conn, 97)
+            logger.info("Migration 97: baseline techniques can record their library rule in %d tenant DB(s).", migrated)
+
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
 
     @staticmethod
@@ -4165,6 +4197,12 @@ class DatabaseService:
         for col in ("priority", "category"):
             tconn.execute(f"ALTER TABLE playbook_steps ADD COLUMN IF NOT EXISTS {col} VARCHAR DEFAULT ''")
         tconn.execute(cls.STEP_COVERAGE_DDL)
+
+    @staticmethod
+    def add_step_source_columns(tconn) -> None:
+        """Migration 97 for one tenant DB (and every new tenant). Idempotent."""
+        for col in ("source_library", "source_rule_id"):
+            tconn.execute(f"ALTER TABLE playbook_steps ADD COLUMN IF NOT EXISTS {col} VARCHAR DEFAULT ''")
 
     @staticmethod
     def detach_system_baselines(tconn) -> Tuple[int, int, int]:

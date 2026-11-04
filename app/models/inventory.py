@@ -367,6 +367,10 @@ class BaselineTactic(BaseModel):
     # then keeps its own. '' = not set.
     priority: str = ""              # critical / high / medium / low
     category: str = ""              # see STEP_CATEGORIES in app/inventory_engine.py
+    # The library rule a technique was made from (Create baseline on the Sigma or Elastic page):
+    # "sigma" / "elastic" and that rule's upstream id. '' = written by hand, or from ATT&CK.
+    source_library: str = ""
+    source_rule_id: str = ""
     techniques: List[TacticTechnique] = Field(default_factory=list)
     detections: List[TacticDetection] = Field(default_factory=list)
 

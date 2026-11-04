@@ -62,13 +62,9 @@ A system is measured on the SIEM destinations you choose, for example production
 
 A rule mapped at a destination that isn't ticked shows **Not counted**. With none ticked, the system's coverage reads **Not set** rather than 0%.
 
-### Generate baselines from your technologies
+### Baselines from Sigma or Elastic rules
 
-**Generate baselines** (in the **Baselines** section's **⋮** menu) builds baselines from the SigmaHQ rules built into TIDE.
-
-1. Tick the technologies the system runs (operating systems, cloud services, applications and so on). Each shows how many Sigma rules it has.
-2. Check the **Generation Preview**: one baseline per technology, with the techniques its rules detect. Baselines the system already has are unticked.
-3. Untick any you don't want, then click **Generate *N* Baselines**. They are the system's own baselines.
+To make a baseline from the rules built into TIDE, filter the **Sigma** or **Elastic** page to the rules the system needs and choose **⋮ › Create baseline** there (see [Make a baseline from a library's rules](LIBRARIES.md#make-a-baseline-from-a-librarys-rules)). It becomes a template on **Baselines**; apply it here with **Add baseline**.
 
 ### Find a technique
 
@@ -98,7 +94,7 @@ The report shows the same figures as the page, the priority gaps, and coverage b
 
 ## Baseline templates
 
-The **Baselines** page shows every template's techniques in one grid, grouped by template, with the same filters as a system's page (without Coverage: a template has no coverage until it is applied). Its **⋮** menu has **New baseline**, **Import** and **Add technique**. Each template's heading has **Manage**.
+The **Baselines** page shows every template's techniques in one grid, grouped by template, with the same filters as a system's page (without Coverage: a template has no coverage until it is applied). Its **⋮** menu has **New baseline**, **Import** and **Add technique**. Each template's heading has its own **⋮**, as a system's baselines do: **Edit baseline**, **Add technique**, **Apply to a system**, **Import techniques**, **Export** and **Delete template**.
 
 ### Create a baseline
 
@@ -111,7 +107,7 @@ You can also make a baseline from a threat: a MITRE group, software or campaign,
 
 ### Add techniques to a baseline
 
-1. Choose **Add technique**: from the Baselines page's **⋮** menu, from a template's **Manage**, or on a system from the **Baselines** section's **⋮** menu or a baseline's own **⋮**, which picks that baseline for you.
+1. Choose **Add technique**: from the Baselines page's **⋮** menu, from a template's own **⋮**, or on a system from the **Baselines** section's **⋮** menu or a baseline's own **⋮**, which picks that baseline for you.
 2. A blank technique window opens. Give it a **Title** (the only thing required), pick its baseline, and click **Create**.
 3. The window becomes the technique's own. Use each section's **⋮ › Update** to fill it in:
    - **Description**: what the attacker does, in your words.
@@ -121,17 +117,17 @@ You can also make a baseline from a threat: a MITRE group, software or campaign,
 
 ### Import techniques
 
-- Into one template: **Manage › Import techniques**, with a CSV or Excel file whose columns are **Title**, **Tactic**, **Technique** (an ATT&CK ID) and **Description**. Its rows are added to the template.
+- Into one template: its **⋮ › Import techniques**, with a CSV or Excel file whose columns are **Title**, **Tactic**, **Technique** (an ATT&CK ID) and **Description**. Its rows are added to the template.
 - As a new or existing template: the page's **⋮ › Import**, with a TIDE JSON export or a CSV or Excel file like the one above. Choose what to **Import into**, and name the baseline if it is new.
 
 ### Apply, export, rename or delete a template
 
-From the template's **Manage**:
+From the **⋮** on the template's heading:
 
+- **Edit baseline** changes its **Name** and **Description**. This changes the template only; systems keep their own copy and name.
 - **Apply to a system** gives that system its own copy and opens it. (Needs permission to edit Systems.)
 - **Export** downloads a PDF or Markdown report of the template, or **TIDE JSON** to import elsewhere.
-- Change its **Name** and **Description** and **Save**. This changes the template only; systems keep their own copy and name.
-- **Delete template** removes the template and its techniques. Systems it was applied to keep their copy.
+- **Delete template** removes the template and its techniques, once you confirm. Systems it was applied to keep their copy.
 
 ## Working with a technique
 
@@ -153,7 +149,7 @@ The score ring in the header shows the strongest rule protecting the system. The
 Who can: anyone who can edit Systems.
 
 1. In **Coverage**, open the **⋮** menu and choose **Add coverage**, then **Rule (alerting)**.
-2. Rules that **carry this technique's ATT&CK IDs** are listed first, then **All SIEM Rules**. Type in **Search rules…** to narrow the list.
+2. For a technique made from a Sigma or Elastic rule, that rule's copies in your SIEMs are listed first (**Made from this rule**). Then come rules that **carry this technique's ATT&CK IDs**, then **All SIEM Rules**. Type in **Search rules…** to narrow the list.
 3. Each row names the rule's destination, as the same rule can live in several places. Click the copy you mean. It is mapped straight away.
 
 The rule's card in **Coverage** shows its score, destination, whether it is enabled, whether its fields exist in the SIEM, and when it was last validated. It also says **Not counted** if its destination isn't one the system is measured on. Click its name to open the rule; **×** removes the mapping (never the rule).
@@ -173,6 +169,12 @@ Some techniques are covered by a dashboard, a report or a log someone checks, ra
 ### Relink a rule TIDE can't find
 
 When a mapped rule has been deleted, moved or renamed, its card says **Needs relinking**, with why on hover. Choose **Relink** from its **⋮** menu: the rule picker opens, searched by its name. The rule you pick replaces it, keeping its history.
+
+### A technique made from a rule
+
+A technique made from a Sigma or Elastic rule (**⋮ › Create baseline** on the Sigma or Elastic page) says so at the top of **Coverage**, with the rule's name. Each copy of that rule in your SIEMs that isn't mapped yet is listed under it, with its destination and whether it's enabled; **Map** maps that copy, as picking it would. TIDE never maps it for you. With no copy anywhere, it says to deploy or convert the rule from **Elastic rules** or **Sigma rules** below, where it's listed first under **Made from this rule**. If Elastic has deprecated the rule, or SigmaHQ no longer has it, it says that too.
+
+A rule covers more than one technique, and a rule tagged with an ATT&CK technique doesn't cover every way that technique is used. So the copies of a technique's own rule are what it was made to be covered by. Other rules can still be mapped from **Add coverage**.
 
 ### Use a suggested rule
 

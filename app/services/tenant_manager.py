@@ -647,6 +647,8 @@ def _create_tenant_schema(conn):
 
     # ── Risks on a system's techniques (same columns as Migration 76) ──
     DatabaseService.add_step_risk_columns(conn)
+    # ── The library rule a technique was made from (same columns as Migration 97) ──
+    DatabaseService.add_step_source_columns(conn)
 
     # ── App settings (key-only PK in tenant DB) ──
     conn.execute("""
