@@ -494,12 +494,12 @@ _TENANT_DR_COLS = (
     "score_language", "score_note", "score_override",
     "score_tactics", "score_techniques", "score_author", "score_highlights",
     "last_updated", "mitre_ids", "raw_data",
-    "client_id", "deprecated", "source_rule_id", "kibana_rule_id", "rule_language",
+    "client_id", "deprecated", "source_rule_id", "kibana_rule_id", "rule_language", "rule_type",
 )
 
 # Canonical detection_rules columns expected in the SHARED DB (23 columns —
 # no client_id; that column lives only on tenant copies).
-_SHARED_DR_COLS = tuple(c for c in _TENANT_DR_COLS if c not in ("client_id", "kibana_rule_id", "rule_language"))
+_SHARED_DR_COLS = tuple(c for c in _TENANT_DR_COLS if c not in ("client_id", "kibana_rule_id", "rule_language", "rule_type"))
 
 
 def _check_dr_columns(conn, table_ref: str, canonical: tuple, label: str) -> list[str]:

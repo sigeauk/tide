@@ -1060,3 +1060,105 @@ async def move_rule(
         rule_window(target_rule_id, *target_scope) if delete_source and target_scope
         else rule_window(rule_id, siem_id, space))
     return response
+
+
+# ── Duplicate: a copy beside the rule, in its own destination ────────────
+
+def _duplicate_source(db, client_id: str, rule_id: str, siem_id: str, space: str):
+    """``(rule, its destination row, its Elastic or Sigma origin or None)`` for Duplicate, or
+    ``(None, None, None)`` when the rule or its destination isn't this client's."""
+    from app.services import rule_origins
+    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
+    destination = next((s for s in (db.get_client_siems(client_id) or []) if s.get("id") == siem_id
+                        and str(s.get("space") or "default").lower() == str(space).lower()), None)
+    if not rule or not destination:
+        return None, None, None
+    with db.get_connection() as conn:
+        origin = rule_origins.get(conn, (rule.rule_id, siem_id, space))
+        if origin and origin.get("origin") in ("elastic", "sigma"):
+            upstream = rule_origins.upstream(conn, origin["origin"], origin["upstream_id"]) or {}
+            origin = {"source": {"elastic": "Elastic", "sigma": "Sigma"}[origin["origin"]],
+                      "name": upstream.get("name") or rule.name}
+        else:
+            origin = None
+    return rule, destination, origin
+
+
+@router.get("/{rule_id}/duplicate", response_class=HTMLResponse)
+def duplicate_dialog(
+    request: Request,
+    rule_id: str,
+    db: DbDep,
+    user: CurrentUser,
+    client_id: ActiveClient,
+    siem_id: str = Query(...),
+    space: str = Query("default"),
+):
+    """The rule window's Duplicate: which exceptions the copy takes, and whether it keeps the link to
+    the Elastic or Sigma rule this one came from."""
+    rule, destination, origin = _duplicate_source(db, client_id, rule_id, siem_id, space)
+    if not rule:
+        return HTMLResponse('<div class="rm-empty">Rule not found.</div>', status_code=404)
+    from urllib.parse import urlencode
+    return request.app.state.templates.TemplateResponse(request, "components/rule_duplicate_dialog.html", {
+        "rule": rule, "origin": origin, "dest_name": destination.get("name") or destination.get("label") or space,
+        "scope_qs": urlencode({"siem_id": siem_id, "space": space}),
+    })
+
+
+def _duplicate_rule_sync(db, user_id: str, username: str, client_id: str, rule_id: str, siem_id: str,
+                         space: str, exceptions: str, keep_origin: bool, link: bool = False):
+    """Duplicate (blocking): Kibana's own Duplicate of the rule, then TIDE's part (its origin and
+    History, reading the copy from Kibana, and with ``link`` a link to this rule) through
+    pending_actions, so it can be finished if it fails once Kibana has made the copy. Returns
+    ``(status, message, the key to open)``: 200 the copy, 202 the rule (Finish in TIDE is offered
+    there), else a refusal and None."""
+    from app.elastic_helper import duplicate_rule
+    from app.services import pending_actions
+    rule, destination, origin = _duplicate_source(db, client_id, rule_id, siem_id, space)
+    if not rule:
+        return 404, "This rule or its destination is no longer in TIDE. Close the window and sync the rules.", None
+    if rule.deprecated:
+        return 400, "Kibana no longer has this rule, so it can't be duplicated. Restore it first.", None
+    ok, why, made = duplicate_rule(str((rule.raw_data or {}).get("rule_id") or rule.rule_id), space,
+                                   destination.get("kibana_url"), destination.get("api_token_enc"), exceptions)
+    if not ok:
+        return 502, f"Could not duplicate the rule: {why}", None
+    entry = {"kind": "duplicate", "client_id": client_id, "rule_id": rule.rule_id, "siem_id": siem_id, "space": space,
+             "name": rule.name, "copy_rule_id": made.get("rule_id"), "copy_name": made.get("name") or f"{rule.name} [Duplicate]",
+             "exceptions": exceptions, "keep_origin": bool(keep_origin and origin), "link": bool(link)}
+    return pending_actions.finish(db, entry, user_id, username)
+
+
+@router.post("/{rule_id}/duplicate", response_class=HTMLResponse)
+async def duplicate_rule_route(
+    request: Request,
+    rule_id: str,
+    db: DbDep,
+    user: RequireUser,
+    client_id: ActiveClient,
+    siem_id: str = Query(...),
+    space: str = Query("default"),
+):
+    """Duplicate this rule in its destination, as Kibana's Duplicate does. A refusal shows in the
+    dialog; done, the dialog goes, a toast says so and the copy's window opens (or, if TIDE's part
+    failed, this rule's, which offers Finish in TIDE)."""
+    from html import escape
+    from app.elastic_helper import DUPLICATE_EXCEPTIONS
+    form = await request.form()
+    exceptions = str(form.get("exceptions") or "all")
+    if exceptions not in DUPLICATE_EXCEPTIONS:
+        exceptions = "all"
+    username = user.name or user.username if user else "Unknown"
+    status, message, key = await _run_in_context(
+        _duplicate_rule_sync, db, user.id, username, client_id, rule_id, siem_id, space, exceptions,
+        str(form.get("keep_origin") or "") == "1", str(form.get("link") or "") == "1",
+    )
+    if status not in (200, 202):
+        return HTMLResponse(f'<div class="alert alert-danger">{escape(message)}</div>')
+    return HTMLResponse("", headers={
+        "HX-Retarget": "#modal-container", "HX-Reswap": "innerHTML",
+        "HX-Trigger": json.dumps({"showToast": {"message": message, "type": "success" if status == 200 else "warning"},
+                                  "refreshRules": None}),
+        "X-Tide-Rule-Window": json.dumps(rule_window(*key)),
+    })

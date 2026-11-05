@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 # Rule fields that change when nothing about the rule has (Kibana's bookkeeping, run results), and
 # the keys TIDE adds to its copy.
 VOLATILE = ("updated_at", "revision", "execution_summary")
-TIDE_KEYS = ("results", "search_time", "score_detail")
+TIDE_KEYS = ("results", "search_time", "score_detail", "tide_data_view")   # elastic_helper.DATA_VIEW_NOTE
 ITEM_VOLATILE = ("_version", "tie_breaker_id", "updated_at")
 CHUNK_ACTIONS = 200
 OVERWRITE_DAYS = 7          # how long Rule Monitoring shows an overwrite

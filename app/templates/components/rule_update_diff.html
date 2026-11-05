@@ -105,7 +105,7 @@
         <div class="modal-actions">
           {% if can_unlink %}<button name="Unlink From Elastic" type="button" class="btn btn-secondary mr-auto"
                   hx-post="/api/rules/{{ rule.rule_id }}/unlink-upstream?{{ scope_qs }}" hx-target="body" hx-swap="beforeend"
-                  hx-confirm="Unlink this rule from Elastic's &quot;{{ status.name or status.upstream_id }}&quot;? TIDE then treats it as your own rule and no longer shows Elastic's updates for it.{% if holds_elastic_id %} It also gives it its own rule id, in place of Elastic's: TIDE creates it again in Kibana under a new rule id and deletes this one. Kibana keeps this rule's past alerts and runs with the original.{% else %} Nothing changes in Kibana.{% endif %}">{{ icon_text('unlink', 'Unlink from Elastic', '13') }}</button>{% endif %}
+                  hx-confirm="Unlink this rule from {{ status.source }}'s &quot;{{ status.name or status.upstream_id }}&quot;? TIDE then treats it as your own rule and no longer shows {{ status.source }}'s updates for it.{% if holds_elastic_id %} It also gives it its own rule id, in place of Elastic's: TIDE creates it again in Kibana under a new rule id and deletes this one. Kibana keeps this rule's past alerts and runs with the original.{% else %} Nothing changes in Kibana.{% endif %}">{{ icon_text('unlink', 'Unlink from ' ~ status.source, '13') }}</button>{% endif %}
           {{ leave() }}
           {% if status.state == 'update' or unconfirmed %}<button type="button" class="btn btn-secondary" data-update-keep
                   hx-post="/api/rules/{{ rule.rule_id }}/upstream?{{ post_qs }}" hx-vals='{"take": "none"}'

@@ -25,7 +25,7 @@
                     <div class="metric-compact-label">Documents Matched</div>
                 </div>
                 <div class="fs-base text-muted">
-                    <p>Query language: <strong>{{ rule.language }}</strong></p>
+                    <p>Query language: <strong>{{ rule.language | rule_language_name }}</strong></p>
                     <p>Space: <strong>{{ space_labels.get(rule.space, rule.space | capitalize) }}</strong></p>
                     <p>Time range: <strong>Last {{ lookback | default('24h') }}</strong></p>
                 </div>

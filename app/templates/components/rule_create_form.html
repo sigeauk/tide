@@ -24,7 +24,6 @@
 
     <form   name="Create Rule Form" hx-post="{{ form_action }}" hx-target="#modal-container" hx-swap="innerHTML" hx-sync="this:drop"
           hx-disabled-elt="find button[type='submit']" class="rule-create-form" data-mode="{{ mode }}">
-      <input type="hidden" name="type" value="{{ form_values.type | default('query') }}">
       {% if sigma_id %}<input type="hidden" name="sigma_id" value="{{ sigma_id }}">{% endif %}
       <div class="rule-accordion-stack flex flex-col gap-ms">
         <details class="rule-accordion" open>
@@ -58,29 +57,135 @@
         <details class="rule-accordion">
           <summary>Define Rule</summary>
           <div class="rule-accordion-panel">
+            {# Rule type, as Kibana's Define step starts. It narrows Query language to what the type takes
+               (data-languages) and shows its own settings (data-rule-types); rule_form.js keeps them in step.
+               A type the rule keeps (type_locked) is shown and posted as it is. #}
             <div class="form-section">
-              <label class="form-label" for="rule-language">Query language *</label>
+              <label class="form-label" for="rule-type">Rule type *</label>
+              {% if type_locked %}<input type="hidden" name="type" value="{{ form_values.type }}">{% endif %}
+              <select class="rule-form-select" id="rule-type"{% if type_locked %} disabled{% else %} name="type"{% endif %}>
+                {% for value, text, languages in type_options %}
+                <option value="{{ value }}" data-languages="{{ languages }}" {% if form_values.type == value %}selected{% endif %}>{{ text }}</option>
+                {% endfor %}
+              </select>
               {% if rule_type_label %}
                 <div class="scope-note">{{ type_note or ("This is a " ~ rule_type_label ~ " rule. Its " ~ rule_type_label ~ " settings aren't shown here and stay as they are in Kibana; change them there.") }}</div>
+              {% elif mode == 'edit' and type_locked %}
+                <div class="scope-note">A rule keeps its type once it is made, as in Kibana.</div>
               {% endif %}
+            </div>
+            <div class="form-section">
+              <label class="form-label" for="rule-language">Query language *</label>
               <select class="rule-form-select" id="rule-language" name="language" required>
-                <option value="kuery" {% if form_values.language == 'kuery' %}selected{% endif %}>KQL (Kibana Query Language)</option>
-                <option value="kql" {% if form_values.language == 'kql' %}selected{% endif %}>KQL (Legacy)</option>
-                <option value="eql" {% if form_values.language == 'eql' %}selected{% endif %}{% if rule_type_label %} disabled{% endif %}>EQL (Event Query Language)</option>
-                <option value="esql" {% if form_values.language == 'esql' %}selected{% endif %}{% if rule_type_label %} disabled{% endif %}>ES|QL</option>
-                <option value="lucene" {% if form_values.language == 'lucene' %}selected{% endif %}>Lucene</option>
+                {% for value, text in [('kuery', 'KQL (Kibana Query Language)'), ('kql', 'KQL (Legacy)'), ('eql', 'EQL (Event Query Language)'), ('esql', 'ES|QL'), ('lucene', 'Lucene')] %}
+                <option value="{{ value }}" {% if form_values.language == value %}selected{% endif %}{% if value not in type_languages %} disabled{% endif %}>{{ text }}</option>
+                {% endfor %}
               </select>
             </div>
+            {% if form_values.uses_data_view %}
+            {# Kibana searches a rule's data view, not index patterns: it is shown, and replaced only on purpose. #}
+            <div class="form-section">
+              <label class="form-label" for="rule-data-view">Data view</label>
+              <input class="rule-form-control" type="text" id="rule-data-view" value="{{ form_values.data_view }}" placeholder="TIDE couldn't read its name from Kibana" disabled>
+              <div class="scope-note">Kibana searches this data view{% if form_values.index %} ({{ form_values.index }}){% endif %}, not index patterns.</div>
+              <label class="rm-form-confirm mt-sm"><input type="checkbox" name="use_index_patterns" value="1" id="rule-use-index"> Use index patterns instead</label>
+            </div>
+            <div class="form-section" id="rule-index-section" hidden>
+              <label class="form-label" for="rule-index">Index patterns *</label>
+              <input class="rule-form-control" type="text" id="rule-index" name="index" value="{{ form_values.index }}" placeholder="logs-*, auditbeat-*" disabled>
+            </div>
+            {% else %}
             <div class="form-section">
               <label class="form-label" for="rule-index">Index patterns</label>
               <input class="rule-form-control" type="text" id="rule-index" name="index" value="{{ form_values.index }}" placeholder="logs-*, auditbeat-*">
             </div>
+            {% endif %}
             <div class="form-section">
               {% set _query_required = mode != 'edit' and form_values.type != 'machine_learning' %}
               <label class="form-label" for="rule-query">Query{% if _query_required %} *{% endif %}</label>
               {# Not required when editing: a KQL rule can match on filters alone, with an empty query. #}
               <textarea class="rule-form-textarea mono" id="rule-query" name="query"{% if _query_required %} required{% endif %} rows="6">{{ form_values.query }}</textarea>
+              {% if form_values.filters_text %}
+              <div class="scope-note">Filters, kept as Kibana has them: <span class="mono">{{ form_values.filters_text | join('; ') }}</span>.</div>
+              {% endif %}
             </div>
+            {# A threshold rule's own settings (rule_type_settings), as Kibana's form has them. #}
+            <div data-rule-types="threshold"{% if form_values.type != 'threshold' %} hidden{% endif %}>
+              <div class="form-section">
+                <label class="form-label">Group by</label>
+                <input type="hidden" name="threshold_field" value="{{ form_values.threshold_field }}">
+                <div class="tm-builder" data-field-list="threshold_field" data-min="0" data-label="Field to group by"></div>
+                <div class="rule-help">Optional, up to three fields: the threshold then counts each of their values on its own.</div>
+              </div>
+              <div class="form-section">
+                <label class="form-label" for="rule-threshold-value">Threshold *</label>
+                <input class="rule-form-control" type="number" min="1" step="1" id="rule-threshold-value" name="threshold_value" required
+                       value="{{ form_values.threshold_value }}">
+                <div class="rule-help">Alerts when the query matches this many events or more.</div>
+              </div>
+              <div class="form-section">
+                <label class="form-label" for="rule-threshold-count-field">Count</label>
+                <div class="rule-grid-2">
+                  <input class="rule-form-control mono" type="text" id="rule-threshold-count-field" name="threshold_cardinality_field"
+                         list="rule-source-fields" autocomplete="off" value="{{ form_values.threshold_cardinality_field }}" placeholder="Field">
+                  <input class="rule-form-control" type="number" min="1" step="1" name="threshold_cardinality_value" aria-label="Unique values"
+                         value="{{ form_values.threshold_cardinality_value }}" placeholder="Unique values">
+                </div>
+                <input type="hidden" name="threshold_cardinality_rest" value="{{ form_values.threshold_cardinality_rest }}">
+                <div class="rule-help">Optional: alert only when the events have this many different values of the field, or more.</div>
+                {% if form_values.threshold_cardinality_rest %}
+                <div class="scope-note">Kibana holds more Count settings for this rule than its form shows; they are kept as they are.</div>
+                {% endif %}
+              </div>
+            </div>
+            {# A new terms rule's own settings. #}
+            <div data-rule-types="new_terms"{% if form_values.type != 'new_terms' %} hidden{% endif %}>
+              <div class="form-section">
+                <label class="form-label">Fields *</label>
+                <input type="hidden" name="new_terms_fields" value="{{ form_values.new_terms_fields }}">
+                <div class="tm-builder" data-field-list="new_terms_fields" data-min="1" data-label="Field"></div>
+                <div class="rule-help">Alerts on a value of these fields, or a combination of their values, not seen in the history window. Up to three.</div>
+              </div>
+              <div class="form-section">
+                <label class="form-label" for="rule-history-window">History window size *</label>
+                <input class="rule-form-control" type="text" id="rule-history-window" name="history_window" required
+                       value="{{ form_values.history_window }}" placeholder="7d">
+                <div class="rule-help">How far back a value counts as seen: a number and s, m, h or d, such as 7d.</div>
+              </div>
+            </div>
+            {# An indicator match rule's own settings (rule_type_settings), in Kibana's order. #}
+            <div data-rule-types="threat_match"{% if form_values.type != 'threat_match' %} hidden{% endif %}>
+              <div class="form-section">
+                <label class="form-label" for="rule-threat-index">Indicator index patterns *</label>
+                <input class="rule-form-control" type="text" id="rule-threat-index" name="threat_index" required
+                       value="{{ form_values.threat_index }}" placeholder="logs-ti_*">
+                <div class="rule-help">The indexes holding your threat indicators.</div>
+              </div>
+              <div class="form-section">
+                <label class="form-label" for="rule-threat-query">Indicator index query *</label>
+                <textarea class="rule-form-textarea mono" id="rule-threat-query" name="threat_query" required rows="2">{{ form_values.threat_query }}</textarea>
+                {% if form_values.threat_filters_text %}
+                <div class="scope-note">Indicator filters, kept as Kibana has them: <span class="mono">{{ form_values.threat_filters_text | join('; ') }}</span>.</div>
+                {% endif %}
+              </div>
+              <div class="form-section">
+                <label class="form-label" for="rule-threat-language">Indicator query language</label>
+                <select class="rule-form-select" id="rule-threat-language" name="threat_language">
+                  <option value="kuery" {% if form_values.threat_language != 'lucene' %}selected{% endif %}>KQL (Kibana Query Language)</option>
+                  <option value="lucene" {% if form_values.threat_language == 'lucene' %}selected{% endif %}>Lucene</option>
+                </select>
+              </div>
+              <div class="form-section">
+                <label class="form-label">Indicator mapping *</label>
+                <input type="hidden" id="rule-threat-mapping" name="threat_mapping" value="{{ form_values.threat_mapping }}">
+                <div id="threat-mapping-builder" class="tm-builder" tabindex="-1"></div>
+                <div class="rule-help">Alerts when a field of your events matches a field of the indicator index. Every field in a group
+                  must match (AND); any one group is enough (OR).</div>
+              </div>
+            </div>
+            {# Field names TIDE's field catalogue knows for the index patterns above (rules.field_suggestions). #}
+            <datalist id="rule-source-fields"></datalist>
+            <datalist id="rule-indicator-fields"></datalist>
           </div>
         </details>
 
@@ -117,6 +222,12 @@
             <div class="form-section">
               <label class="form-label" for="rule-timestamp-override">Timestamp override</label>
               <input class="rule-form-control" type="text" id="rule-timestamp-override" name="timestamp_override" value="{{ form_values.timestamp_override }}" placeholder="None: the rule uses @timestamp">
+            </div>
+            <div class="form-section" data-rule-types="threat_match"{% if form_values.type != 'threat_match' %} hidden{% endif %}>
+              <label class="form-label" for="rule-threat-indicator-path">Indicator prefix override</label>
+              <input class="rule-form-control" type="text" id="rule-threat-indicator-path" name="threat_indicator_path"
+                     value="{{ form_values.threat_indicator_path }}" placeholder="threat.indicator">
+              <div class="rule-help">Where the matched indicator's fields go in the alert. Blank: Kibana's own, threat.indicator.</div>
             </div>
             <div class="form-section">
               <label class="form-label">MITRE ATT&CK techniques</label>

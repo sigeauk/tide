@@ -42,7 +42,7 @@ Who can: anyone who can edit the Elastic page.
 1. Open **Elastic** and set **Deploy to** (the destination) and **Deploy as** (**Disabled** or **Enabled**) across the top.
 2. Find the rule. Filter by **Platform**, **Data source** (the logs Elastic tags the rule as reading, such as *Sysmon* or *PowerShell Logs*), **Integration**, **Tactic**, **Type**, **Severity**, **Status** (**Production**, **Building block** or **Deprecated**), and Elastic's **Profile** (*Recommended*, *Beta*, *Aggressive*, or **None** for the many rules without one) and **Noise** tags.
 3. Check its details: query, ATT&CK techniques, investigation guide, setup, and **Needs Elastic** (the oldest Elastic version it runs on). **Version** is the version Elastic ships for your SIEM's Elastic version.
-4. Click **Deploy**. The rule form opens, filled in and set to the chosen destination and state, so you can change it first. Settings the form doesn't show, such as a threshold or new terms rule's, are kept as Elastic has them.
+4. Click **Deploy**. The rule form opens, filled in and set to the chosen destination and state, so you can change it first. Settings the form doesn't show, such as a machine learning rule's, its filters or its alert suppression, are kept as Elastic has them.
 5. Create the rule.
 
 It goes in as your own rule, under a new rule ID, so Kibana can still install Elastic's prebuilt copy beside it. TIDE asks first if the destination's SIEM runs an older Elastic than the rule needs, and refuses a second copy at the same destination.

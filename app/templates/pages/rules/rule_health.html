@@ -63,7 +63,7 @@
         </div>
     </div>
 </div>
-{% set rh_filter_include = "[name='search'], [name='space'], [name='enabled'], [name='state'], [name='linked_to'], [name='upstream'], [name='min_score'], [name='max_score'], [name='validation'], [name='validated_from'], [name='validated_to'], [name='sort_score'], [name='sort_validated'], [name='sort_name'], [name='sort_col'], [name='sort_dir'], [name='view']" %}
+{% set rh_filter_include = "[name='search'], [name='space'], [name='enabled'], [name='state'], [name='linked_to'], [name='upstream'], [name='rule_type'], [name='language'], [name='min_score'], [name='max_score'], [name='validation'], [name='validated_from'], [name='validated_to'], [name='sort_score'], [name='sort_validated'], [name='sort_name'], [name='sort_col'], [name='sort_dir'], [name='view']" %}
 
 <div class="rule-browser-controls">
 <!-- Metrics Row -->
@@ -113,8 +113,8 @@
     {% call filter_dropdown('rh-state', 'State', state_text | join(', ') or 'All states') %}
         <div class="tide-filter-section-label">Show</div>
         {{ check_rows('state', state_opts, state, counts.state or {}, rh_hx,
-                      {'unlinked': 'Found at the last successful sync, with no copy linked in another destination',
-                       'linked': 'Found at the last successful sync, with a copy linked in another destination',
+                      {'unlinked': 'Found at the last successful sync, with no rule linked to it',
+                       'linked': 'Found at the last successful sync, with a rule linked to it: a copy in another destination, or a duplicate in its own',
                        'offline': "Its SIEM could not be reached before the last sync; shown from TIDE's last copy",
                        'deprecated': 'Not found at the last successful sync'}) }}
         <div class="tide-filter-section-label">Linked to</div>
@@ -129,6 +129,20 @@
                      'retired_sigma': 'Sigma has deprecated the rule it came from',
                      'removed': "The rule it came from is no longer in the Elastic or Sigma rules built into TIDE",
                      'own': "Did not come from Elastic's or the Sigma rules"}) }}
+
+    {# Kibana's rule types and query languages. A machine learning rule has no language. #}
+    {{ filter_multi('rh-type', 'rule_type', 'Type', type_options, rule_type, 'Any', counts.rule_type or {}, rh_hx,
+                    {'query': 'Matches events with a KQL or Lucene query',
+                     'saved_query': 'A custom query kept in Kibana as a saved query',
+                     'eql': 'Matches events, or sequences of events, with an EQL query',
+                     'esql': 'Finds and aggregates events with an ES|QL query',
+                     'threshold': "Alerts when a query's matches reach a number, for each value of its group-by fields",
+                     'new_terms': 'Alerts on a value seen for the first time in its history window',
+                     'threat_match': 'Alerts on events that match an indicator in your threat intelligence',
+                     'machine_learning': 'Alerts on anomalies a machine learning job finds'}) }}
+    {{ filter_multi('rh-language', 'language', 'Language', language_options, language, 'Any', counts.language or {}, rh_hx,
+                    {'kuery': 'Kibana Query Language', 'lucene': 'Lucene query syntax',
+                     'eql': 'Event Query Language', 'esql': 'Elasticsearch Query Language'}) }}
 
     {# Score, Validate and Name sort (Score and Validate narrow too); the page script names them on their buttons.
        Validate's date range narrows the validated rules; Never validated has no date, so it sets the range aside. #}

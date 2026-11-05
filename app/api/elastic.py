@@ -112,7 +112,7 @@ def deploy_form(request: Request, rule_id: str, user: RequireUser, db: DbDep, cl
     """Deploy: the Create Rule form, filled in with Elastic's rule, so it can be changed first.
     Opened from the Elastic Rules page (with its Deploy to / Deploy as settings: ``scope_pair``,
     ``enabled``) or a technique window's Elastic rules (Cancel goes back)."""
-    from app.api.rules import _LANGUAGE_TYPES, _build_rule_form_context, _rule_type_label
+    from app.api.rules import _build_rule_form_context
     from app.services import elastic_deploy
 
     with db.get_shared_connection() as conn:
@@ -125,9 +125,8 @@ def deploy_form(request: Request, rule_id: str, user: RequireUser, db: DbDep, cl
     prefill["enabled"] = enabled == "true"
     ctx = _build_rule_form_context(db, client_id, user.username, f"/api/elastic/rules/{rule_id}/deploy",
                                    "Deploy rule", "Deploy Elastic rule", prefill=prefill)
-    if prefill["type"] not in _LANGUAGE_TYPES:
-        label = _rule_type_label(prefill["type"])
-        ctx["rule_type_label"] = label
+    if ctx["rule_type_label"]:     # a type whose own settings the form doesn't show
+        label = ctx["rule_type_label"]
         ctx["type_note"] = (f"This is a {label} rule. Its {label} settings come from Elastic's rule as they are; "
                             "change them in Kibana once it is deployed.")
     ctx["min_stack_version"] = rule.get("min_stack_version") or ""

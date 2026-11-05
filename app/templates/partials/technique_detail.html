@@ -148,7 +148,7 @@
                                    title="{{ erule.description | truncate(400, end='…') }}">{{ erule.name }}</a>
                                 <span class="sm-sigma__meta">
                                     {% if erule.severity %}<span class="sev-pill sev-{{ erule.severity }}">{{ erule.severity | upper }}</span>{% endif %}
-                                    <span class="text-muted">{{ 'building block' if erule.status == 'building_block' else erule.rule_type | replace('_', ' ') }}</span>
+                                    <span class="text-muted">{{ 'Building block' if erule.status == 'building_block' else erule.rule_type | rule_type_name }}</span>
                                 </span>
                             </li>
                             {% endfor %}

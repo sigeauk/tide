@@ -22,7 +22,7 @@
     <div class="lib-detail__pills">
         <span class="status-pill status-{{ _status_class.get(rule.status, 'muted') }}">{{ status_labels.get(rule.status, rule.status) }}</span>
         {% if rule.severity %}<span class="sev-pill sev-{{ rule.severity }}">{{ rule.severity | title }}</span>{% endif %}
-        <span class="status-pill status-muted">{{ rule.rule_type | replace('_', ' ') }}</span>
+        <span class="status-pill status-muted">{{ rule.rule_type | rule_type_name }}</span>
     </div>
 </div>
 
@@ -43,7 +43,7 @@
     <dl class="rm-facts">
         <div class="lib-tip" data-tooltip="{{ _tip | trim }}" tabindex="0"><dt>Version</dt>
             <dd>{{ _shown if _shown is not none else 'Not released yet' }}{% for b in builds %}<span class="lib-fact-note"> · {{ b.version }} on Elastic {{ b.stack }}+</span>{% endfor %}</dd></div>
-        {% if rule.language %}<div><dt>Language</dt><dd>{{ rule.language }}</dd></div>{% endif %}
+        {% if rule.language %}<div><dt>Language</dt><dd>{{ rule.language | rule_language_name }}</dd></div>{% endif %}
         {% if rule.risk_score is not none %}<div><dt>Risk score</dt><dd>{{ rule.risk_score }}</dd></div>{% endif %}
         {% if body.interval %}<div><dt>Runs every</dt><dd>{{ body.interval }}</dd></div>{% endif %}
         {% if body['from'] %}<div><dt>Looks back</dt><dd>{{ body['from'] }}</dd></div>{% endif %}

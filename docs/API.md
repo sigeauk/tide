@@ -116,7 +116,7 @@ The most useful tables in a client's database:
 | `detection_rules` | Synced rules: `rule_id`, `siem_id`, `space`, `name`, `severity`, `enabled`, `score` and its parts, `mitre_ids`, `raw_data` |
 | `rule_score_history` | Each rule's score over time |
 | `checkedRule` | Rule validations: when, and by whom |
-| `rule_links` | Linked copies of a rule in other destinations |
+| `rule_links` | Rules linked to each other: copies in other destinations, or a duplicate in the same one |
 | `threat_actors` | Threat actors: `name`, `aliases`, `origin`, `ttps`, `ttp_count` |
 | `systems`, `hosts`, `software_inventory` | Systems, their devices, and installed software (CPE 2.3) |
 | `vuln_detections` | CVEs matched to software |

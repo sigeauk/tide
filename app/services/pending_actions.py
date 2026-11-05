@@ -1,6 +1,6 @@
 """Changes Kibana made that TIDE couldn't record (#83, #88).
 
-Give it its own rule id, Move (and copy) and Restore in Elastic change Kibana first, then record
+Give it its own rule id, Move (and copy), Duplicate and Restore in Elastic change Kibana first, then record
 the change in TIDE. If TIDE's part fails after Kibana's succeeded, TIDE is left showing the rule as
 it was while Kibana has moved on, and trying the action again fails (the original is gone from
 Kibana) or, for Restore, does it twice.
@@ -28,7 +28,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 RECORD = "pending_actions.json"
-KINDS = ("own_rule_id", "move", "restore")
+KINDS = ("own_rule_id", "move", "duplicate", "restore")
 _KEY = ("kind", "client_id", "siem_id", "space", "rule_id", "copy_id")
 _lock = threading.Lock()
 
@@ -105,6 +105,8 @@ def describe(entry: Dict[str, Any]) -> str:
         return f"Kibana gave {what} its own rule id, {entry['new_id']}"
     if kind == "move":
         return f"Kibana {'moved' if entry['delete_source'] else 'copied'} this rule to {entry['target_name']}"
+    if kind == "duplicate":
+        return f"Kibana duplicated this rule as {entry['copy_name']}"
     return f"Kibana restored this rule{' under its own rule id, ' + entry['new_id'] if entry.get('new_id') else ''}"
 
 
@@ -134,7 +136,7 @@ def finish(db, entry: Dict[str, Any], user_id: Optional[str] = None, username: O
         add(entry, error)
         return 202, pending_message(entry, error), (entry["rule_id"], entry["siem_id"], entry["space"])
     remove(entry)
-    if refresh and entry["kind"] != "move":         # a move reads its target itself, before linking
+    if refresh and entry["kind"] not in ("move", "duplicate"):   # these read their copy themselves, to link it
         from app.api.rules import sync_single_rule
         try:
             sync_single_rule(db, entry["client_id"], *key, entry.get("user_id"), entry.get("username") or "system")
@@ -146,10 +148,11 @@ def finish(db, entry: Dict[str, Any], user_id: Optional[str] = None, username: O
 def finish_for_sync(db, client_id: str, records: Iterable[Dict[str, Any]], stage: str) -> int:
     """At a sync: finish each of the client's pending changes whose rule this sync fetched from
     Kibana. ``before_save`` (own rule id, restore) moves the old row to the rule's new identity
-    before saving would add it as a new rule and deprecate the old one; ``after_save`` (move)
-    needs the target's row the save just wrote. Returns how many were finished; a failure is kept,
+    before saving would add it as a new rule and deprecate the old one; ``after_save`` (move,
+    duplicate) needs the row of the copy the save just wrote, to link to it (a sync records a new
+    rule's own history only after both). Returns how many were finished; a failure is kept,
     and noted on the sync."""
-    kinds = ("own_rule_id", "restore") if stage == "before_save" else ("move",)
+    kinds = ("own_rule_id", "restore") if stage == "before_save" else ("move", "duplicate")
     pending = [e for e in for_client(client_id) if e["kind"] in kinds]
     if not pending:
         return 0
@@ -167,6 +170,8 @@ def finish_for_sync(db, client_id: str, records: Iterable[Dict[str, Any]], stage
     for entry in pending:
         if entry["kind"] == "move":
             where, ids = (entry["target_siem_id"], entry["target_space"]), {entry["target_rule_id"]}
+        elif entry["kind"] == "duplicate":
+            where, ids = (entry["siem_id"], entry["space"]), {entry["copy_rule_id"]}
         else:
             where = (entry["siem_id"], entry["space"])
             ids = {entry.get("new_id") or entry.get("saved_id") or entry["rule_id"], entry["rule_id"]}
@@ -378,4 +383,52 @@ def _apply_restore(db, entry: Dict[str, Any], refresh: bool) -> Tuple[str, Key]:
     return f'Restored "{entry["name"]}". It was recreated disabled; enable it when you are ready.{own_id}', key
 
 
-_APPLY = {"own_rule_id": _apply_own_rule_id, "move": _apply_move, "restore": _apply_restore}
+_DUPLICATED_WITH = {"all": " with its exceptions", "active": " with its active exceptions", "none": ", without exceptions"}
+
+
+def _apply_duplicate(db, entry: Dict[str, Any], refresh: bool) -> Tuple[str, Key]:
+    """A copy Kibana's Duplicate made beside the rule, in its destination (``copy_rule_id``). With
+    ``keep_origin`` it keeps the rule's Elastic or Sigma origin, this rule as its parent; its History
+    says where it came from, written before it is read from Kibana so that a sync adds no Created entry
+    of its own. With ``link`` the two are linked (rule_links), to Compare and Merge them, which needs
+    the copy's row: read here (``refresh``), or written by the sync that finishes it."""
+    from app.services import rule_origins
+    from app.services.tenant_manager import tenant_context_for
+    client_id, by = entry["client_id"], entry.get("username") or "TIDE"
+    src: Key = (entry["rule_id"], entry["siem_id"], entry["space"])
+    dup: Key = (entry["copy_rule_id"], entry["siem_id"], entry["space"])
+    name, copy_name = entry["name"], entry.get("copy_name") or entry["name"]
+    with tenant_context_for(client_id):
+        with db.get_connection() as conn:
+            origin = rule_origins.get(conn, src)
+            if (entry.get("keep_origin") and origin and origin.get("origin") in ("elastic", "sigma")
+                    and not rule_origins.get(conn, dup)):
+                rule_origins.copy(conn, src, dup, "duplicated", by, parent=True)
+            kept = rule_origins.get(conn, dup)
+        source = {"elastic": "Elastic", "sigma": "Sigma"}.get((kept or {}).get("origin"), "")
+        link = f" It keeps the link to its {source} rule, so TIDE shows its updates." if source else ""
+        if not _recorded(db, dup, "created"):
+            db.record_rule_history(
+                rule_id=dup[0], siem_id=dup[1], space=dup[2], client_id=client_id, action="created",
+                actor_user_id=entry.get("user_id"), actor_name=by,
+                detail={"message": f'Duplicated from "{name}"{_DUPLICATED_WITH.get(entry.get("exceptions"), "")}.{link}',
+                        "duplicated_from": src[0], "exceptions": entry.get("exceptions")})
+        if refresh:
+            from app.api.rules import sync_single_rule
+            try:
+                sync_single_rule(db, client_id, *dup, entry.get("user_id"), by)
+            except Exception:  # noqa: BLE001 - the next sync reads it
+                logger.exception("Duplicate: reading the copy failed; it can't be linked until it is read")
+        linked = ""
+        if entry.get("link"):
+            if _linked(db, src, dup) or db.create_rule_link(*src, *dup, by):
+                linked = " It is linked to this rule, so you can Compare and Merge them."
+            else:
+                logger.warning("Duplicate: could not link '%s' to its copy (the copy isn't in TIDE yet)", name)
+                linked = " Could not link it to this rule yet: sync it, then use Add link in the rule window."
+    return (f'Duplicated "{name}" as "{copy_name}". It is disabled, so it doesn\'t run until you enable it.'
+            f'{link}{linked}', dup)
+
+
+_APPLY = {"own_rule_id": _apply_own_rule_id, "move": _apply_move, "duplicate": _apply_duplicate,
+          "restore": _apply_restore}

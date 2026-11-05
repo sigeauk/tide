@@ -54,6 +54,7 @@
     <td class="rt-upstream" data-col="upstream">{% set _up = upstream_states.get(lifecycle_key) if upstream_states is defined else none %}{% if _up %}{{ upstream_badge(_up) }}{% else %}<span class="text-muted" title="Your own rule: it did not come from Elastic's rules or the Sigma rules">—</span>{% endif %}</td>
     <td class="rt-author" data-col="author" title="{{ rule.author | default('-') }}">{{ rule.author | default('-') }}</td>
     <td class="rt-mitre" data-col="mitre">{{ mitre_pills_row(rule.mitre_ids, clickable=true, size='sm', neutral=true, search_filter=(search | default('')), max_visible=3) }}</td>
-    <td class="rt-lang" data-col="lang">{{ rule.language | default('kuery') }}</td>
+    <td class="rt-type" data-col="type">{{ rule.rule_type | rule_type_name }}</td>
+    <td class="rt-lang" data-col="lang">{% if rule.query_language %}{{ rule.query_language | rule_language_name }}{% else %}<span class="text-muted" title="A machine learning rule has no query language">—</span>{% endif %}</td>
     <td class="rt-cols" data-col="cols"></td>
 </tr>

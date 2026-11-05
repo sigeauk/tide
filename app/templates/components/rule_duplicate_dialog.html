@@ -1,0 +1,59 @@
+{#
+  Duplicate (the rule window's ⋮): Kibana's own Duplicate of the rule, in its destination, under a new
+  rule id; Kibana names it "<name> [Duplicate]" and creates it disabled. Posts to
+  /api/promotion/{id}/duplicate: a refusal shows here (#rule-duplicate-result); done, the copy's window
+  opens. Link the copy links the two (rule_links) to Compare and Merge them; Keep the link keeps the
+  rule's Elastic or Sigma origin. Context: rule, dest_name, origin ({source: Elastic|Sigma, name}) or
+  none, scope_qs.
+#}
+{% from "macros/icons.html" import icon_text %}
+{% from "macros/modal.html" import close_button %}
+<div class="modal-overlay" data-click="backdrop.remove">
+    <div name="Duplicate Rule Modal" class="modal-content modal-md" data-stop-click role="dialog" aria-modal="true" aria-labelledby="rule-duplicate-title">
+        <div class="modal-header">
+            <h3 class="modal-title" id="rule-duplicate-title">Duplicate rule</h3>
+            {{ close_button('data-click="modal.remove"', 'Cancel') }}
+        </div>
+        <form name="Duplicate Rule" hx-post="/api/promotion/{{ rule.rule_id | urlencode }}/duplicate?{{ scope_qs }}"
+              hx-target="#rule-duplicate-result" hx-swap="innerHTML" hx-disabled-elt="find button[type='submit']">
+            <p class="text-secondary mb-md">Makes a copy of <strong>{{ rule.name }}</strong> in {{ dest_name }}, under a new rule id.
+                It is named <strong>{{ rule.name }} [Duplicate]</strong> and is disabled, so it doesn't run until you enable it.
+                It starts unvalidated and isn't mapped to any baseline technique.</p>
+            <fieldset class="border-0 p-0 mt-0 mx-0 mb-md">
+                <legend class="form-label">Exceptions</legend>
+                <label class="flex gap-sm items-start mb-sm">
+                    <input type="radio" name="exceptions" value="all" checked>
+                    <span><strong>Duplicate rule and its exceptions</strong><br>
+                    <span class="text-muted fs-sm">Its own exception list is copied with every item. Lists it shares with other rules stay shared.</span></span>
+                </label>
+                <label class="flex gap-sm items-start mb-sm">
+                    <input type="radio" name="exceptions" value="active">
+                    <span><strong>Duplicate rule and its active exceptions</strong><br>
+                    <span class="text-muted fs-sm">The same, leaving out exceptions that have expired.</span></span>
+                </label>
+                <label class="flex gap-sm items-start">
+                    <input type="radio" name="exceptions" value="none">
+                    <span><strong>Duplicate rule only</strong><br>
+                    <span class="text-muted fs-sm">No exceptions, not even the lists it shares.</span></span>
+                </label>
+            </fieldset>
+            <label class="flex items-center gap-sm mb-xs">
+                <input type="checkbox" name="link" value="1"> Link the copy to this rule
+            </label>
+            <p class="text-muted mb-md fs-sm">Each shows the other in its Linked panel, so you can Compare them and Merge one onto the
+                other: edit the copy, and merge it onto this rule when it's ready.</p>
+            {% if origin %}
+            <label class="flex items-center gap-sm mb-xs">
+                <input type="checkbox" name="keep_origin" value="1" checked> Keep the link to its {{ origin.source }} rule
+            </label>
+            <p class="text-muted mb-md fs-sm">Ticked, TIDE shows {{ origin.source }}'s updates to <strong>{{ origin.name }}</strong> for the copy too.
+                Unticked, the copy is your own rule.</p>
+            {% endif %}
+            <div id="rule-duplicate-result" aria-live="polite"></div>
+            <div class="modal-actions">
+                <button name="Cancel" type="button" class="btn btn-secondary" data-click="modal.remove">Cancel</button>
+                <button name="Duplicate" type="submit" class="btn btn-primary">{{ icon_text('copy', 'Duplicate', '14') }}</button>
+            </div>
+        </form>
+    </div>
+</div>

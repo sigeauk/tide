@@ -6921,6 +6921,7 @@ body.is-resizing-slide-panel {
 .rules-table .rt-upstream .upstream-badge { white-space: normal; text-transform: none; letter-spacing: 0; line-height: 1.25; text-align: left; }
 .rules-table th[data-col="author"]    { width: 7.5rem; }
 .rules-table th[data-col="mitre"]     { width: 10.5rem; }
+.rules-table th[data-col="type"]      { width: 7.5rem; }
 .rules-table th[data-col="lang"]      { width: 4.25rem; }
 .rules-table th.rt-check { width: 2.5rem; padding-left: 0; padding-right: 0; text-align: center; }
 .rt-th--sortable { cursor: pointer; user-select: none; }
@@ -6942,7 +6943,7 @@ body.is-resizing-slide-panel {
 .rule-row:focus-visible { outline: 2px solid var(--color-primary); outline-offset: -2px; }
 .rt-name { white-space: normal; }
 .rt-title { font-weight: 600; color: var(--color-text); display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.rt-sub, .rt-author, .rt-lang { color: var(--color-text-secondary); }
+.rt-sub, .rt-author, .rt-type, .rt-lang { color: var(--color-text-secondary); }
 .rt-mitre .mitre-pills-wrap { flex-wrap: nowrap; justify-content: flex-start; overflow: hidden; }
 .rt-score .score-ring { margin: 0 auto; }
 .rules-table .status-pill { max-width: 100%; }
@@ -7655,7 +7656,7 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 
 .rm-linked-list { margin-bottom: 0.6rem; }
 .rm-add-link { display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: flex-start; }
-.rm-add-link__name { flex: 1 1 10rem; min-width: 0; }
+.rm-add-link__name { flex: 1 1 100%; min-width: 0; }   /* its own line: a rule name is long, the column narrow */
 .rm-add-link__name input[type="text"] { width: 100%; }
 /* In the flow, not floating: an open list pushes Add link down rather than covering it. */
 .rm-add-link__results {
@@ -8353,6 +8354,19 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 
 /* Create / edit rule form: a MITRE technique row (components/rule_create_form.html, rule_form.js) */
 .mitre-builder-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 0.5rem; margin-bottom: 0.2rem; }
+/* The rule form's indicator mapping (rule_form.js): groups joined by OR, each of entries joined by AND. */
+.tm-builder { display: flex; flex-direction: column; gap: 0.5rem; }
+.tm-group { display: flex; flex-direction: column; gap: 0.4rem; padding: 0.6rem; border: 1px solid var(--color-border); border-radius: var(--radius-md); }
+.tm-row { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto; gap: 0.5rem; align-items: center; }
+.tm-row--one { grid-template-columns: minmax(0, 1fr) auto; }   /* a list of field names (Group by, Fields) */
+.tm-op, .tm-join { font-size: 0.75rem; font-weight: 600; color: var(--color-text-muted); }
+.tm-join { padding-left: 0.2rem; }
+.tm-actions { display: flex; gap: 0.4rem; }
+/* The rule window's Rule logic, below the query: filters and an indicator match rule's settings. */
+.rm-logic-part { margin-top: 0.75rem; }
+.rm-logic-list { margin: 0; padding-left: 1.1rem; font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-secondary); }
+.rm-logic-chips { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.rm-logic-map { font-size: 0.8rem; overflow-wrap: anywhere; }
 
 /* Sigma workbench (pages/rules/sigma.html) */
 .btn.btn-h38 { height: 38px; }

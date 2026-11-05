@@ -2298,11 +2298,11 @@ console.debug('TIDE app.js loading...');
             '<div name="Move Rule Modal" class="modal-content modal-md" data-stop-click>' +
             '<h2 class="modal-section-title">Move rule</h2>' +
             '<p class="text-secondary mb-md">Move <strong>' + escapeHtml(ruleName) + '</strong> to another linked destination.</p>' +
-            '<label class="form-label" style="font-size:0.78rem;">Target</label>' +
+            '<label class="form-label">Target</label>' +
             '<select name="target_scope" class="form-input mb-md" data-move-target>' + options + '</select>' +
-            '<label style="display:flex;align-items:center;gap:0.5rem;margin-bottom:1rem;">' +
+            '<label class="flex items-center gap-sm mb-xs">' +
             '<input type="checkbox" name="delete_source"' + (deleteSourceDefault ? ' checked' : '') + ' data-move-delete> Delete source after move</label>' +
-            '<p class="text-muted mb-md" style="font-size:0.78rem;">Unticked, this is a copy: the source stays live and the two rows are linked (see the Linked panel).</p>' +
+            '<p class="text-muted mb-md fs-sm">Unticked, this is a copy: the source stays live and the two rows are linked (see the Linked panel).</p>' +
             '<div class="inline-error mb-md" data-move-error hidden></div>' +
             '<div class="modal-actions">' +
             '<button name="Cancel" type="button" class="btn btn-secondary" data-move-cancel>Cancel</button>' +
@@ -2378,7 +2378,7 @@ console.debug('TIDE app.js loading...');
             (deprecated ? '' :
                 '<label style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem;">' +
                 '<input type="checkbox" data-delete-elastic> Also delete it from Elastic (' + esc(dest) + ')</label>') +
-            '<label style="display:flex;align-items:center;gap:0.5rem;margin-bottom:1rem;">' +
+            '<label class="flex items-center gap-sm mb-xs">' +
             '<input type="checkbox" checked data-delete-links> Also remove any links to this rule</label>' +
             '<p class="inline-error" data-delete-error hidden></p>' +
             '<div class="modal-actions">' +

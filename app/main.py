@@ -1528,6 +1528,9 @@ def create_app() -> FastAPI:
     templates.env.filters["md"] = md_filter
     from app.services.mitre_catalog import plain_summary as _attack_plain
     templates.env.filters["attack_plain"] = _attack_plain
+    from app.models.rules import rule_language_name as _rule_language_name, rule_type_name as _rule_type_name
+    templates.env.filters["rule_type_name"] = _rule_type_name           # "threat_match" -> "Indicator match"
+    templates.env.filters["rule_language_name"] = _rule_language_name   # "kuery" -> "KQL"
 
     # --- Add global template variables so all templates have access ---
     templates.env.globals["env"] = settings
@@ -1971,7 +1974,7 @@ def create_app() -> FastAPI:
             _get_filtered_rules,
             _metrics_from_rules,
         )
-        from app.models.rules import RuleFilters
+        from app.models.rules import RULE_LANGUAGES, RULE_TYPES, RuleFilters
         from app.services import rule_issues, rule_origins
         qp = request.query_params
         search_q = qp.get("search") or ""
@@ -1981,12 +1984,14 @@ def create_app() -> FastAPI:
         state_q = normalize_rule_states(qp.getlist("state"))
         linked_to_q = (qp.get("linked_to") or "") if "linked" in state_q else ""
         upstream_q = rule_origins.filter_values(u for u in qp.getlist("upstream") if u)
+        rule_type_q = [t for t in qp.getlist("rule_type") if t]
+        language_q = [l for l in qp.getlist("language") if l]
         min_score_q = qp.get("min_score") or ""
         max_score_q = qp.get("max_score") or ""
         validation_q = [v for v in qp.getlist("validation") if v]
         validated_from_q = qp.get("validated_from") or ""
         validated_to_q = qp.get("validated_to") or ""
-        # Table-header column sort (siem / state / severity / author / language) — when
+        # Table-header column sort (siem / state / severity / author / type / language) — when
         # active it replaces the score default so the filter selects don't claim a sort.
         from app.api.rules import _COLUMN_SORTS
         sort_col_q = qp.get("sort_col") if qp.get("sort_col") in _COLUMN_SORTS else ""
@@ -2016,6 +2021,8 @@ def create_app() -> FastAPI:
             state=state_q,
             linked_to=linked_to_q or None,
             upstream=upstream_q,
+            rule_type=rule_type_q,
+            language=language_q,
             min_score=min_score_int,
             max_score=max_score_int,
             validation=validation_q,
@@ -2087,6 +2094,10 @@ def create_app() -> FastAPI:
                 "linked_to": linked_to_q,
                 "upstream": upstream_q,
                 "upstream_options": rule_origins.FILTER_STATES,
+                "rule_type": rule_type_q,
+                "language": language_q,
+                "type_options": RULE_TYPES,
+                "language_options": RULE_LANGUAGES,
                 # How many rules each SIEM, Status, State, Linked to, Upstream and Validate Show choice
                 # would show, with the other filters as they are (kept up to date by the metrics'
                 # filterCounts)

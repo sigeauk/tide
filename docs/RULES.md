@@ -27,14 +27,16 @@ A SIEM that can't be reached is skipped: its rules keep showing, marked **SIEM o
 
 ### Find rules
 
-Filter by **Search** (name, author, ID or ATT&CK technique), **SIEM**, **Status** (enabled or disabled), **State**, **Upstream**, **Score** (with a range) and **Validate** (with a date range), and sort by score, validation date or **Name**. The number beside each choice is how many rules you would see by picking it, with your other filters as they are.
+Filter by **Search** (name, author, ID or ATT&CK technique), **SIEM**, **Status** (enabled or disabled), **State**, **Upstream**, **Type**, **Language**, **Score** (with a range) and **Validate** (with a date range), and sort by score, validation date or **Name**. The number beside each choice is how many rules you would see by picking it, with your other filters as they are.
+
+**Type** is the rule's type, as Kibana names it: **Custom query**, **Saved query**, **EQL**, **ES|QL**, **Threshold**, **New terms**, **Indicator match** or **Machine learning**. **Language** is its query language: **KQL**, **Lucene**, **EQL** or **ES|QL**. Threshold, new terms and indicator match rules have a language too, so *Indicator match* with *Lucene* finds the indicator match rules written in Lucene. A machine learning rule has no language.
 
 Under **Validate**, **Show** narrows the rules by where their validation stands, as the **Validated** figure counts them: **Validated**, **Due soon**, **Expired** or **Never validated**. Sorting by validation date always puts rules never validated last, so tick **Never validated** to see them; tick **Expired** as well for every rule that needs validating. A date range narrows the validated rules only: with **Never validated** ticked, rules with no date still show.
 
 **State** is the badge each rule shows:
 
-- **Unlinked**: found at the last sync, with no copy linked in another destination.
-- **Linked**: found at the last sync, with a copy linked in another destination.
+- **Unlinked**: found at the last sync, with no rule linked to it.
+- **Linked**: found at the last sync, with a rule linked to it: a copy in another destination, or a duplicate in its own.
 - **SIEM offline**: its SIEM couldn't be reached at the last sync; shown from TIDE's last copy.
 - **Deprecated**: no longer found in the SIEM.
 
@@ -73,7 +75,7 @@ Open a cause for its actions. Anyone who can edit Rule Health can use them.
 
 ## The rule window
 
-Click a rule to open its window. The header shows its score, destination, state, whether it came from Elastic's or the Sigma rules, severity and author, with **Validate** and the date it was last validated at the top right, and the rest of its actions in the **⋮** menu: **Edit**, **Sync this rule**, **Move**, **Compare**, **View in Kibana**, **Delete rule**, and **Restore** for a deprecated rule.
+Click a rule to open its window. The header shows its score, destination, state, whether it came from Elastic's or the Sigma rules, severity and author, with **Validate** and the date it was last validated at the top right, and the rest of its actions in the **⋮** menu: **Edit**, **Sync this rule**, **Move**, **Duplicate**, **Compare**, **View in Kibana**, **Delete rule**, and **Restore** for a deprecated rule.
 
 | Section | What it holds |
 |---|---|
@@ -87,7 +89,7 @@ Click a rule to open its window. The header shows its score, destination, state,
 | **Field mappings** | Each index pattern and field, and whether the SIEM has it |
 | **MITRE ATT&CK** | The ATT&CK techniques it carries |
 | **Covers** | The baseline techniques it is mapped to, on which systems; click one to open it |
-| **Linked** | Its copies at other destinations |
+| **Linked** | The rules linked to it: its copies at other destinations, and duplicates linked to it |
 | **Upstream** | Whether Elastic or Sigma has a newer version of the rule it came from |
 | **References**, **Rule ID** | Its references, and its IDs |
 
@@ -106,17 +108,60 @@ In **Last run**, choose a time window in **Test against last** and click **Test*
 Who can: anyone who can edit Rule Health.
 
 1. In the rule window, choose **⋮ › Edit**.
-2. Change what you need. The form is in folding sections: **Define Rule** (query language, index patterns, query), **About Rule** (name, severity, risk score, description, author, tags, timestamp override, MITRE ATT&CK techniques, highlighted fields, investigation guide), **Schedule** (how often it runs, how far back it looks) and **Action** (whether it is enabled).
+2. Change what you need. The form is in folding sections: **Define Rule** (rule type, query language, index patterns, query, and a threshold, new terms or indicator match rule's own settings), **About Rule** (name, severity, risk score, description, author, tags, timestamp override, MITRE ATT&CK techniques, highlighted fields, investigation guide), **Schedule** (how often it runs, how far back it looks) and **Action** (whether it is enabled).
 3. Give a **Reason for change**. Every edit needs one; it is kept in the rule's History.
 4. Click **Save**.
 
 Only what you change is sent to Kibana, onto the rule as Kibana holds it at that moment. If someone changed the same field in Kibana since TIDE last synced it, nothing is saved: the form says which field, and TIDE loads Kibana's version so you can check it and make your change again. Editing a rule changes only that copy, never a rule linked to it.
 
+A rule keeps its **Rule type** once it is made, as in Kibana, except that a custom query, EQL and ES|QL rule can become one of the others by changing its type (Kibana makes it again, keeping its history in TIDE). Filters set in Kibana are shown under the query and kept as they are.
+
+A rule that searches a data view shows its **Data view** in place of index patterns: Kibana searches the data view, not index patterns. To search index patterns instead, tick **Use index patterns instead**. It fills in the data view's patterns for you to change, and saving switches the rule to them; its History names the data view it searched before. Taking index patterns from a linked rule ([Compare and merge linked rules](#compare-and-merge-linked-rules)) or from an update ([Updates from Elastic and Sigma](#updates-from-elastic-and-sigma)) switches it the same way.
+
 Editing one of Elastic's prebuilt rules keeps it as Elastic's rule, so TIDE still shows when Elastic has an update for it. Kibana marks it as customised. When Elastic's next update for it is installed in Kibana, Kibana merges your change with Elastic's, or replaces it with Elastic's version, depending on your Elastic licence. The form says so above **Save**. Older versions of Kibana refuse changes to prebuilt rules; the form then shows Kibana's reason.
 
 ### Create a rule
 
-Use the page's **⋮ › Create rule**. Choose the **Target SIEM / space**, a **Rule name**, the **Query language** and query, then fill in the rest as when editing, and click **Create Rule**. Rules converted from Sigma or deployed from Elastic's library open this same form, filled in (see [Sigma, Elastic & Hunting](LIBRARIES.md)).
+Use the page's **⋮ › Create rule**. Choose the **Target SIEM / space**, a **Rule name**, the **Rule type** (**Custom query**, **EQL**, **ES|QL**, **Threshold**, **New terms** or **Indicator match**), the **Query language** and query, then fill in the rest as when editing, and click **Create Rule**. Rules converted from Sigma or deployed from Elastic's library open this same form, filled in (see [Sigma, Elastic & Hunting](LIBRARIES.md)).
+
+### Threshold and new terms rules
+
+A **Threshold** rule alerts when its query matches a number of events or more. In **Define Rule**:
+
+- **Group by**: up to three fields (**Add field**), so the threshold counts each of their values on its own. Optional.
+- **Threshold**: how many events. It starts at Kibana's 100.
+- **Count**: a field and a number of **Unique values**, to alert only when the events have that many different values of the field or more. Optional.
+
+A **New terms** rule alerts on a value it hasn't seen before. In **Define Rule**:
+
+- **Fields**: one to three fields (**Add field**). With more than one, it is their combination of values that is new.
+- **History window size**: how far back a value counts as seen, as a number and s, m, h or d, such as *7d*.
+
+As you type a field, TIDE suggests the fields it has checked in the rule's index patterns. The rule window's **Rule logic** shows these settings below the query. Alert suppression set in Kibana is kept as it is.
+
+### Indicator match rules
+
+An indicator match rule alerts when a field of your events matches a field of your threat indicators. Choose **Indicator match** as the **Rule type**, then, in **Define Rule**, beside the index patterns and query of your events:
+
+- **Indicator index patterns**: the indexes holding your indicators, such as `logs-ti_*`.
+- **Indicator index query** and **Indicator query language**: which indicators to use. It starts as Kibana's, the last 30 days.
+- **Indicator mapping**: a field of your events, and the indicator index field it matches. **AND** adds a field that must match as well; **OR** adds another group, any one of which is enough. As you type, TIDE suggests the fields it has checked in those indexes; you can type any other.
+- **Indicator prefix override**, under **About Rule**: where the matched indicator goes in the alert. Blank is Kibana's own, `threat.indicator`.
+
+The rule window's **Rule logic** shows these settings below the query. Filters on either query, set in Kibana, are shown and kept as they are. Kibana 9 can also map a field that *does not match*; TIDE shows such an entry and keeps it, but doesn't add one.
+
+### Duplicate a rule
+
+Who can: anyone who can edit Rule Health.
+
+In the rule window, choose **⋮ › Duplicate** to make a copy of the rule in its own destination, under a new rule id, as Kibana's Duplicate does. To copy it to another destination, use **Move** instead (see [Move or copy a rule to another destination](#move-or-copy-a-rule-to-another-destination)).
+
+1. Choose what the copy takes from the rule's exceptions: **Duplicate rule and its exceptions** (its own exception list with every item; lists it shares with other rules stay shared), **Duplicate rule and its active exceptions** (the same, leaving out expired ones) or **Duplicate rule only** (none, not even the shared lists).
+2. Tick **Link the copy to this rule** to work on a copy while the rule keeps running: each shows the other in its **Linked** section, so when the copy is ready you can compare the two and merge it onto the rule (see [Compare and merge linked rules](#compare-and-merge-linked-rules)), then delete the copy.
+3. If the rule came from Elastic's or the Sigma rules, **Keep the link to its *Elastic* rule** is ticked: TIDE shows that rule's updates for the copy too. Untick it to make the copy your own rule.
+4. Click **Duplicate**.
+
+The copy is named after the rule with *[Duplicate]* at the end, and is disabled, so it doesn't run until you enable it. Its window opens, so you can edit it. It starts unvalidated and isn't mapped to any baseline technique; its History says which rule it was duplicated from.
 
 ### Enable or disable rules
 
@@ -152,7 +197,7 @@ A rule's ID is shared by every copy of it, so the target may already hold one wi
 
 ### Link two rules yourself
 
-In the rule window's **Linked** section, type a rule's name in **Add link**, pick it from the suggestions, and add it. **×** on a linked rule removes the link (never the rule).
+In the rule window's **Linked** section, choose a destination, type a rule's name in **Add link**, pick it from the suggestions, and add it. The rule's own destination is last in the list, to link a duplicate beside it, for example. **×** on a linked rule removes the link (never the rule). A link within one destination changes no coverage; it lets you compare and merge the two.
 
 ### Compare and merge linked rules
 
@@ -183,6 +228,16 @@ To take an update:
 An Elastic prebuilt rule can take sections too: Kibana keeps it as Elastic's and marks it customised.
 
 When the new version is another type of rule, such as a custom query rule that Elastic rewrote in EQL or ES|QL, its **Rule type**, **Query language** and **Query** go together: ticking one ticks the others. Kibana can't change a rule's type in place, so merging them deletes the rule in Kibana and creates it again under the same rule ID, with its exceptions, actions and whether it is enabled. Its past alerts stay. Elastic's prebuilt rules aren't re-created: install Elastic's update in Kibana (**Rules › Rule updates**) instead. Merging two linked rules of different types in **Compare** works the same way.
+
+### Link a rule to the Elastic or Sigma rule it came from
+
+TIDE knows a rule came from Elastic's or the Sigma rules when it deployed or copied it, or when the rule uses that rule's id. A copy made otherwise, such as with Kibana's Duplicate or by hand, is shown as your own. To see its updates, link it:
+
+1. In the rule window's **Upstream** section, choose **Elastic** or **Sigma**.
+2. Type the name of the rule it came from, or keep the rule's own name, which is filled in without Kibana's *[Duplicate]*, and pick it from the suggestions.
+3. Click **Link for updates**.
+
+TIDE doesn't know which version of that rule it was copied from, so it shows **Compare to confirm** rather than **Up to date**. Open **Compare with *Elastic*** (or *Sigma*) once: take what you want, or **Keep this rule as it is**. From then on TIDE shows its updates as for any other rule. When Elastic's rule differs from it in nothing TIDE compares, the next sync confirms it for you. **Unlink from *Elastic*** (or *Sigma*) undoes a link made by mistake.
 
 ### Combining a section
 

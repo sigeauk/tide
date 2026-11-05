@@ -16,7 +16,7 @@ from typing import Optional, Any, List, Dict, Tuple
 from app.api.deps import DbDep, CurrentUser, RequireUser, SettingsDep, ActiveClient
 from app.services.database import validation_key, rule_state
 from app.services.rule_origins import is_prebuilt
-from app.models.rules import RuleFilters, RuleHealthMetrics, DetectionRule
+from app.models.rules import RuleFilters, RuleHealthMetrics, DetectionRule, rule_language_name, rule_type_name
 
 import logging
 
@@ -48,7 +48,8 @@ _COLUMN_SORTS = {
     "state": lambda r, c: {"live": 0, "offline": 1, "deprecated": 2}[rule_state(r, c.get("offline") or {})],
     "severity": lambda r, c: _SEVERITY_RANK.get(str(getattr(getattr(r, "severity", None), "value", getattr(r, "severity", "")) or "").lower(), 0),
     "author": lambda r, c: str(getattr(r, "author", "") or "").lower(),
-    "language": lambda r, c: str(getattr(r, "language", "") or "").lower(),
+    "language": lambda r, c: rule_language_name(r.query_language).lower(),
+    "type": lambda r, c: rule_type_name(r.rule_type).lower(),
 }
 
 
@@ -390,6 +391,7 @@ def _rule_form_values(rule, username: str = "", prefill: Optional[dict] = None) 
             "timestamp_override": timestamp_override,
             "highlighted_fields": ", ".join(_split_csv(highlighted_fields)),
             "reason": str(prefill.get("reason") or ""),
+            **_type_setting_values(prefill),
         }
 
     return {
@@ -413,7 +415,52 @@ def _rule_form_values(rule, username: str = "", prefill: Optional[dict] = None) 
         "timestamp_override": str(raw.get("timestamp_override") or ("" if rule else "event.ingested")),
         "highlighted_fields": ", ".join(_split_csv(raw.get("investigation_fields", {}).get("field_names", []) if isinstance(raw.get("investigation_fields"), dict) else raw.get("investigation_fields") or [])),
         "reason": "",
+        **_data_view_values(raw),
+        **_type_setting_values(raw),
     }
+
+
+def _type_setting_values(source: dict) -> dict:
+    """The form's values for the settings only some rule types have (rule_type_settings), from a rule
+    or a prefill shaped like one; a new rule starts on Kibana's own defaults. Filters, which the form
+    leaves as Kibana has them, come as text to show."""
+    from app.services import rule_type_settings as rts
+    return {
+        "threat_index": ", ".join(_split_csv(source.get("threat_index") or [])),
+        "threat_query": str(source.get("threat_query") or rts.INDICATOR_QUERY_DEFAULT),
+        "threat_language": str(source.get("threat_language") or "kuery").lower(),
+        "threat_mapping": json.dumps(rts.mapping_groups(source.get("threat_mapping"))),
+        "threat_indicator_path": str(source.get("threat_indicator_path") or ""),
+        **_threshold_values(rts.threshold_parts(source.get("threshold") or {"value": rts.THRESHOLD_DEFAULT})),
+        "new_terms_fields": ", ".join(_split_csv(source.get("new_terms_fields") or [])),
+        "history_window": rts.history_window(source.get("history_window_start")) or rts.HISTORY_WINDOW_DEFAULT,
+        "filters_text": rts.filter_texts(source.get("filters")),
+        "threat_filters_text": rts.filter_texts(source.get("threat_filters")),
+    }
+
+
+def _threshold_values(threshold: dict) -> dict:
+    """A threshold (rule_type_settings.threshold_parts) as the form's fields: Group by, Threshold, and
+    Count's first field and unique values; any further Count settings (Kibana's own form shows one)
+    ride along as JSON, kept as they are."""
+    counts = threshold.get("cardinality") or []
+    first = counts[0] if counts else {"field": "", "value": ""}
+    return {
+        "threshold_field": ", ".join(threshold.get("field") or []),
+        "threshold_value": str(threshold.get("value") if threshold.get("value") not in (None, "") else ""),
+        "threshold_cardinality_field": first["field"],
+        "threshold_cardinality_value": str(first["value"]),
+        "threshold_cardinality_rest": json.dumps(counts[1:]) if len(counts) > 1 else "",
+    }
+
+
+def _data_view_values(raw: dict) -> dict:
+    """Whether the rule searches a data view, and its name ("" when TIDE couldn't read it). Kibana
+    searches the data view, not index patterns, so the Edit form shows it instead of them."""
+    from app.elastic_helper import DATA_VIEW_NOTE
+    note = raw.get(DATA_VIEW_NOTE)
+    uses = isinstance(note, dict) or bool(raw.get("data_view_id") or raw.get("dataViewId"))
+    return {"uses_data_view": uses, "data_view": str(note.get("name") or "") if isinstance(note, dict) else ""}
 
 
 def _build_rule_form_context(db, client_id: str, username: str, form_action: str, submit_label: str,
@@ -432,6 +479,14 @@ def _build_rule_form_context(db, client_id: str, username: str, form_action: str
         if s.get("id") and (s.get("space") is not None)
     ]
     form_values = _rule_form_values(rule, username=username, prefill=prefill)
+    # Rule type: a new rule can be any type the form edits. An existing rule (or Elastic's or Sigma's,
+    # being deployed) switches only between the types its query language decides, as TIDE always has;
+    # any other type keeps its own, as on Kibana's Edit page.
+    current = form_values["type"]
+    if current not in _LANGUAGE_TYPES:
+        type_choices, type_locked = (current,), True
+    else:
+        type_choices, type_locked = (_LANGUAGE_TYPES if rule or prefill else _LANGUAGE_TYPES + _FORM_TYPES), False
     selected_tactics = []
     for mitre_id in form_values.get("mitre_ids", []):
         option = technique_lookup.get(str(mitre_id).upper())
@@ -447,7 +502,11 @@ def _build_rule_form_context(db, client_id: str, username: str, form_action: str
         "selected_tactics": selected_tactics,
         "form_values": form_values,
         "mode": "edit" if rule else "create",
-        "rule_type_label": _rule_type_label(form_values["type"]) if rule and form_values["type"] not in _LANGUAGE_TYPES else "",
+        "type_options": [(t, rule_type_name(t), " ".join(_TYPE_LANGUAGES.get(t, _QUERY_LANGUAGES))) for t in type_choices],
+        "type_locked": type_locked,
+        "type_languages": _TYPE_LANGUAGES.get(current, _QUERY_LANGUAGES),
+        # A type whose own settings the form doesn't show: they stay as Kibana has them.
+        "rule_type_label": _rule_type_label(current) if current not in _LANGUAGE_TYPES + _FORM_TYPES else "",
         "scope_locked": scope_locked,
         "rule": rule,
         # One of Elastic's prebuilt rules still in Kibana: the form says what saving does to it.
@@ -477,10 +536,24 @@ _RULE_TYPE_BY_LANGUAGE = {
     "eql": "eql",
     "esql": "esql",
 }
+# The query languages each rule type takes, as the form offers them ("kql" is KQL's legacy name).
+_QUERY_LANGUAGES = ("kuery", "kql", "lucene")
+_TYPE_LANGUAGES = {"query": _QUERY_LANGUAGES, "eql": ("eql",), "esql": ("esql",)}
+
+
+def _posted_rule_type(form_data, language: str) -> str:
+    """The rule type the form posted: Rule type, when it is one the form edits and takes ``language``;
+    else the one the query language decides (a form or a caller that posts no type, or a type the form
+    shows but doesn't edit, such as threshold)."""
+    posted = str(form_data.get("type") or "").strip()
+    if posted in _FORM_TYPES or language in _TYPE_LANGUAGES.get(posted, ()):
+        return posted
+    return _RULE_TYPE_BY_LANGUAGE.get(language, "query")
 
 
 def _build_rule_payload(form_data, technique_lookup: dict[str, dict], default_author: str) -> tuple[dict, str, str, list[str]]:
     from app.elastic_helper import normalize_rule_language
+    from app.services import rule_type_settings as rts
 
     rule_name = (form_data.get("name") or "").strip()
     description = (form_data.get("description") or "").strip()
@@ -526,13 +599,28 @@ def _build_rule_payload(form_data, technique_lookup: dict[str, dict], default_au
         "note": note,
         "interval": interval,
         "from": lookback,
-        # Ignore any submitted "type" (the form carries a stale hidden
-        # <input name="type" value="query"> left over from prefill) — the
-        # rule type is fully determined by the query language.
-        "type": _RULE_TYPE_BY_LANGUAGE.get(language, "query"),
+        "type": _posted_rule_type(form_data, language),
         "mitre_ids": mitre_ids,
         "index": index_patterns,
     }
+    if payload["type"] == "threat_match":
+        payload.update({
+            "threat_index": _split_csv(form_data.get("threat_index") or ""),
+            "threat_query": (form_data.get("threat_query") or "").strip(),
+            "threat_language": normalize_rule_language(form_data.get("threat_language") or "kuery"),
+            "threat_mapping": rts.mapping_groups(form_data.get("threat_mapping") or ""),
+        })
+        prefix = (form_data.get("threat_indicator_path") or "").strip()   # blank: Kibana's threat.indicator
+        if prefix:
+            payload["threat_indicator_path"] = prefix
+    elif payload["type"] == "threshold":
+        payload["threshold"] = rts.threshold_from_form(
+            form_data.get("threshold_field") or "", form_data.get("threshold_value") or "",
+            form_data.get("threshold_cardinality_field") or "", form_data.get("threshold_cardinality_value") or "",
+            form_data.get("threshold_cardinality_rest") or "")
+    elif payload["type"] == "new_terms":
+        payload["new_terms_fields"] = _split_csv(form_data.get("new_terms_fields") or "")
+        payload["history_window_start"] = rts.history_window_start(form_data.get("history_window") or "")
     if timestamp_override:
         payload["timestamp_override"] = timestamp_override
     if language == "esql":
@@ -561,9 +649,11 @@ def _as_form(values: dict):
 
 # Optional fields the Edit form can clear: a field it shows empty that the rule has is removed.
 _CLEARABLE = ("timestamp_override", "investigation_fields")
-# Rule types whose type follows the query language. Others (threshold, new terms, indicator match,
-# machine learning) keep their own type and settings; the form edits only their common fields.
+# Rule types whose type follows the query language. Others keep their own type: the form edits the
+# settings of those in _FORM_TYPES too (rule_type_settings); of the rest (machine learning, saved
+# query) only the common fields, leaving their own settings as Kibana has them.
 _LANGUAGE_TYPES = ("query", "eql", "esql")
+_FORM_TYPES = ("threshold", "new_terms", "threat_match")
 
 
 def _form_changes(rule, form, technique_lookup: dict, username: str) -> tuple[dict, tuple, str]:
@@ -600,19 +690,34 @@ def changes_against(shown: dict, rule_type: str, form, technique_lookup: dict, u
             changes[key] = value
     removed = tuple(k for k in _CLEARABLE if k in before and k not in after)
 
+    if shown.get("uses_data_view"):
+        # Kibana searches the rule's data view, so index patterns are a change only when the user
+        # chose Use index patterns instead, and then even when they are the data view's own.
+        changes.pop("index", None)
+        if str(form.get("use_index_patterns") or "") == "1":
+            if not after.get("index"):
+                return {}, (), "Give the index patterns to search, or untick Use index patterns instead."
+            changes["index"] = after["index"]
+
     if "language" in changes:
-        if rule_type not in _LANGUAGE_TYPES:
-            return {}, (), (f"A {_rule_type_label(rule_type)} rule's query language can't be changed. "
-                            "Set the language back, or change it in Kibana.")
-        changes["type"] = after["type"]
+        if rule_type in _LANGUAGE_TYPES:
+            changes["type"] = after["type"]
+        elif {before.get("language"), after.get("language")} - {"kuery", "lucene"}:
+            # Any other type stays itself: its query is KQL or Lucene, as Kibana allows.
+            return {}, (), (f"A {_rule_type_label(rule_type)} rule's query is KQL or Lucene. "
+                            "Set the language back.")
     if "query" in changes and not changes["query"] and rule_type != "query":
         return {}, (), "The query can't be empty."
+    from app.services.rule_type_settings import SETTING_KEYS, settings_problem
+    if after["type"] in _FORM_TYPES and ("language" in changes or set(changes) & set(SETTING_KEYS[after["type"]])):
+        problem = settings_problem(after)
+        if problem:
+            return {}, (), problem
     return changes, removed, ""
 
 
 def _rule_type_label(rule_type: str) -> str:
-    return {"threshold": "threshold", "new_terms": "new terms", "threat_match": "indicator match",
-            "machine_learning": "machine learning", "saved_query": "saved query"}.get(rule_type, rule_type)
+    return rule_type_name(rule_type, in_sentence=True)
 
 
 def _form_error(message: str, status_code: int = 400) -> HTMLResponse:
@@ -701,6 +806,14 @@ _FIELD_LABELS = {
     "timestamp_override": "timestamp override",
     "investigation_fields": "custom highlighted fields",
     "mitre_ids": "MITRE techniques",
+    "threat_index": "indicator index patterns",
+    "threat_query": "indicator index query",
+    "threat_language": "indicator query language",
+    "threat_mapping": "indicator mapping",
+    "threat_indicator_path": "indicator prefix override",
+    "threshold": "threshold",
+    "new_terms_fields": "new terms fields",
+    "history_window_start": "history window",
 }
 
 
@@ -709,6 +822,22 @@ def _summarize_rule_changes(old_payload: dict, new_payload: dict) -> tuple[str, 
     changed_diffs: list[dict[str, str]] = []
     for key, label in _FIELD_LABELS.items():
         if key not in new_payload and key not in old_payload:
+            continue
+
+        if key == "threshold":
+            from app.services.rule_type_settings import threshold_parts, threshold_text
+            if threshold_parts(old_payload.get(key)) != threshold_parts(new_payload.get(key)):
+                changed.append(label)
+                changed_diffs.append({"field": label, "before": threshold_text(old_payload.get(key)) if old_payload.get(key) else "-",
+                                      "after": threshold_text(new_payload.get(key)) if new_payload.get(key) else "-"})
+            continue
+
+        if key == "threat_mapping":
+            from app.services.rule_type_settings import mapping_groups, mapping_text
+            if mapping_groups(old_payload.get(key)) != mapping_groups(new_payload.get(key)):
+                changed.append(label)
+                changed_diffs.append({"field": label, "before": mapping_text(old_payload.get(key)),
+                                      "after": mapping_text(new_payload.get(key))})
             continue
 
         if key in ("mitre_ids", "investigation_fields"):
@@ -1045,6 +1174,8 @@ def list_rules(
     state: list[str] = Query([]),
     linked_to: Optional[str] = Query(None),
     upstream: list[str] = Query([]),
+    rule_type: list[str] = Query([]),
+    language: list[str] = Query([]),
     min_score: Optional[str] = Query(None),
     max_score: Optional[str] = Query(None),
     validation: list[str] = Query([]),
@@ -1077,6 +1208,8 @@ def list_rules(
             state=[s for s in state if s],
             linked_to=linked_to or None,
             upstream=[u for u in upstream if u],
+            rule_type=[t for t in rule_type if t],
+            language=[l for l in language if l],
             min_score=min_score_int,
             max_score=max_score_int,
             validation=[v for v in validation if v],
@@ -1138,6 +1271,8 @@ def list_rules(
             "state": [s for s in state if s],
             "linked_to": linked_to or "",
             "upstream": [u for u in upstream if u],
+            "rule_type": [t for t in rule_type if t],
+            "language": [l for l in language if l],
             "min_score": min_score if min_score is not None else "",
             "max_score": max_score if max_score is not None else "",
             "validation": [v for v in validation if v],
@@ -1179,6 +1314,8 @@ def get_metrics(
     state: list[str] = Query([]),
     linked_to: Optional[str] = Query(None),
     upstream: list[str] = Query([]),
+    rule_type: list[str] = Query([]),
+    language: list[str] = Query([]),
     min_score: Optional[str] = Query(None),
     max_score: Optional[str] = Query(None),
     validation: list[str] = Query([]),
@@ -1190,14 +1327,15 @@ def get_metrics(
     field (app.js puts them in the filter bar, which isn't redrawn)."""
     params = {
         "search": search, "space": space, "enabled": enabled, "state": state, "linked_to": linked_to,
-        "upstream": upstream, "min_score": min_score, "max_score": max_score,
-        "validation": validation, "validated_from": validated_from, "validated_to": validated_to,
+        "upstream": upstream, "rule_type": rule_type, "language": language, "min_score": min_score,
+        "max_score": max_score, "validation": validation, "validated_from": validated_from, "validated_to": validated_to,
     }
     ctx = filtered_rule_metrics(db, client_id, params)
     response = request.app.state.templates.TemplateResponse(request, "partials/metrics_row.html", ctx)
     counts = db.rule_filter_counts(rule_filters_from(params), client_id=client_id)
     response.headers["HX-Trigger"] = json.dumps({"filterCounts": {
-        "space": counts["scope"], **{k: counts[k] for k in ("enabled", "state", "linked_to", "upstream", "validation")}}})
+        "space": counts["scope"], **{k: counts[k] for k in ("enabled", "state", "linked_to", "upstream", "validation",
+                                                             "rule_type", "language")}}})
     return response
 
 
@@ -1215,6 +1353,8 @@ def rule_filters_from(params: dict) -> RuleFilters:
         state=[s for s in (params.get("state") or []) if s],
         linked_to=params.get("linked_to") or None,
         upstream=[u for u in (params.get("upstream") or []) if u],
+        rule_type=[t for t in (params.get("rule_type") or []) if t],
+        language=[l for l in (params.get("language") or []) if l],
         min_score=_int(params.get("min_score")),
         max_score=_int(params.get("max_score")),
         validation=[v for v in (params.get("validation") or []) if v],
@@ -1809,6 +1949,11 @@ async def create_rule(
 
         if not rule_name or not query:
             return _form_error("Rule name and query are required.")
+        if rule_data["type"] in _FORM_TYPES:
+            from app.services.rule_type_settings import settings_problem
+            problem = settings_problem(rule_data)
+            if problem:
+                return _form_error(problem)
         if not siem_id or not space:
             return _form_error("Select a target SIEM/space pair.")
 
@@ -2067,6 +2212,12 @@ def _render_guide_markdown(text: str):
     if in_code:
         out.append("</code></pre>")
     return Markup("".join(out))
+
+
+def _window_type_settings(rule) -> dict:
+    """Rule logic's settings beside the query (rule_type_settings.window_settings)."""
+    from app.services.rule_type_settings import window_settings
+    return window_settings(getattr(rule, "raw_data", None) or {})
 
 
 def _build_rule_details(rule) -> dict:
@@ -2355,6 +2506,12 @@ def _build_rule_modal_context(
         for s in (db.get_client_siems(client_id) or [])
         if not (s.get("id") == actual_siem and str(s.get("space") or "default").lower() == str(space).lower())
     ]
+    # Add link's destinations: the others, then this rule's own (a duplicate beside it, to Compare and
+    # Merge). Coverage gains nothing from a link within one destination (CLAUDE.md section 6).
+    own = next(({"siem_id": s.get("id"), "space": s.get("space"), "name": s.get("name") or s.get("label")}
+                for s in (db.get_client_siems(client_id) or [])
+                if s.get("id") == actual_siem and str(s.get("space") or "default").lower() == str(space).lower()), None)
+    link_targets = move_targets + ([own] if own else [])
     from app.services import pending_actions, rule_origins
     key = (rule.rule_id, actual_siem, space)
     # Changes Kibana made but TIDE couldn't record (a new rule id, a move, a restore): Finish in TIDE.
@@ -2370,8 +2527,7 @@ def _build_rule_modal_context(
         from app.services.rule_diff import sections_text
         from app.services.rule_updates import unconfirmed_links
         link_unconfirmed = (unconfirmed_links(conn, [key]).get(key) or {}).get("sections", []) if can_unlink else []
-        unlinked_from = (((rule_origins.upstream(conn, "elastic", origin["upstream_id"]) or {}).get("name")
-                          or origin["upstream_id"]) if origin and origin["origin"] == "none" else "")
+        unlinked_from = rule_origins.unlinked_name(conn, origin)
     # Custom rules Kibana held beside this one under the same rule id at the last sync (TIDE holds one).
     shared_copies = [c for c in db.shared_rule_id_copies(actual_siem, space, rule.rule_id)
                      if not c.get("prebuilt") and not any(e.get("copy_id") == c.get("id") for e in own_pending)]
@@ -2386,6 +2542,9 @@ def _build_rule_modal_context(
         "link_unconfirmed": link_unconfirmed,
         "link_unconfirmed_text": sections_text(link_unconfirmed),
         "unlinked_from": unlinked_from,
+        # Link to an Elastic or Sigma rule starts from this rule's name, as a copy's is: without the
+        # " [Duplicate]" Kibana's Duplicate adds.
+        "upstream_guess": re.sub(r"(\s*\[Duplicate\])+\s*$", "", rule.name or ""),
         "shared_copies": shared_copies,
         "pending_changes": [{**e, "text": pending_actions.describe(e)} for e in pending],
         "rule": rule,
@@ -2396,6 +2555,7 @@ def _build_rule_modal_context(
         "linked_rules": linked,
         "covers": _rule_covers(rule.rule_id, actual_siem, space, linked, client_id),
         "move_targets": move_targets,
+        "link_targets": link_targets,
         "delete_source_default": bool((db.get_client(client_id) or {}).get("delete_source_after_promotion", True)),
         "history_entries": entries,
         "history_users": sorted({e.get("actor") for e in entries if e.get("actor")}),
@@ -2403,6 +2563,7 @@ def _build_rule_modal_context(
         "score_bars": _build_score_bars(rule),
         "score_meta": _build_score_meta(rule),
         "details": _build_rule_details(rule),
+        "type_settings": _window_type_settings(rule),
         "mitre_details": mitre,
         "kibana_rule_url": _kibana_rule_url(db, rule, client_id),
         "just_validated": just_validated,
@@ -2432,6 +2593,26 @@ def get_rule_history_modal(
         "components/rule_modal.html",
         _build_rule_modal_context(db, client_id, rule, space, siem_id),
     )
+
+
+@router.get("/field-suggestions", response_class=HTMLResponse)
+def field_suggestions(
+    db: DbDep,
+    user: CurrentUser,
+    client_id: ActiveClient,
+    scope_pair: str = Query(""),
+    patterns: str = Query(""),
+):
+    """The rule form's field names to suggest (``<option>``s for a ``<datalist>``): the fields TIDE's
+    field catalogue holds for these index patterns on the destination's SIEM. Never asks the SIEM: a
+    pattern it hasn't checked yet suggests nothing, and any field can still be typed."""
+    from app.services.mapping_catalogue import MappingCatalogue
+    siem_id, space = _parse_scope_pair(scope_pair)
+    if not siem_id or (siem_id, space) not in set(db.get_client_siem_scopes(client_id) or []):
+        return HTMLResponse("")
+    entries = MappingCatalogue(db, siem_id).entries(_split_csv(patterns)[:20])
+    fields = sorted({name for entry in entries.values() for name in entry.fields})[:5000]
+    return HTMLResponse("".join(f'<option value="{escape(name)}"></option>' for name in fields))
 
 
 @router.get("/link-search", response_class=HTMLResponse)
@@ -2522,6 +2703,8 @@ async def add_rule_link(
                 matches = [picked.rule_id] if picked and not picked.deprecated else []
             else:
                 matches = db.rule_ids_named(target_siem_id, target_space, target_name)
+            # In the rule's own destination its own name finds itself: never a rule to link to.
+            matches = [m for m in matches if (m, target_siem_id, target_space) != (rule_id, siem_id or rule.siem_id, space)]
             label = target_name or "that rule"
             if not matches:
                 flash = f'No rule named "{label}" in {dest}. Pick one from the list.'
@@ -2647,6 +2830,8 @@ async def edit_rule(
         # Kibana no longer has it: change TIDE's copy only.
         before = cached
         payload = {k: v for k, v in {**cached, **changes}.items() if k not in removed}
+        if "index" in changes:
+            payload.pop(elastic_helper.DATA_VIEW_NOTE, None)
         if not db.update_cached_rule(rule_id, actual_siem_id, space, payload):
             return _form_error("TIDE couldn't save its copy of this rule. Nothing was changed.", 500)
         update_message = "Saved in TIDE only: Kibana no longer has this rule."
@@ -2663,7 +2848,7 @@ async def edit_rule(
             logger.warning("Rule edit not saved (%s): rule_id=%s siem_id=%s space=%s %s",
                            outcome, rule_id, actual_siem_id, space, message)
         if outcome == "conflict":
-            fields = ", ".join(_FIELD_LABELS.get(k, k) for k in message.split(", "))
+            fields = ", ".join(_FIELD_LABELS.get(k, "data view" if k == "data_view_id" else k) for k in message.split(", "))
             await run_in_threadpool(sync_single_rule, db, client_id, rule_id, actual_siem_id, space, user.id, user.username)
             return _form_error(f"Someone changed this rule's {fields} in Kibana since TIDE last synced it, so "
                                "nothing was saved. TIDE has now loaded Kibana's version: go back to the rule, "
@@ -2675,6 +2860,9 @@ async def edit_rule(
         update_message = "Saved to Kibana." + (f" {message}" if message else "")
 
     before = {**(before or cached), "mitre_ids": rule_mitre}
+    data_view = cached.get(elastic_helper.DATA_VIEW_NOTE)
+    if "index" in changes and isinstance(data_view, dict):
+        before["index"] = f"data view {data_view.get('name')}"   # History: what it searched until now
     after = {k: v for k, v in {**before, **changes}.items() if k not in removed}
     change_message, changed_fields, field_diffs = _summarize_rule_changes(before, after)
     db.record_rule_history(

@@ -43,10 +43,12 @@ _TENANT_DETECTION_RULES_COLUMNS: tuple = (
     ("client_id",          "VARCHAR"),
     ("deprecated",         "BOOLEAN"),
     ("source_rule_id",     "VARCHAR"),
-    # Two values of raw_data kept as columns so lists of rules don't have to load the JSON
-    # (database.rule_json_keys): Kibana's own rule_id (the validation key) and the query language.
+    # Values of raw_data kept as columns so lists of rules don't have to load the JSON
+    # (database.rule_json_keys): Kibana's own rule_id (the validation key), the query language and
+    # the rule type.
     ("kibana_rule_id",     "VARCHAR"),
     ("rule_language",      "VARCHAR"),
+    ("rule_type",          "VARCHAR"),
 )
 
 

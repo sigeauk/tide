@@ -1,7 +1,9 @@
 /*
  * The create / edit rule form (components/rule_create_form.html): the MITRE technique rows
  * (tactic, then technique; the techniques come from the form's JSON [data-technique-groups]),
- * a destination's default index, and the edit form's required Reason for Change.
+ * Rule type and the settings it shows (a threshold, new terms or indicator match rule's, with
+ * field names suggested), a destination's default index, and the edit form's required Reason for
+ * Change.
  */
 (function () {
     'use strict';
@@ -83,6 +85,211 @@
         addBtn.addEventListener('click', function () { addRow(''); });
     }
 
+    // The types with settings of their own (rules._FORM_TYPES).
+    var TYPED = ['threshold', 'new_terms', 'threat_match'];
+
+    // Rule type: Query language takes what the type takes (its option's data-languages), and each
+    // [data-rule-types] block shows for its types only. A hidden block's fields (those that post) are
+    // disabled, so they are neither checked nor posted. A typed rule starts its query on *:*.
+    function initRuleType(form, onType) {
+        var typeSelect = form.querySelector('#rule-type'), language = form.querySelector('#rule-language');
+        if (!typeSelect || !language) return;
+        var posted = form.querySelector('input[type="hidden"][name="type"]');
+        function apply(changed) {
+            var type = posted ? posted.value : typeSelect.value;
+            var option = typeSelect.options[typeSelect.selectedIndex];
+            var allowed = ((option && option.getAttribute('data-languages')) || 'kuery kql lucene').split(' ');
+            Array.prototype.forEach.call(language.options, function (o) { o.disabled = allowed.indexOf(o.value) === -1; });
+            if (allowed.indexOf(language.value) === -1) language.value = allowed[0];
+            form.querySelectorAll('[data-rule-types]').forEach(function (block) {
+                var on = block.getAttribute('data-rule-types').split(' ').indexOf(type) !== -1;
+                block.hidden = !on;
+                block.querySelectorAll('input[name], select[name], textarea[name]').forEach(function (field) { field.disabled = !on; });
+            });
+            var query = form.querySelector('#rule-query');
+            if (changed && TYPED.indexOf(type) !== -1 && query && !query.value.trim()) query.value = '*:*';
+            onType(type);
+        }
+        typeSelect.addEventListener('change', function () { apply(true); });
+        apply(false);
+    }
+
+    // Field names to suggest as you type a field (the <datalist>s), from TIDE's field catalogue for
+    // the index patterns given (rules.field_suggestions, which never asks the SIEM). Loaded when a
+    // typed rule's fields are shown, and again when its patterns or destination change.
+    function initFieldSuggestions(form) {
+        var scope = form.querySelector('#rule-scope-pair'), fixed = form.querySelector('input[type="hidden"][name="scope_pair"]');
+        var lists = [['#rule-index', '#rule-source-fields'], ['#rule-threat-index', '#rule-indicator-fields']];
+        var wanted = false;
+        function load(inputSel, listSel) {
+            var input = form.querySelector(inputSel), list = form.querySelector(listSel);
+            var pair = (fixed && fixed.value) || (scope && scope.value) || '';
+            if (!wanted || !input || !list) return;
+            if (!pair || !input.value.trim()) { list.replaceChildren(); return; }
+            fetch('/api/rules/field-suggestions?scope_pair=' + encodeURIComponent(pair) + '&patterns=' + encodeURIComponent(input.value.trim()),
+                  { headers: { 'HX-Request': 'true' } })
+                .then(function (r) { return r.ok ? r.text() : ''; })
+                .then(function (html) { list.innerHTML = html; })
+                .catch(function () { /* no suggestions: any field can still be typed */ });
+        }
+        function loadAll() { lists.forEach(function (l) { load(l[0], l[1]); }); }
+        lists.forEach(function (l) {
+            var input = form.querySelector(l[0]);
+            if (input) input.addEventListener('change', function () { load(l[0], l[1]); });
+        });
+        if (scope) scope.addEventListener('change', loadAll);
+        return function (type) {
+            var was = wanted;
+            wanted = TYPED.indexOf(type) !== -1;
+            if (wanted && !was) loadAll();
+        };
+    }
+
+    // A list of field names (a threshold's Group by, a new terms rule's Fields): a row each, its name
+    // suggested from the rule's index fields, kept as comma-separated text in the hidden input named
+    // by data-field-list. At most three, as Kibana takes; Remove on the last row empties it.
+    function initFieldLists(form) {
+        form.querySelectorAll('[data-field-list]').forEach(function (box) {
+            var hidden = form.querySelector('input[type="hidden"][name="' + box.getAttribute('data-field-list') + '"]');
+            if (!hidden) return;
+            var label = box.getAttribute('data-label') || 'Field', MAX = 3;
+            var values = hidden.value.split(',').map(function (v) { return v.trim(); }).filter(Boolean);
+            if (!values.length) values = [''];
+            function sync() { hidden.value = values.map(function (v) { return v.trim(); }).filter(Boolean).join(', '); }
+            function render(focus) {
+                box.replaceChildren();
+                values.forEach(function (value, i) {
+                    var row = document.createElement('div');
+                    row.className = 'tm-row tm-row--one';
+                    var input = document.createElement('input');
+                    input.type = 'text';
+                    input.className = 'rule-form-control mono';
+                    input.value = value;
+                    input.placeholder = label;
+                    input.autocomplete = 'off';
+                    input.setAttribute('list', 'rule-source-fields');
+                    input.setAttribute('aria-label', label);
+                    input.addEventListener('input', function () { values[i] = input.value; sync(); });
+                    var remove = document.createElement('button');
+                    remove.type = 'button';
+                    remove.className = 'btn btn-secondary btn-sm';
+                    remove.textContent = 'Remove';
+                    remove.addEventListener('click', function () {
+                        values.splice(i, 1);
+                        if (!values.length) values = [''];
+                        render();
+                    });
+                    row.append(input, remove);
+                    box.appendChild(row);
+                });
+                if (values.length < MAX) {
+                    var actions = document.createElement('div');
+                    actions.className = 'tm-actions';
+                    var add = document.createElement('button');
+                    add.type = 'button';
+                    add.className = 'btn btn-secondary btn-sm';
+                    add.textContent = 'Add field';
+                    add.addEventListener('click', function () { values.push(''); render(values.length - 1); });
+                    actions.appendChild(add);
+                    box.appendChild(actions);
+                }
+                sync();
+                if (focus !== undefined) box.querySelectorAll('input')[focus].focus();
+            }
+            render();
+        });
+    }
+
+    // Indicator mapping (rule_type_settings): groups joined by OR, each of entries joined by AND, kept
+    // in the hidden JSON input. An entry Kibana holds as "does not match" (Kibana 9.x) is shown as it
+    // is and kept: the form never makes or changes one (047741/TIDE#91).
+    function initThreatMapping(form) {
+        var builder = form.querySelector('#threat-mapping-builder'), hidden = form.querySelector('#rule-threat-mapping');
+        if (!builder || !hidden) return;
+        var groups;
+        try { groups = JSON.parse(hidden.value || '[]'); } catch (_) { groups = []; }
+        function blank() { return { entries: [{ field: '', value: '' }] }; }
+        if (!groups.length) groups = [blank()];
+
+        function sync() {
+            hidden.value = JSON.stringify(groups.map(function (group) {
+                return { entries: group.entries.map(function (e) {
+                    var entry = { field: e.field || '', type: 'mapping', value: e.value || '' };
+                    if (e.negate) entry.negate = true;
+                    return entry;
+                }) };
+            }));
+        }
+        function field(list, value, label, locked, onInput) {
+            var input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'rule-form-control mono';
+            input.value = value || '';
+            input.placeholder = label;
+            input.autocomplete = 'off';
+            input.setAttribute('list', list);
+            input.setAttribute('aria-label', label);
+            if (locked) input.disabled = true;
+            else input.addEventListener('input', function () { onInput(input.value.trim()); sync(); });
+            return input;
+        }
+        function button(text, onClick) {
+            var b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'btn btn-secondary btn-sm';
+            b.textContent = text;
+            b.addEventListener('click', onClick);
+            return b;
+        }
+        function join(text) {
+            var el = document.createElement('div');
+            el.className = 'tm-join';
+            el.textContent = text;
+            return el;
+        }
+        function render(focus) {
+            builder.replaceChildren();
+            groups.forEach(function (group, gi) {
+                if (gi) builder.appendChild(join('OR'));
+                var box = document.createElement('div');
+                box.className = 'tm-group';
+                group.entries.forEach(function (entry, ei) {
+                    if (ei) box.appendChild(join('AND'));
+                    var row = document.createElement('div');
+                    row.className = 'tm-row';
+                    var op = document.createElement('span');
+                    op.className = 'tm-op';
+                    op.textContent = entry.negate ? 'does not match' : 'matches';
+                    var end = entry.negate ? document.createElement('span') : button('Remove', function () {
+                        group.entries.splice(ei, 1);
+                        if (!group.entries.length) groups.splice(gi, 1);
+                        if (!groups.length) groups = [blank()];
+                        render();
+                    });
+                    if (entry.negate) row.title = 'Kibana holds this as "does not match": TIDE keeps it as it is.';
+                    row.append(field('rule-source-fields', entry.field, 'Field', entry.negate, function (v) { entry.field = v; }), op,
+                               field('rule-indicator-fields', entry.value, 'Indicator index field', entry.negate, function (v) { entry.value = v; }), end);
+                    box.appendChild(row);
+                });
+                var actions = document.createElement('div');
+                actions.className = 'tm-actions';
+                actions.appendChild(button('AND', function () { group.entries.push({ field: '', value: '' }); render(gi); }));
+                box.appendChild(actions);
+                builder.appendChild(box);
+            });
+            var more = document.createElement('div');
+            more.className = 'tm-actions';
+            more.appendChild(button('OR', function () { groups.push(blank()); render(groups.length - 1); }));
+            builder.appendChild(more);
+            sync();
+            if (focus !== undefined) {
+                var inputs = builder.querySelectorAll('.tm-group')[focus].querySelectorAll('input:not([disabled])');
+                if (inputs.length) inputs[inputs.length - 2 >= 0 ? inputs.length - 2 : 0].focus();
+            }
+        }
+        render();
+    }
+
     function initForm(form) {
         var mode = form.dataset.mode;
         var scopeSelect = form.querySelector('#rule-scope-pair'), indexInput = form.querySelector('#rule-index');
@@ -98,6 +305,17 @@
         if (scopeSelect) {
             scopeSelect.addEventListener('change', updateDefaultIndex);
             if (mode === 'create') updateDefaultIndex();
+        }
+
+        // A rule that searches a data view: Use index patterns instead shows the patterns to save
+        // in its place (filled with the data view's own); unticked, none are sent.
+        var useIndex = form.querySelector('#rule-use-index'), indexSection = form.querySelector('#rule-index-section');
+        if (useIndex && indexSection && indexInput) {
+            useIndex.addEventListener('change', function () {
+                indexSection.hidden = !useIndex.checked;
+                indexInput.disabled = !useIndex.checked;
+                indexInput.required = useIndex.checked;
+            });
         }
 
         function showError(message) { showFormError(form, message); }
@@ -133,12 +351,15 @@
             clearError();
             if (!enforceEditReason()) { evt.preventDefault(); evt.stopPropagation(); }
         });
+        // Only the form's own save: not a request from something inside it.
         form.addEventListener('htmx:beforeRequest', function (evt) {
+            if (evt.detail.elt !== form) return;
             clearError();
             if (!enforceEditReason()) evt.preventDefault();
         });
 
-        form.addEventListener('htmx:sendError', function () {
+        form.addEventListener('htmx:sendError', function (evt) {
+            if (evt.detail.elt !== form) return;
             showError('TIDE could not be reached, so nothing was saved. Check your connection and try again.');
         });
     }
@@ -175,6 +396,9 @@
 
     TIDE.page('.rule-create-form', function (form) {
         initMitreBuilder(form);
+        initThreatMapping(form);
+        initFieldLists(form);
+        initRuleType(form, initFieldSuggestions(form));
         initForm(form);
     });
 })();

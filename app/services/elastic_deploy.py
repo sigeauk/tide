@@ -35,14 +35,19 @@ def form_prefill(rule: dict) -> dict:
         "risk_score": body.get("risk_score"), "index": body.get("index") or [],
         "timestamp_override": body.get("timestamp_override") or "",
         "highlighted_fields": (body.get("investigation_fields") or {}).get("field_names") or [],
+        # The settings the form shows for some rule types (rules._type_setting_values), and the
+        # filters it shows but leaves as they are.
+        **{k: body.get(k) for k in ("threat_index", "threat_query", "threat_language", "threat_mapping",
+                                    "threat_indicator_path", "threshold", "new_terms_fields", "history_window_start",
+                                    "filters", "threat_filters") if body.get(k)},
     }
 
 
 def payload_from_form(rule: dict, form, username: str, technique_lookup: dict) -> Tuple[Optional[dict], str]:
     """Elastic's rule with the user's changes in the Create Rule form: only the fields changed from
-    what the form showed are laid over Elastic's payload, so everything the form cannot show (new
-    terms, threshold, machine learning and indicator match settings, alert suppression, setup
-    guide, ...) stays as Elastic has it. ``(payload, '')``, or ``(None, why)``."""
+    what the form showed are laid over Elastic's payload, so everything the form cannot show (machine
+    learning settings, filters, alert suppression, setup guide, ...)
+    stays as Elastic has it. ``(payload, '')``, or ``(None, why)``."""
     from app.api.rules import _rule_form_values, changes_against
 
     body = er.kibana_payload(rule, "", enabled=False)

@@ -79,7 +79,7 @@
                 {{ filter_multi('elastic-integration', 'integration', 'Integration', int_opts, picked.integration, 'All', fc.integration or {}, wrap='browser-filter') }}
                 {% set tac_opts = [] %}{% for t in facets.tactics %}{% set _ = tac_opts.append((t, t)) %}{% endfor %}
                 {{ filter_multi('elastic-tactic', 'tactic', 'Tactic', tac_opts, picked.tactic, 'All', fc.tactic or {}, wrap='browser-filter') }}
-                {% set type_opts = [] %}{% for t in facets.types %}{% set _ = type_opts.append((t, t | replace('_', ' '))) %}{% endfor %}
+                {% set type_opts = [] %}{% for t in facets.types %}{% set _ = type_opts.append((t, t | rule_type_name)) %}{% endfor %}
                 {{ filter_multi('elastic-type', 'type', 'Type', type_opts, picked.type, 'All', fc.type or {}, wrap='browser-filter') }}
                 {% set sev_opts = [] %}{% for s in severities %}{% set _ = sev_opts.append((s, s | title)) %}{% endfor %}
                 {{ filter_multi('elastic-severity', 'severity', 'Severity', sev_opts, picked.severity, 'All', fc.severity or {}, wrap='browser-filter') }}

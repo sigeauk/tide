@@ -15,11 +15,13 @@ tenant's ``rule_origins`` table:
   read from the rule itself.
 - ``parent_*``: the copy it was made from, when it was given a new rule id.
 - ``recorded_how``: ``deployed`` (from TIDE's Sigma or Elastic page), ``created`` (Create Rule from
-  a Sigma conversion), ``copied`` (Move/copy), ``updated`` (an upstream update reviewed, all of it
-  or some sections taken), ``unchanged`` (an Elastic update that changes nothing compared, moved
-  to by TIDE at a sync or by the user), ``first_seen`` (found at a sync; its revision is taken as
-  the bundled one at that time), or ``matched`` (a rule converted from Sigma before origins were recorded,
-  found by its Sigma title and tags; only the day it was made is known).
+  a Sigma conversion), ``copied`` (Move/copy), ``duplicated`` (Duplicate, beside it), ``updated``
+  (an upstream update reviewed, all of it or some sections taken), ``unchanged`` (an Elastic update
+  that changes nothing compared, moved to by TIDE at a sync or by the user), ``first_seen`` (found
+  at a sync; its revision is taken as the bundled one at that time), ``matched`` (a rule converted
+  from Sigma before origins were recorded, found by its Sigma title and tags; only the day it was
+  made is known), or ``linked`` (linked by the user in the rule window, ``link``: the revision it
+  was taken from is unknown, so it shows Compare to confirm until reviewed).
 - ``convert_options``: how a Sigma rule was converted (JSON: pipeline, template, index pattern), so
   an upstream update can be converted the same way.
 """
@@ -171,18 +173,86 @@ def copy(conn, source: Key, target: Key, how: str, actor: str = "", parent: bool
     return True
 
 
+SOURCES = {"elastic": "Elastic", "sigma": "Sigma"}
+
+
 def unlink_refused(row: Optional[Dict[str, Any]]) -> Optional[str]:
-    """Why a rule (``row`` its origin) can't be unlinked from an Elastic rule, or None when it can: it
-    must be linked to one, and not be Elastic's own rule installed by Kibana."""
-    if not row or row.get("origin") != "elastic":
-        return "This rule isn't linked to one of Elastic's rules."
+    """Why a rule (``row`` its origin) can't be unlinked from an Elastic or Sigma rule, or None when it
+    can: it must be linked to one, and not be Elastic's own rule installed by Kibana."""
+    if not row or row.get("origin") not in SOURCES:
+        return "This rule isn't linked to one of Elastic's or the Sigma rules."
     if row.get("prebuilt"):
         return "This is Elastic's own rule, installed by Kibana."
     return None
 
 
+def unlinked_name(conn, row: Optional[Dict[str, Any]]) -> str:
+    """The name of the Elastic or Sigma rule an unlinked rule (origin ``none``) was linked to; '' when
+    it was never linked, or that rule is no longer bundled."""
+    if not row or row.get("origin") != "none" or not row.get("upstream_id"):
+        return ""
+    for origin in SOURCES:
+        name = (upstream(conn, origin, row["upstream_id"]) or {}).get("name")
+        if name:
+            return name
+    return ""
+
+
+def search(conn, origin: str, text: str, limit: int = 8) -> List[Dict[str, Any]]:
+    """Elastic's or the Sigma rules (``origin``) whose name holds ``text``, or whose rule id is it: the
+    exact name first, then those still in use, by name. ``[{"rule_id", "name", "deprecated"}]``."""
+    table, name = {"elastic": ("elastic_rules_index", "name"), "sigma": ("sigma_rules_index", "title")}.get(origin, (None, None))
+    text = (text or "").strip()
+    if not table or len(text) < 2:
+        return []
+    try:
+        return [{"rule_id": r, "name": n, "deprecated": s == "deprecated"} for r, n, s in conn.execute(
+            f"SELECT rule_id, {name}, status FROM {table} WHERE {name} ILIKE ? OR rule_id = ? "
+            f"ORDER BY lower({name}) = lower(?) DESC, status = 'deprecated', lower({name}) LIMIT ?",
+            [f"%{text}%", text, text, int(limit)]).fetchall()]
+    except Exception as exc:
+        logger.warning("Searching the %s rules failed: %s", origin, exc)
+        return []
+
+
+def link(db, client_id: str, key: Key, origin: str, upstream_id: str, user_id: Optional[str],
+         actor: str) -> Tuple[int, str]:
+    """Link to an Elastic or Sigma rule (the rule window's Upstream): a rule TIDE didn't know came from
+    one, such as a copy made with Kibana's Duplicate or by hand, so its updates are shown. Which
+    revision it was copied from isn't known, so none is recorded: it shows Compare to confirm until it
+    is reviewed against that rule (keep it as it is, or take sections), or a sync finds Elastic's rule
+    differs from it in nothing compared (rule_updates.settle_unchanged). Nothing changes in Kibana.
+    Returns ``(status, message)``."""
+    from app.services.tenant_manager import tenant_context_for
+    source = SOURCES.get(origin)
+    rule = db.get_rule_by_id(key[0], key[2], siem_id=key[1], client_id=client_id)
+    if not rule or not source:
+        return 404, "Rule not found."
+    if rule.deprecated:
+        return 400, "Kibana no longer has this rule. Restore it first."
+    with tenant_context_for(client_id), db.get_connection() as conn:
+        row = get(conn, key)
+        if row and row.get("origin") in SOURCES:
+            return 400, f"This rule is already linked to {SOURCES[row['origin']]}'s rules: unlink it first."
+        found = upstream(conn, origin, upstream_id)
+        if not found:
+            return 404, f"That rule isn't in the {source} rules built into TIDE."
+        _write(conn, {"rule_id": key[0], "siem_id": key[1], "space": key[2], "origin": origin,
+                      "upstream_id": upstream_id, "prebuilt": False, "recorded_how": "linked",
+                      "recorded_by": actor or "TIDE"})
+    name = found.get("name") or upstream_id
+    message = (f'Linked to {source}\'s "{name}". TIDE doesn\'t know which version it was copied from, so compare '
+               "them once to confirm, then TIDE shows its updates.")
+    db.record_rule_history(rule_id=key[0], siem_id=key[1], space=key[2], client_id=client_id, action="linked",
+                           actor_user_id=user_id, actor_name=actor,
+                           detail={"message": message, "origin": origin, "upstream_id": upstream_id})
+    from app.services import rule_issues
+    rule_issues.refresh_tenant(db, client_id, rule_keys=[key])
+    return 200, message
+
+
 def unlink(db, client_id: str, key: Key, user_id: Optional[str], actor: str) -> Tuple[int, str]:
-    """Unlink from Elastic: the rule stops tracking the Elastic rule TIDE linked it to (wrongly, or it
+    """Unlink from Elastic or Sigma: the rule stops tracking the rule TIDE linked it to (wrongly, or it
     has gone its own way) and is the tenant's own from then on, even under that rule's id: its row
     becomes ``none``, which a sync never links again. Nothing changes in Kibana. Returns ``(status,
     message)``."""
@@ -194,10 +264,11 @@ def unlink(db, client_id: str, key: Key, user_id: Optional[str], actor: str) -> 
         refused = unlink_refused(row)
         if refused:
             return 400, refused
-        name = (upstream(conn, "elastic", row["upstream_id"]) or {}).get("name") or row["upstream_id"]
+        source = SOURCES[row["origin"]]
+        name = (upstream(conn, row["origin"], row["upstream_id"]) or {}).get("name") or row["upstream_id"]
         _write(conn, {"rule_id": key[0], "siem_id": key[1], "space": key[2], "origin": "none",
                       "upstream_id": row["upstream_id"], "recorded_how": "unlinked", "recorded_by": actor or "TIDE"})
-    message = f'Unlinked from Elastic\'s "{name}": TIDE no longer shows its updates for this rule.'
+    message = f'Unlinked from {source}\'s "{name}": TIDE no longer shows its updates for this rule.'
     db.record_rule_history(rule_id=key[0], siem_id=key[1], space=key[2], client_id=client_id, action="unlinked",
                            actor_user_id=user_id, actor_name=actor,
                            detail={"message": message, "upstream_id": row["upstream_id"]})
@@ -353,6 +424,8 @@ STATES = {
     "retired": "Deprecated",
     "removed": "No longer in TIDE",
 }
+# An "update" whose link was made by hand and hasn't been reviewed yet (``link``).
+TO_CONFIRM = "Compare to confirm"
 # Rule Health's Upstream filter: an update or a deprecation names its source (filter_value).
 FILTER_STATES = (("update_elastic", "Elastic update available"), ("update_sigma", "Sigma update available"),
                  ("current", "Up to date"), ("retired_elastic", "Deprecated by Elastic"),
@@ -438,6 +511,13 @@ def _status(row: Dict[str, Any], running: Optional[str] = None) -> Dict[str, Any
                      f"{installed} installed.")
         else:
             title = f"Elastic's version {to_version} is installed, the latest built into TIDE."
+    elif row["recorded_how"] == "linked":
+        # Linked by hand (``link``): the revision it was copied from is unknown, so it is never shown as
+        # up to date on a guess. Reviewing it once (or a sync finding nothing differs) confirms it.
+        state = "update"
+        title = (f'Linked to {source}\'s "{name}" by hand, so TIDE doesn\'t know which version it was copied from. '
+                 f"Compare them once: keep this rule as it is or take what you want, and TIDE shows {source}'s "
+                 "updates from then on.")
     else:
         current_hash = row["e_hash"] if elastic else row["s_hash"]
         if row["upstream_hash"]:
@@ -453,7 +533,8 @@ def _status(row: Dict[str, Any], running: Optional[str] = None) -> Dict[str, Any
         else:   # the upstream rule is unchanged, not this one: rule_updates.unconfirmed_links compares them
             title = f'{source} hasn\'t changed "{name}" since it was taken' + (f" (version {to_version})." if to_version else ".")
     return {
-        "state": state, "label": STATES[state], "title": title, "source": source, "origin": row["origin"],
+        "state": state, "title": title, "source": source, "origin": row["origin"],
+        "label": TO_CONFIRM if state == "update" and row["recorded_how"] == "linked" else STATES[state],
         "upstream_id": row["upstream_id"], "name": name, "prebuilt": bool(row["prebuilt"]),
         "from_version": from_version, "to_version": to_version, "installed_version": row["installed_version"],
         "from_date": row["upstream_date"], "to_date": to_date,

@@ -47,6 +47,7 @@
                 <th data-col="upstream" title="The Elastic or Sigma rule it came from, and whether there is a newer version">Upstream</th>
                 <th data-col="author" class="rt-th--sortable" data-sort-col="author" data-sort-default="asc" title="Sort by author">Author {{ sort_arrow(sort_dir if sort_col == 'author' else '') }}</th>
                 <th data-col="mitre">MITRE</th>
+                <th data-col="type" class="rt-th--sortable" data-sort-col="type" data-sort-default="asc" title="Sort by rule type">Type {{ sort_arrow(sort_dir if sort_col == 'type' else '') }}</th>
                 <th data-col="lang" class="rt-th--sortable" data-sort-col="language" data-sort-default="asc" title="Sort by query language">Lang {{ sort_arrow(sort_dir if sort_col == 'language' else '') }}</th>
                 <th class="rt-cols" data-col="cols"><button type="button" id="rt-cols-btn" class="rt-cols__btn" aria-haspopup="dialog" aria-expanded="false" title="Choose and arrange columns"><span aria-hidden="true">&hellip;</span><span class="sr-only">Choose columns</span></button></th>
             </tr>

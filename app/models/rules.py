@@ -25,6 +25,35 @@ class RuleLanguage(str, Enum):
     LUCENE = "lucene"
 
 
+# Kibana's rule types and query languages as TIDE names them, in the order it lists them (Rule
+# Health's Type and Language filters and Type column, and every message that names a rule type).
+RULE_TYPES = (("query", "Custom query"), ("saved_query", "Saved query"), ("eql", "EQL"), ("esql", "ES|QL"),
+              ("threshold", "Threshold"), ("new_terms", "New terms"), ("threat_match", "Indicator match"),
+              ("machine_learning", "Machine learning"))
+RULE_LANGUAGES = (("kuery", "KQL"), ("lucene", "Lucene"), ("eql", "EQL"), ("esql", "ES|QL"))
+
+
+def rule_type_name(rule_type: Optional[str], in_sentence: bool = False) -> str:
+    """A rule type as TIDE names it ("Indicator match"); ``in_sentence`` for the middle of a
+    sentence ("an indicator match rule"), which keeps EQL and ES|QL as they are."""
+    name = dict(RULE_TYPES).get(rule_type or "", rule_type or "")
+    return name[:1].lower() + name[1:] if in_sentence and not name[:2].isupper() else name
+
+
+def rule_language_name(language: Optional[str]) -> str:
+    """A query language as TIDE names it ("kuery" and "kql" are "KQL"); '' for none, and any other
+    value as it is."""
+    value = str(language or "").strip()
+    return dict(RULE_LANGUAGES).get("kuery" if value.lower() == "kql" else value.lower(), value)
+
+
+def rule_language_of(raw: Optional[Dict[str, Any]]) -> str:
+    """A rule's query language as the Language filter has it ("kql" is "kuery"); '' when it has none,
+    as a machine learning rule does."""
+    language = str((raw or {}).get("language") or "").strip().lower()
+    return "kuery" if language == "kql" else language
+
+
 class ValidationRecord(BaseModel):
     """Record of rule validation by an analyst."""
     rule_name: str
@@ -86,6 +115,17 @@ class DetectionRule(BaseModel):
             return self.raw_data.get("language", "kuery")
         return "kuery"
     
+    @property
+    def query_language(self) -> str:
+        """Its query language as Kibana holds it ("kql" read as "kuery"); '' for none, as a machine
+        learning rule has (``language`` says "kuery" for those)."""
+        return rule_language_of(self.raw_data)
+
+    @property
+    def rule_type(self) -> str:
+        """Kibana's rule type (``query``, ``threat_match``, …; RULE_TYPES)."""
+        return str((self.raw_data or {}).get("type") or "query")
+
     @property
     def query(self) -> str:
         """Extract query from raw_data."""
@@ -201,6 +241,10 @@ class RuleFilters(BaseModel):
     # Upstream checklist: any of "update", "current", "retired", "removed" (rule_origins.STATES) or
     # "own" (did not come from Elastic's or the Sigma rules). Empty = all.
     upstream: List[str] = Field(default_factory=list)
+    # Type and Language checklists: Kibana's rule types and query languages (RULE_TYPES,
+    # RULE_LANGUAGES; rule_language_of). Empty = all.
+    rule_type: List[str] = Field(default_factory=list)
+    language: List[str] = Field(default_factory=list)
     # Validate's Show checklist: any of "valid", "amber", "expired", "never" (a rule's
     # validation_status; database.VALIDATION_STATES). Empty = all.
     validation: List[str] = Field(default_factory=list)

@@ -25,6 +25,7 @@ except ModuleNotFoundError:
     from app.log import log_debug, log_error, log_info
 
 from app.services.tls import Session as TlsSession, describe_error as describe_tls_error, siem_verify
+from app.models.rules import RULE_TYPES, rule_type_name
 
 import logging
 
@@ -972,16 +973,25 @@ def get_esql_index(query):
     return indices
 
 
+# TIDE's note on its copy of a rule that searches a data view: ``{"id", "name"}``. Sync puts the
+# data view's index patterns in the data view's place (``_process_rules``), so this is how TIDE knows.
+DATA_VIEW_NOTE = "tide_data_view"
+
+
 def get_data_view_indices(session, base_url, space, rule):
     """Resolve index patterns from Kibana data view metadata for rules that do not carry `index`."""
-    data_view_id = rule.get("data_view_id") or rule.get("dataViewId")
-    if not data_view_id:
-        return []
+    data_view = get_data_view(session, base_url, space, rule)
+    return data_view["indices"] if data_view else []
 
+
+def get_data_view(session, base_url, space, rule):
+    """The rule's data view as Kibana holds it in ``space``: ``{"id", "name", "indices"}`` (its name,
+    else its index patterns as one text), or None when the rule has none or it couldn't be read."""
+    data_view_id = rule.get("data_view_id") or rule.get("dataViewId")
     if isinstance(data_view_id, list):
         data_view_id = data_view_id[0] if data_view_id else None
     if not data_view_id:
-        return []
+        return None
 
     # Always use /s/{space}/api/... -- see _space_api_prefix and
     # fetch_detection_rules for the full rationale (4.1.14 fix). Do NOT
@@ -992,21 +1002,19 @@ def get_data_view_indices(session, base_url, space, rule):
         res = session.get(endpoint, timeout=10)
         if res.status_code != 200:
             log_debug(f"Data view lookup failed for rule '{rule.get('name', '-')}' ({data_view_id}) in space '{space}': {res.status_code}")
-            return []
+            return None
 
         data = res.json() if res.text else {}
         dv = data.get("data_view", {}) if isinstance(data, dict) else {}
         title = dv.get("title") or ""
-        if not title:
-            return []
-
         indices = [p.strip() for p in str(title).split(',') if p and p.strip()]
-        if indices:
-            log_debug(f"Resolved data view indices for rule '{rule.get('name', '-')}' in space '{space}': {indices}")
-        return indices
+        if not indices:
+            return None
+        log_debug(f"Resolved data view indices for rule '{rule.get('name', '-')}' in space '{space}': {indices}")
+        return {"id": str(data_view_id), "name": str(dv.get("name") or title), "indices": indices}
     except Exception as e:
         log_debug(f"Data view lookup exception for rule '{rule.get('name', '-')}' ({data_view_id}): {e}")
-        return []
+        return None
 
 # ==========================================
 # --- 2. INDEX MAPPINGS ---
@@ -1141,7 +1149,7 @@ def _process_rules(session, base_url, all_rules, check_mappings=True, catalogue=
         workers = min(10, len(dv_tasks))
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {
-                pool.submit(get_data_view_indices, session, base_url, space, rule): idx
+                pool.submit(get_data_view, session, base_url, space, rule): idx
                 for idx, space, rule in dv_tasks
             }
             for fut in as_completed(futures):
@@ -1149,7 +1157,7 @@ def _process_rules(session, base_url, all_rules, check_mappings=True, catalogue=
                 try:
                     dv_results[rule_idx] = fut.result()
                 except Exception:
-                    dv_results[rule_idx] = []
+                    dv_results[rule_idx] = None
         log_info(f"[perf] Resolved {len(dv_tasks)} data view lookups in parallel")
 
     rule_meta_list = []
@@ -1168,12 +1176,9 @@ def _process_rules(session, base_url, all_rules, check_mappings=True, catalogue=
         except Exception:
             sample = None
         indices = r.get('index', []) or []
-        resolved_from_data_view = False
-        if not indices:
-            # Use pre-resolved data view indices (fetched in parallel above)
-            indices = dv_results.get(i, [])
-            if indices:
-                resolved_from_data_view = True
+        data_view = None if indices else dv_results.get(i)   # resolved in parallel above
+        if data_view:
+            indices = data_view["indices"]
         if language == "esql":
             esql_indices = get_esql_index(query)
             if esql_indices:
@@ -1189,9 +1194,11 @@ def _process_rules(session, base_url, all_rules, check_mappings=True, catalogue=
         # fails to run. Persisting resolved ``index`` onto the raw payload
         # here means every downstream consumer (mapping, promotion,
         # preview) sees a portable index list instead of a dangling
-        # data_view_id.
-        if resolved_from_data_view and clean_indices:
+        # data_view_id. TIDE keeps a note of the data view (``DATA_VIEW_NOTE``): Kibana searches
+        # it, not the patterns, so the Edit form shows it and a save is checked against it.
+        if data_view and clean_indices:
             r['index'] = clean_indices
+            r[DATA_VIEW_NOTE] = {"id": data_view["id"], "name": data_view["name"]}
             r.pop('data_view_id', None)
             r.pop('dataViewId', None)
 
@@ -2202,6 +2209,50 @@ def create_detection_rule(
         return False, str(e), None
 
 
+# Duplicate's exception choices, as Kibana's _bulk_action takes them: (include_exceptions,
+# include_expired_exceptions).
+DUPLICATE_EXCEPTIONS = {"all": (True, True), "active": (True, False), "none": (False, False)}
+
+
+def duplicate_rule(rule_id: str, space: str, kibana_url: str, api_key: str,
+                   exceptions: str = "all") -> Tuple[bool, str, Optional[dict]]:
+    """Kibana's own Duplicate of the rule held under the portable ``rule_id`` in ``space``: a copy in
+    the same space under a new rule id, named "<name> [Duplicate]" and disabled, keeping its author,
+    data view and actions. ``exceptions`` (``DUPLICATE_EXCEPTIONS``): "all" copies the rule's own
+    exception list with every item and keeps the lists it shares; "active" leaves out expired items;
+    "none" takes no lists at all, shared ones too (Kibana 8.19).
+
+    Returns ``(ok, why not, the copy as Kibana created it)``."""
+    if not (kibana_url and api_key):
+        return False, "This SIEM has no Kibana URL or API key configured.", None
+    session = _make_session(api_key, kibana_url)
+    base_url = kibana_url.rstrip("/")
+    try:
+        live = _lookup_rule_by_rule_id(session, base_url, space, rule_id)
+    except Exception as exc:
+        return False, f"Could not read the rule from Kibana: {exc}", None
+    if not live:
+        return False, "Kibana no longer has this rule in this space. Sync it, then try again.", None
+    include, expired = DUPLICATE_EXCEPTIONS.get(exceptions, DUPLICATE_EXCEPTIONS["all"])
+    try:
+        response = session.post(f"{_space_api_prefix(base_url, space)}/api/detection_engine/rules/_bulk_action",
+                                 json={"action": "duplicate", "ids": [live["id"]],
+                                       "duplicate": {"include_exceptions": include, "include_expired_exceptions": expired}},
+                                 timeout=60)
+    except Exception as exc:
+        return False, f"Could not reach Kibana: {exc}", None
+    try:
+        attributes = (response.json() or {}).get("attributes") or {}
+    except ValueError:
+        attributes = {}
+    made = (attributes.get("results") or {}).get("created") or []
+    if response.status_code != 200 or not made:
+        errors = attributes.get("errors") or []
+        return False, (errors[0].get("message") if errors and errors[0].get("message") else _kibana_error(response)), None
+    log_info(f"Duplicated rule {rule_id} in {space} as {made[0].get('rule_id')} (exceptions: {exceptions})")
+    return True, "", made[0]
+
+
 # ── Rules whose stored API key Kibana can't decrypt ──────────────────────────────────────────
 # A rule created or imported under another xpack.encryptedSavedObjects.encryptionKey keeps an
 # apiKey the target Kibana can't read, and updating it fails with "Unable to decrypt attribute
@@ -2361,6 +2412,9 @@ def apply_rule_changes(
     ``cached`` is TIDE's copy the edit was made from. When a field being changed was changed in
     Kibana since that copy, nothing is written: saving would silently overwrite someone else's change.
 
+    New index patterns on a rule that searches a data view replace the data view: Kibana searches a
+    rule's data view whenever it has one and ignores its index patterns (Kibana 8.19).
+
     Returns ``(outcome, message, before)``: outcome is "updated", "conflict", "missing" or "error";
     ``before`` is the rule as Kibana held it (None when it couldn't be read).
     """
@@ -2376,13 +2430,20 @@ def apply_rule_changes(
         return "missing", "Kibana no longer has this rule in this space, so nothing was changed.", None
 
     if cached is not None:
-        conflicts = [k for k in (*changes, *remove)
+        cached = as_kibana_holds(cached)
+        replaced = ("data_view_id",) if "index" in changes and cached.get("data_view_id") else ()
+        conflicts = [k for k in (*changes, *remove, *replaced)
                      if not _same(live.get(k), cached.get(k)) and not _same(live.get(k), changes.get(k))]
         if conflicts:
             return "conflict", ", ".join(conflicts), live
 
     rule = {k: v for k, v in live.items() if k not in _SERVER_FIELDS and k not in remove}
     rule.update(changes)
+    switched = ""
+    if "index" in changes and (rule.get("data_view_id") or rule.get("dataViewId")):
+        rule.pop("data_view_id", None)
+        rule.pop("dataViewId", None)
+        switched = "It now searches these index patterns instead of its data view."
     if "timestamp_override" in remove:
         rule.pop("timestamp_override_fallback_disabled", None)
     if rule.get("type") == "esql":
@@ -2403,7 +2464,7 @@ def apply_rule_changes(
             return "error", f"Could not reach Kibana: {exc}. Check the rule in Kibana before trying again.", live
         if ok:
             log_info(f"Re-created rule {rule_id} in {space} as {rule.get('type')}: {', '.join(sorted({*changes, *remove}))}")
-        return ("updated" if ok else "error"), note, live
+        return ("updated", " ".join(filter(None, (note, switched))), live) if ok else ("error", note, live)
     try:
         response, note = _put_rule(session, base_url, space, rule, on_recreated)
     except Exception as exc:
@@ -2411,14 +2472,23 @@ def apply_rule_changes(
     if response.status_code not in (200, 201):
         return "error", _kibana_error(response) + (f" {note}" if note else ""), live
     log_info(f"Updated rule {rule_id} in {space}: {', '.join(sorted({*changes, *remove}))}")
-    return "updated", note or "", live
+    return "updated", " ".join(filter(None, (note, switched))), live
+
+
+def as_kibana_holds(rule: dict) -> dict:
+    """TIDE's copy of a rule as Kibana holds it, to compare the two: a rule that searches a data view
+    has the data view in Kibana, not the index patterns sync put in its place (``DATA_VIEW_NOTE``)."""
+    note = rule.get(DATA_VIEW_NOTE)
+    if not isinstance(note, dict) or not note.get("id"):
+        return rule
+    held = {k: v for k, v in rule.items() if k not in ("index", DATA_VIEW_NOTE)}
+    held["data_view_id"] = note["id"]
+    return held
 
 
 # What an ES|QL rule doesn't take: its query names its indices and does any filtering.
 _NOT_FOR_ESQL = ("index", "filters", "data_view_id", "saved_id")
-_TYPE_NAMES = {"query": "custom query", "saved_query": "saved query", "eql": "EQL", "esql": "ES|QL",
-               "threshold": "threshold", "threat_match": "indicator match", "new_terms": "new terms",
-               "machine_learning": "machine learning"}
+_TYPE_NAMES = {t: rule_type_name(t, in_sentence=True) for t, _ in RULE_TYPES}   # "custom query", "EQL", ...
 
 
 def _a(name: str) -> str:

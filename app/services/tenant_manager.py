@@ -417,8 +417,9 @@ def _create_tenant_schema(conn):
             client_id VARCHAR,
             deprecated BOOLEAN DEFAULT false,
             source_rule_id VARCHAR,
-            kibana_rule_id VARCHAR,     -- raw_data's rule_id ('' if none) and language, kept by every
-            rule_language VARCHAR,      -- writer so lists of rules needn't load the JSON
+            kibana_rule_id VARCHAR,     -- raw_data's rule_id ('' if none), language and type ('' if
+            rule_language VARCHAR,      -- none), kept by every writer so lists of rules needn't load
+            rule_type VARCHAR,          -- the JSON
             PRIMARY KEY (rule_id, siem_id, space)
         )
     """)

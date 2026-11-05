@@ -47,7 +47,7 @@ def review_update(request: Request, rule_id: str, db: DbDep, user: CurrentUser, 
                       if s.get("id") == siem_id and str(s.get("space") or "default") == space), space)
     can_apply = not user or user.can_write("page:rules")
     status = info.get("status")
-    can_unlink = can_apply and bool(status and status["origin"] == "elastic" and not status["prebuilt"])
+    can_unlink = can_apply and bool(status and status["origin"] in ("elastic", "sigma") and not status["prebuilt"])
     return request.app.state.templates.TemplateResponse(
         request, "components/rule_update_diff.html",
         {**info, "siem_id": siem_id, "space": space, "dest_name": dest_name, "can_apply": can_apply, "back": back,
@@ -56,10 +56,74 @@ def review_update(request: Request, rule_id: str, db: DbDep, user: CurrentUser, 
     )
 
 
+@router.get("/upstream-search", response_class=HTMLResponse)
+def search_upstream(request: Request, db: DbDep, user: RequireUser, client_id: ActiveClient,
+                    origin: str = Query("elastic"), target_name: str = Query("")):
+    """Live search behind the Upstream section's link box: Elastic's or the Sigma rules (``origin``)
+    by name, as Add link's search does for rules (the same field names, so its picking script serves
+    both). The swap is outerHTML: every answer is the results wrapper itself."""
+    from app.services import rule_origins
+    with db.get_connection() as conn:
+        found = rule_origins.search(conn, origin, target_name)
+    if len(target_name.strip()) < 2:
+        return HTMLResponse('<div class="rm-add-link__results"></div>')
+    if not found:
+        source = rule_origins.SOURCES.get(origin, "Elastic")
+        return HTMLResponse(f'<div class="rm-add-link__results"><p class="rm-empty">No {source} rule by that name.</p></div>')
+    items = "".join(
+        f'<button type="button" data-click="rule.linkPick" data-name="{escape(r["name"])}" data-rule-id="{escape(r["rule_id"])}">'
+        f'{escape(r["name"])}{" (deprecated)" if r["deprecated"] else ""}</button>' for r in found)
+    return HTMLResponse(f'<div class="rm-add-link__results">{items}</div>')
+
+
+@router.post("/{rule_id}/link-upstream", response_class=HTMLResponse)
+async def link_upstream(request: Request, rule_id: str, db: DbDep, user: RequireUser, client_id: ActiveClient,
+                        siem_id: str = Query(...), space: str = Query("default")):
+    """Link to an Elastic or Sigma rule (the rule window's Upstream): the one picked from the
+    suggestions, else the one the typed name is, exactly (rule_origins.link). The window is drawn
+    again, saying what happened."""
+    from app.api.promotion import _run_in_context
+    from app.api.rules import _build_rule_modal_context
+    from app.services import rule_origins
+
+    if not _in_scope(db, client_id, siem_id, space):
+        return HTMLResponse('<div class="rm-empty">Rule not found.</div>', status_code=404)
+    form = await request.form()
+    origin = str(form.get("origin") or "elastic")
+    source = rule_origins.SOURCES.get(origin, "Elastic")
+    upstream_id = str(form.get("target_rule_id") or "").strip()
+    name = str(form.get("target_name") or "").strip()
+    flash, status = "", 0
+    if not upstream_id and name:
+        with db.get_connection() as conn:
+            exact = [r for r in rule_origins.search(conn, origin, name, limit=20) if r["name"].lower() == name.lower()]
+        upstream_id = exact[0]["rule_id"] if len(exact) == 1 else ""
+        if len(exact) > 1:
+            flash = f'{len(exact)} {source} rules are named "{name}". Pick one from the list.'
+        elif not exact:
+            flash = f'No {source} rule is named "{name}". Pick one from the list.'
+    elif not upstream_id:
+        flash = f"Type the {source} rule's name, then pick it from the list."
+    if upstream_id:
+        username = user.name or user.username
+        status, flash = await _run_in_context(rule_origins.link, db, client_id, (rule_id, siem_id, space), origin,
+                                              upstream_id, user.id, username)
+        if status != 200:
+            flash = f"Could not link it: {flash}"
+    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
+    if not rule:
+        return HTMLResponse('<div class="rm-empty">Rule not found.</div>', status_code=404)
+    response = request.app.state.templates.TemplateResponse(
+        request, "components/rule_modal.html", _build_rule_modal_context(db, client_id, rule, space, siem_id, flash=flash))
+    if status == 200:
+        response.headers["HX-Trigger"] = "refreshRules"
+    return response
+
+
 @router.post("/{rule_id}/unlink-upstream", response_class=HTMLResponse)
 async def unlink_upstream(request: Request, rule_id: str, db: DbDep, user: RequireUser, client_id: ActiveClient,
                           siem_id: str = Query(...), space: str = Query("default")):
-    """Unlink from Elastic (the rule window's Upstream section, the update dialog, Rule Monitoring): see
+    """Unlink from Elastic or Sigma (the rule window's Upstream section, the update dialog, Rule Monitoring): see
     rule_origins.unlink. The rule is then your own, so one still under Elastic's rule id is also given
     its own (promotion._own_rule_id_sync), which stays unlinked. The window reopens on the rule, under
     its new rule id when it has one."""
@@ -74,7 +138,7 @@ async def unlink_upstream(request: Request, rule_id: str, db: DbDep, user: Requi
     held = await _run_in_context(_holds_elastic_id, db, client_id, key)
     status, message = await _run_in_context(rule_origins.unlink, db, client_id, key, user.id, username)
     if status != 200:
-        return _toast("danger", f"Could not unlink it from Elastic: {message}", status)
+        return _toast("danger", f"Could not unlink it: {message}", status)
     kind, shown = "success", rule_id
     if held:
         # Unlinked first, so the rule keeps no link to Elastic's rule under its new rule id, even

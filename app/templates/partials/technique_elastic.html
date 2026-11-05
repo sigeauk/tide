@@ -17,7 +17,7 @@
     <span class="sm-sigma__meta">
       {% if r.severity %}<span class="sev-pill sev-{{ r.severity }}">{{ r.severity | upper }}</span>{% endif %}
       {% if deprecated %}<span class="sm-sigma__gone" title="Elastic no longer maintains it">{{ icon('triangle-alert', '12') }} Deprecated</span>
-      {% else %}<span class="text-muted">{{ 'building block' if r.status == 'building_block' else r.rule_type | replace('_', ' ') }}</span>{% endif %}
+      {% else %}<span class="text-muted">{{ 'Building block' if r.status == 'building_block' else r.rule_type | rule_type_name }}</span>{% endif %}
       <span class="rh-more" data-more>
         {{ more_button('Actions for ' ~ r.name, title='Rule actions', attrs='name="Elastic Rule Actions"') }}
         <span class="rh-more__menu" role="menu" hidden>

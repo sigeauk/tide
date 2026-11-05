@@ -1208,7 +1208,7 @@ async def import_baseline_json(
     imported_ids = {}
     logical_sources = []
     with db.get_connection() as conn:
-        db._ensure_rule_key_columns(conn)   # imported rules fill kibana_rule_id / rule_language
+        db._ensure_rule_key_columns(conn)   # imported rules fill kibana_rule_id / rule_language / rule_type
         for source in source_rules:
             original_id = str(source.get("rule_id") or source.get("source_rule_id") or "").strip()
             if not original_id:
@@ -1231,13 +1231,13 @@ async def import_baseline_json(
                     score_search_time, score_language, score_note, score_override,
                     score_tactics, score_techniques, score_author, score_highlights,
                     last_updated, mitre_ids, raw_data, client_id, deprecated, source_rule_id,
-                    kibana_rule_id, rule_language
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, true, ?, ?, ?)
+                    kibana_rule_id, rule_language, rule_type
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, true, ?, ?, ?, ?)
                 ON CONFLICT (rule_id, siem_id, space) DO UPDATE SET
                     name = EXCLUDED.name, severity = EXCLUDED.severity,
                     author = EXCLUDED.author, enabled = EXCLUDED.enabled,
                     raw_data = EXCLUDED.raw_data, mitre_ids = EXCLUDED.mitre_ids,
-                    kibana_rule_id = EXCLUDED.kibana_rule_id, rule_language = EXCLUDED.rule_language,
+                    kibana_rule_id = EXCLUDED.kibana_rule_id, rule_language = EXCLUDED.rule_language, rule_type = EXCLUDED.rule_type,
                     deprecated = true, source_rule_id = EXCLUDED.source_rule_id
                 """,
                 [
@@ -1401,7 +1401,7 @@ async def _import_baseline_payload(payload: dict, client_id: str, system_id: str
     imported_ids = {}
     logical_sources = []
     with db.get_connection() as conn:
-        db._ensure_rule_key_columns(conn)   # imported rules fill kibana_rule_id / rule_language
+        db._ensure_rule_key_columns(conn)   # imported rules fill kibana_rule_id / rule_language / rule_type
         for source in source_rules:
             original_id = str(source.get("rule_id") or source.get("source_rule_id") or "").strip()
             if not original_id:
@@ -1422,13 +1422,13 @@ async def _import_baseline_payload(payload: dict, client_id: str, system_id: str
                     score_search_time, score_language, score_note, score_override,
                     score_tactics, score_techniques, score_author, score_highlights,
                     last_updated, mitre_ids, raw_data, client_id, deprecated, source_rule_id,
-                    kibana_rule_id, rule_language
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, true, ?, ?, ?)
+                    kibana_rule_id, rule_language, rule_type
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, true, ?, ?, ?, ?)
                 ON CONFLICT (rule_id, siem_id, space) DO UPDATE SET
                     name = EXCLUDED.name, severity = EXCLUDED.severity,
                     author = EXCLUDED.author, enabled = EXCLUDED.enabled,
                     raw_data = EXCLUDED.raw_data, mitre_ids = EXCLUDED.mitre_ids,
-                    kibana_rule_id = EXCLUDED.kibana_rule_id, rule_language = EXCLUDED.rule_language,
+                    kibana_rule_id = EXCLUDED.kibana_rule_id, rule_language = EXCLUDED.rule_language, rule_type = EXCLUDED.rule_type,
                     deprecated = true, source_rule_id = EXCLUDED.source_rule_id
                 """,
                 [

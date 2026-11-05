@@ -237,19 +237,20 @@ RULE_REMOVED_UNLINKED = "Removed from TIDE: its destination was unlinked from th
 RULE_REMOVED_NOT_LINKED = "Removed from TIDE: its destination is no longer linked to this client."
 
 
-def rule_json_keys(raw_data) -> Tuple[str, Optional[str]]:
-    """``(kibana_rule_id, rule_language)`` from a rule's Kibana JSON (dict or text), as stored in
-    detection_rules' columns of the same names: '' when the JSON has no rule_id, None when it has
-    no language. Every writer of raw_data keeps them in step."""
+def rule_json_keys(raw_data) -> Tuple[str, Optional[str], str]:
+    """``(kibana_rule_id, rule_language, rule_type)`` from a rule's Kibana JSON (dict or text), as
+    stored in detection_rules' columns of the same names: '' when the JSON has no rule_id or type,
+    None when it has no language. Every writer of raw_data keeps them in step."""
     if isinstance(raw_data, str):
         try:
             raw_data = json.loads(raw_data)
         except Exception:
             raw_data = None
     if not isinstance(raw_data, dict):
-        return "", None
+        return "", None, ""
     language = raw_data.get("language")
-    return str(raw_data.get("rule_id") or ""), (str(language) if language is not None else None)
+    return (str(raw_data.get("rule_id") or ""), (str(language) if language is not None else None),
+            str(raw_data.get("type") or ""))
 
 
 def kibana_utc(value) -> Optional[datetime]:
@@ -300,6 +301,12 @@ RULE_KEY_BACKFILL_SQL = (
     "kibana_rule_id = CASE WHEN json_valid(raw_data) THEN COALESCE(json_extract_string(raw_data, '$.rule_id'), '') ELSE '' END, "
     "rule_language = CASE WHEN json_valid(raw_data) THEN json_extract_string(raw_data, '$.language') END "
     "WHERE kibana_rule_id IS NULL"
+)
+# rule_type came later (6.3.5): filled on its own for rows that have the other two.
+RULE_TYPE_BACKFILL_SQL = (
+    "UPDATE detection_rules SET "
+    "rule_type = CASE WHEN json_valid(raw_data) THEN COALESCE(json_extract_string(raw_data, '$.type'), '') ELSE '' END "
+    "WHERE rule_type IS NULL"
 )
 
 
@@ -5106,9 +5113,9 @@ class DatabaseService:
             return rule_origins.statuses(conn, keys)
 
     def _ensure_rule_key_columns(self, conn) -> None:
-        """Add detection_rules.kibana_rule_id / rule_language and fill them for rows written before
-        they existed, once per tenant DB per process. A row whose JSON has no rule_id gets '', so
-        the backfill never runs over the same rows twice."""
+        """Add detection_rules.kibana_rule_id / rule_language / rule_type and fill them for rows
+        written before they existed, once per tenant DB per process. A row whose JSON has no rule_id
+        or type gets '', so the backfill never runs over the same rows twice."""
         from app.services.tenant_manager import get_tenant_db_path
         key = get_tenant_db_path()
         if key in self._rule_keys_ready:
@@ -5116,7 +5123,9 @@ class DatabaseService:
         try:
             conn.execute("ALTER TABLE detection_rules ADD COLUMN IF NOT EXISTS kibana_rule_id VARCHAR")
             conn.execute("ALTER TABLE detection_rules ADD COLUMN IF NOT EXISTS rule_language VARCHAR")
+            conn.execute("ALTER TABLE detection_rules ADD COLUMN IF NOT EXISTS rule_type VARCHAR")
             conn.execute(RULE_KEY_BACKFILL_SQL)
+            conn.execute(RULE_TYPE_BACKFILL_SQL)
         except duckdb.CatalogException:
             return   # no detection_rules here yet: the first sync creates it with the columns
         self._rule_keys_ready.add(key)
@@ -5359,7 +5368,17 @@ class DatabaseService:
             if filters.max_score is not None:
                 query += " AND score <= ?"
                 params.append(filters.max_score)
-            
+
+            # Type and Language, from their columns (rule_json_keys) so the JSON isn't read. A rule
+            # with no type is a custom query, as DetectionRule.rule_type has it; "kql" is KQL.
+            if filters.rule_type:
+                query += f" AND COALESCE(NULLIF(rule_type, ''), 'query') IN ({', '.join('?' for _ in filters.rule_type)})"
+                params.extend(filters.rule_type)
+            if filters.language:
+                languages = list(filters.language) + (["kql"] if "kuery" in filters.language else [])
+                query += f" AND LOWER(COALESCE(rule_language, '')) IN ({', '.join('?' for _ in languages)})"
+                params.extend(languages)
+
             # Apply search filter IN SQL (not post-fetch) so pagination works correctly
             if filters.search:
                 search_term = f"%{filters.search}%"
@@ -5680,15 +5699,16 @@ class DatabaseService:
         severity = payload.get("severity")
         enabled = payload.get("enabled")
         mitre_ids = payload.get("mitre_ids") or []
-        kibana_rule_id, rule_language = rule_json_keys(payload)
+        kibana_rule_id, rule_language, rule_type = rule_json_keys(payload)
         with self.get_connection() as conn:
             self._ensure_rule_key_columns(conn)
             row = conn.execute(
                 "UPDATE detection_rules SET name = COALESCE(?, name), "
                 "severity = COALESCE(?, severity), enabled = COALESCE(?, enabled), "
-                "mitre_ids = ?, raw_data = ?, kibana_rule_id = ?, rule_language = ?, last_updated = now() "
+                "mitre_ids = ?, raw_data = ?, kibana_rule_id = ?, rule_language = ?, rule_type = ?, last_updated = now() "
                 "WHERE rule_id = ? AND siem_id = ? AND space = ? RETURNING rule_id",
-                [name, severity, enabled, mitre_ids, raw_json, kibana_rule_id, rule_language, rule_id, siem_id, space],
+                [name, severity, enabled, mitre_ids, raw_json, kibana_rule_id, rule_language, rule_type,
+                 rule_id, siem_id, space],
             ).fetchone()
         return row is not None
 
@@ -6419,25 +6439,29 @@ class DatabaseService:
         State is picked, as the SIEM filter shows it), ``enabled`` by ``"true"``/``"false"``,
         ``state`` by the card's badge, ``upstream`` by ``rule_origins.filter_value`` (``own`` when the
         rule has no origin), ``linked_to`` by destination: how many of the Linked rules are linked
-        to a copy there, and ``validation`` by the rule's validation status (Validate's Show)."""
+        to a copy there, ``validation`` by the rule's validation status (Validate's Show), and
+        ``rule_type`` / ``language`` by the rule's type and query language (``rule_language_of``)."""
+        from app.models.rules import rule_language_of
         from app.services.rule_origins import filter_value, filter_values
         f = filters or RuleFilters()
-        counts = {k: Counter() for k in ("scope", "enabled", "state", "upstream", "linked_to", "validation")}
+        counts = {k: Counter() for k in ("scope", "enabled", "state", "upstream", "linked_to", "validation",
+                                         "rule_type", "language")}
         # Search and score narrow every count; the counted filters, and Validate's date range (which
         # Never validated sets aside), are applied here.
         rules = self.get_rules(f.model_copy(update={
             "siem_id": None, "space": None, "enabled": None, "state": [], "upstream": [], "linked_to": None,
-            "validation": [], "validated_from": None, "validated_to": None,
+            "validation": [], "validated_from": None, "validated_to": None, "rule_type": [], "language": [],
             "page": 1, "page_size": 1_000_000}), client_id=client_id, slim=True)[0]
         offline, links, upstream = self.get_offline_scopes(), self.rule_link_destinations(), self.upstream_statuses()
         states, wanted_upstream = set(normalize_rule_states(f.state)), set(filter_values(f.upstream))
-        wanted_validation = set(f.validation)
+        wanted_validation, wanted_types, wanted_languages = set(f.validation), set(f.rule_type), set(f.language)
         siem = destination_key(f.siem_id or "", f.space) if f.space else ""
         linked_to = f.linked_to if "linked" in states else None
         for r in rules:
             key = (r.rule_id, r.siem_id, r.space)
             dest = destination_key(r.siem_id, r.space)
             badge, up = rule_badge(r, offline, links), filter_value(upstream.get(key))
+            kind, language = r.rule_type, rule_language_of(r.raw_data)
             at_siem = not siem or dest == siem
             # Each filter as it is now. With no State picked, a SIEM leaves deprecated rules out.
             in_siem = not siem or (dest == siem and (bool(states) or not r.deprecated))
@@ -6446,19 +6470,26 @@ class DatabaseService:
             in_upstream = not wanted_upstream or up in wanted_upstream
             in_validation = ((not wanted_validation or r.validation_status in wanted_validation)
                              and in_validated_range(r, f.validated_from, f.validated_to, wanted_validation))
-            if in_status and in_state and in_upstream and in_validation and (states or not r.deprecated):
+            in_type = not wanted_types or kind in wanted_types
+            in_language = not wanted_languages or language in wanted_languages
+            if in_status and in_state and in_upstream and in_validation and in_type and in_language \
+                    and (states or not r.deprecated):
                 counts["scope"][dest] += 1
-            if in_siem and in_state and in_upstream and in_validation:
+            if in_siem and in_state and in_upstream and in_validation and in_type and in_language:
                 counts["enabled"]["true" if r.enabled else "false"] += 1
-            if at_siem and in_status and in_upstream and in_validation:
+            if at_siem and in_status and in_upstream and in_validation and in_type and in_language:
                 counts["state"][rule_badge(r, offline, links, f.linked_to)] += 1
-            if in_siem and in_status and in_state and in_validation:
+            if in_siem and in_status and in_state and in_validation and in_type and in_language:
                 counts["upstream"][up] += 1
-            if badge == "linked" and at_siem and in_status and in_upstream and in_validation:
+            if badge == "linked" and at_siem and in_status and in_upstream and in_validation and in_type and in_language:
                 counts["linked_to"].update(links[key])
-            if in_siem and in_status and in_state and in_upstream and in_validated_range(
+            if in_siem and in_status and in_state and in_upstream and in_type and in_language and in_validated_range(
                     r, f.validated_from, f.validated_to, {"never"}):
                 counts["validation"][r.validation_status] += 1
+            if in_siem and in_status and in_state and in_upstream and in_validation and in_language:
+                counts["rule_type"][kind] += 1
+            if in_siem and in_status and in_state and in_upstream and in_validation and in_type and language:
+                counts["language"][language] += 1
         return counts
 
     def get_rule_links_bulk(
@@ -6748,10 +6779,11 @@ class DatabaseService:
         _si = self._safe_int
         _ss = self._safe_str
 
-        # Parse raw_data (a slim row has none: just the two values lists use, from their columns)
+        # Parse raw_data (a slim row has none: just the values lists use, from their columns)
         if 'raw_data' not in row and 'kibana_rule_id' in row:
             row = {**row, 'raw_data': {k: v for k, v in (('rule_id', row.get('kibana_rule_id')),
-                                                          ('language', row.get('rule_language'))) if v}}
+                                                          ('language', row.get('rule_language')),
+                                                          ('type', row.get('rule_type'))) if v}}
         raw_data = row.get('raw_data')
         if isinstance(raw_data, str):
             try:
@@ -10820,8 +10852,9 @@ class DatabaseService:
                 df[col] = None
         
         df_final = df[target_cols].copy()
-        df_final['kibana_rule_id'] = [k for k, _ in _keys]
-        df_final['rule_language'] = [lang for _, lang in _keys]
+        df_final['kibana_rule_id'] = [k for k, _, _ in _keys]
+        df_final['rule_language'] = [lang for _, lang, _ in _keys]
+        df_final['rule_type'] = [kind for _, _, kind in _keys]
         # Not a detection_rules column: carried along so the score snapshot records the scoring model.
         df_final['scoring_version'] = df['scoring_version'] if 'scoring_version' in df.columns else None
 
@@ -11098,7 +11131,7 @@ class DatabaseService:
                 # and source_rule_id (the sync never sets them) and is no longer deprecated.
                 self._ensure_rule_key_columns(conn)
                 conn.register('rules_source', df_final)
-                col_list = ', '.join(target_cols + ['kibana_rule_id', 'rule_language'])
+                col_list = ', '.join(target_cols + ['kibana_rule_id', 'rule_language', 'rule_type'])
                 conn.execute("""
                     CREATE OR REPLACE TEMP TABLE sync_rules AS
                     SELECT s.* REPLACE (

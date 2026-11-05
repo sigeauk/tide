@@ -89,6 +89,14 @@
                     {{ icon('arrow-right-left', '14') }}<span>Move</span>
                 </button>
                 {% endif %}
+                {% if not rule.deprecated %}
+                <button name="Duplicate" type="button" role="menuitem" class="rh-more__item"
+                        title="Make a copy of this rule in {{ scope_label }}, under a new rule id, as Kibana's Duplicate does"
+                        hx-get="/api/promotion/{{ rule.rule_id }}/duplicate?{{ scope_qs }}"
+                        hx-target="#modal-container" hx-swap="beforeend" hx-include="unset">
+                    {{ icon('copy', '14') }}<span>Duplicate</span>
+                </button>
+                {% endif %}
                 {% if linked_rules | rejectattr('missing') | list %}
                 <button name="Compare Rule Versions" type="button" role="menuitem" class="rh-more__item"
                         title="Compare this rule with a linked rule, and merge one onto the other from there"
@@ -323,7 +331,7 @@
                     {% if details.description %}<p class="rm-desc">{{ details.description }}</p>{% endif %}
                     <dl class="rm-facts">
                         {% if details.risk_score is not none %}<div><dt>Risk score</dt><dd>{{ details.risk_score }}</dd></div>{% endif %}
-                        <div><dt>Language</dt><dd>{{ rule.language | default('kuery') }}</dd></div>
+                        {% if rule.query_language %}<div><dt>Language</dt><dd>{{ rule.query_language | rule_language_name }}</dd></div>{% endif %}
                     </dl>
                     {% if details.indexes %}
                     <div class="rm-chips" title="Index patterns">
@@ -395,7 +403,7 @@
                 <div class="rm-panel rm-panel--logic" data-fold="logic" data-section="logic" data-section-label="Rule logic">
                     <div class="rm-panel__head">
                         {{ collapse_ctl('rule logic') }}
-                        <h3 class="rm-panel__title">Rule logic <span class="rm-lang">{{ rule.language | default('kuery') }}</span></h3>
+                        <h3 class="rm-panel__title">Rule logic{% if rule.query_language %} <span class="rm-lang">{{ rule.query_language | rule_language_name }}</span>{% endif %}</h3>
                         <span class="rm-panel__tools">
                             <button name="Copy Query" type="button" class="btn btn-secondary btn-sm" data-rm-copy="#rm-query">
                                 {{ icon_text('copy', 'Copy', '12') }}
@@ -404,6 +412,66 @@
                         </span>
                     </div>
                     <pre class="query-display rm-query" id="rm-query">{{ rule.query | highlight_query(rule.language) }}</pre>
+                    {# What else decides what the rule matches (rule_type_settings.window_settings). #}
+                    {% set ts = type_settings | default({}) %}
+                    {% if ts.filters %}
+                    <div class="rm-logic-part">
+                        <span class="rm-label">Filters</span>
+                        <ul class="rm-logic-list">{% for f in ts.filters %}<li>{{ f }}</li>{% endfor %}</ul>
+                    </div>
+                    {% endif %}
+                    {% if ts.threshold %}
+                    <div class="rm-logic-part">
+                        <dl class="rm-facts">
+                            <div><dt>Threshold</dt><dd>{{ ts.threshold.value }} or more</dd></div>
+                            {% if ts.threshold.group_by %}<div><dt>Group by</dt><dd class="mono">{{ ts.threshold.group_by | join(', ') }}</dd></div>{% endif %}
+                            {% for field, count in ts.threshold.counts %}<div><dt>Count</dt><dd>{{ count }} or more unique <span class="mono">{{ field }}</span></dd></div>{% endfor %}
+                        </dl>
+                    </div>
+                    {% endif %}
+                    {% if ts.new_terms %}
+                    <div class="rm-logic-part">
+                        <dl class="rm-facts">
+                            <div><dt>Fields</dt><dd class="mono">{{ ts.new_terms.fields | join(', ') }}</dd></div>
+                            <div><dt>History window</dt><dd>{{ ts.new_terms.window }}</dd></div>
+                        </dl>
+                    </div>
+                    {% endif %}
+                    {% set ind = ts.indicator %}
+                    {% if ind %}
+                    <div class="rm-logic-part">
+                        <span class="rm-label">Indicator index patterns</span>
+                        <div class="rm-logic-chips">{% for i in ind.index %}<span class="rm-chip rm-chip--mono">{{ i }}</span>{% endfor %}</div>
+                    </div>
+                    <div class="rm-logic-part">
+                        <span class="rm-label">Indicator index query <span class="rm-lang">{{ ind.language | rule_language_name }}</span></span>
+                        <pre class="query-display rm-query">{{ ind.query | highlight_query(ind.language) }}</pre>
+                    </div>
+                    {% if ind.filters %}
+                    <div class="rm-logic-part">
+                        <span class="rm-label">Indicator filters</span>
+                        <ul class="rm-logic-list">{% for f in ind.filters %}<li>{{ f }}</li>{% endfor %}</ul>
+                    </div>
+                    {% endif %}
+                    <div class="rm-logic-part">
+                        <span class="rm-label">Indicator mapping</span>
+                        <div class="tm-builder">
+                            {% for group in ind.mapping %}
+                            {% if not loop.first %}<div class="tm-join">OR</div>{% endif %}
+                            <div class="tm-group">
+                                {% for field, op, value in group %}
+                                {% if not loop.first %}<div class="tm-join">AND</div>{% endif %}
+                                <div class="rm-logic-map"><span class="mono">{{ field }}</span> <span class="tm-op">{{ op }}</span> <span class="mono">{{ value }}</span></div>
+                                {% endfor %}
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    <div class="rm-logic-part">
+                        <span class="rm-label">Indicator prefix override</span>
+                        <span class="mono fs-sm">{{ ind.prefix }}</span>
+                    </div>
+                    {% endif %}
                 </div>
 
                 {% if details.guide_html %}
@@ -552,7 +620,7 @@
                         {% if upstream.state == 'update' %}
                         <button name="Review Update" type="button" class="btn btn-secondary btn-sm"
                                 hx-get="/api/rules/{{ rule.rule_id }}/upstream?{{ scope_qs }}&amp;back=1"
-                                hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">{{ icon_text('git-branch', 'Review update', '13') }}</button>
+                                hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">{{ icon_text('git-branch', ('Compare with ' ~ upstream.source) if upstream.recorded_how == 'linked' else 'Review update', '13') }}</button>
                         {% endif %}
                         {# A custom rule linked to an Elastic rule it doesn't match (rule_updates.unconfirmed_links):
                            compare, then keep the link or unlink it. Any custom rule linked to one can be unlinked
@@ -571,11 +639,34 @@
                         <button name="Unlink From Elastic" type="button" class="btn btn-secondary btn-sm"
                                 hx-post="/api/rules/{{ rule.rule_id }}/unlink-upstream?{{ scope_qs }}"
                                 hx-target="body" hx-swap="beforeend" hx-include="unset"
-                                hx-confirm="Unlink this rule from Elastic's &quot;{{ upstream.name or upstream.upstream_id }}&quot;? TIDE then treats it as your own rule and no longer shows Elastic's updates for it.{% if holds_elastic_id %} It also gives it its own rule id, in place of Elastic's: TIDE creates it again in Kibana under a new rule id and deletes this one. Kibana keeps this rule's past alerts and runs with the original.{% else %} Nothing changes in Kibana.{% endif %}">{{ icon_text('unlink', 'Unlink from Elastic', '13') }}</button>
+                                hx-confirm="Unlink this rule from {{ upstream.source }}'s &quot;{{ upstream.name or upstream.upstream_id }}&quot;? TIDE then treats it as your own rule and no longer shows {{ upstream.source }}'s updates for it.{% if holds_elastic_id %} It also gives it its own rule id, in place of Elastic's: TIDE creates it again in Kibana under a new rule id and deletes this one. Kibana keeps this rule's past alerts and runs with the original.{% else %} Nothing changes in Kibana.{% endif %}">{{ icon_text('unlink', 'Unlink from ' ~ upstream.source, '13') }}</button>
                         {% endif %}
                     </div>
                     {% else %}
-                    <p class="rm-empty">{% if unlinked_from %}Your own rule: unlinked from Elastic's &ldquo;{{ unlinked_from }}&rdquo;.{% else %}Your own rule: it did not come from Elastic's rules or the Sigma rules.{% endif %}</p>
+                    <p class="rm-empty">{% if unlinked_from %}Your own rule: unlinked from &ldquo;{{ unlinked_from }}&rdquo;.{% else %}Your own rule: it did not come from Elastic's rules or the Sigma rules.{% endif %}</p>
+                    {% if not rule.deprecated %}
+                    {# A copy TIDE didn't know about (Kibana's Duplicate, made by hand): link it to the Elastic or
+                       Sigma rule it came from, to see its updates (rule_origins.link). Built as Add link is: the
+                       source, the name with its suggestions (picking one fills target_rule_id), then the button. #}
+                    <p class="text-muted rm-upstream__note">Copied from one of Elastic's or the Sigma rules? Link it, and TIDE shows that rule's updates for it.</p>
+                    <form class="rm-add-link" hx-post="/api/rules/{{ rule.rule_id }}/link-upstream?{{ scope_qs }}"
+                          hx-target="#modal-container" hx-swap="innerHTML">
+                        <select name="origin" class="form-input" aria-label="Elastic's or the Sigma rules" data-change="rule.linkScope">
+                            <option value="elastic">Elastic</option>
+                            <option value="sigma">Sigma</option>
+                        </select>
+                        <div class="rm-add-link__name">
+                            <input type="text" name="target_name" class="form-input" placeholder="Its name…" value="{{ upstream_guess }}"
+                                   required autocomplete="off" aria-label="Name of the rule it came from"
+                                   data-input="rule.linkName"
+                                   hx-get="/api/rules/upstream-search" hx-trigger="keyup changed delay:300ms, focus"
+                                   hx-include="closest form" hx-target="next .rm-add-link__results" hx-swap="outerHTML">
+                            <div class="rm-add-link__results"></div>
+                        </div>
+                        <input type="hidden" name="target_rule_id" value="">
+                        <button name="Link Upstream" type="submit" class="btn btn-secondary btn-sm">Link for updates</button>
+                    </form>
+                    {% endif %}
                     {% endif %}
                     {# Changes Kibana made but TIDE couldn't record (pending_actions: a new rule id, a move, a
                        restore): Finish in TIDE completes TIDE's part without changing Kibana again. #}
@@ -651,16 +742,17 @@
                     {% else %}
                     <p class="rm-empty">Not linked to another rule.</p>
                     {% endif %}
-                    {% if move_targets %}
-                    {# Destination, then the name with its suggestions, then Add link: the suggestions
-                       list sits in the flow, so it pushes Add link down instead of covering it.
+                    {% if link_targets %}
+                    {# Destination (this rule's own last, for a duplicate beside it), then the name with its
+                       suggestions, then Add link: the suggestions list sits in the flow, so it pushes Add
+                       link down instead of covering it.
                        Picking a suggestion fills target_rule_id (names repeat within a destination);
                        typing again clears it. #}
                     <form class="rm-add-link" hx-post="/api/rules/{{ rule.rule_id }}/links?{{ scope_qs }}"
                           hx-target="#modal-container" hx-swap="innerHTML">
                         <select name="target_scope" class="form-input" aria-label="Destination to link to"
                                 data-change="rule.linkScope">
-                            {% for t in move_targets %}
+                            {% for t in link_targets %}
                             <option value="{{ t.siem_id }}|{{ t.space }}">{{ t.name }}</option>
                             {% endfor %}
                         </select>
