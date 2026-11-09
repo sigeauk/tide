@@ -19,11 +19,11 @@
     <div class="lib-detail__h-row">
         <h2 class="lib-detail__title">{{ v.title }}</h2>
         {% if can_convert %}
-        <button name="Convert Sigma Rule" type="button" class="btn btn-primary btn-sm"
+        <button name="Deploy Sigma Rule" type="button" class="btn btn-primary btn-sm"
                 hx-post="/api/sigma/convert" hx-include="#sigma-settings{% if own_yaml %}, #sigma-own-yaml{% endif %}"
                 {% if sigma_id %}hx-vals='{{ {"sigma_id": sigma_id} | tojson }}'{% endif %}
                 hx-target="#sigma-convert-response" hx-swap="innerHTML"
-                title="Convert it for your SIEM with the settings above; the rule form opens filled in, to change and deploy">{{ icon_text('zap', 'Convert', '14') }}</button>
+                title="Convert it for your SIEM with the settings above and open it in the rule form, to change it first and deploy it">{{ icon_text('rocket', 'Deploy', '14') }}</button>
         {% if own_yaml %}<textarea id="sigma-own-yaml" name="yaml_content" hidden>{{ own_yaml }}</textarea>{% endif %}
         {% endif %}
     </div>
@@ -49,7 +49,7 @@
     </dl>
     {% if v.logsource_definition %}<p class="text-muted text-sm">{{ v.logsource_definition }}</p>{% endif %}
 
-    {% if sigma_id %}{{ deployed_section(deployed | default([]), "Not in any of this client's SIEMs. Convert opens it in the rule form to deploy.") }}{% endif %}
+    {% if sigma_id %}{{ deployed_section(deployed | default([]), "Not in any of this client's SIEMs. Deploy opens it in the rule form, to change it first.") }}{% endif %}
 
     <section class="lib-detail__section">
         <h3 class="lib-detail__h">MITRE ATT&CK</h3>

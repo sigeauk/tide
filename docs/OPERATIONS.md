@@ -25,7 +25,7 @@ Everything TIDE keeps is in `data/`, next to `docker-compose.yml`:
 |------------|---------------|
 | `tide.duckdb` | Users, roles, clients, and SIEM and integration settings. |
 | `credentials.key` | The key that encrypts the SIEM, connector, GitLab and Keycloak credentials TIDE stores. Created on the first start. **Without it, those credentials must be entered again.** |
-| `<client>_<id>.duckdb` | One database per client: its rules, scores, validations, systems and baselines. |
+| `<client>_<id>.duckdb` | One database per client: its rules, scores, validations, systems and baselines. Deleted with the client. |
 | `sigma_pipelines/`, `sigma_templates/` | Your Sigma conversion pipelines and templates. |
 | `log/` | TIDE's log, and the rule-log exports. |
 | `diagnostics-backups/` | A copy of a client's database taken before each Diagnostics fix (the last three). |
@@ -38,14 +38,27 @@ ATT&CK, NIST 800-53, the SigmaHQ rules and Elastic's detection rules and hunting
 
 | What | When | Where |
 |------|------|-------|
-| Rule sync from your SIEMs | Only when someone clicks **Sync** | Rule Health |
+| Rule sync from your SIEMs | When someone clicks **Sync**, or in the maintenance window if it is turned on | Rule Health; Management → Maintenance window |
 | Threat Landscape actors | Only when someone chooses **Sync threats** | Threat Landscape |
 | Rule-log export | Daily, at each SIEM's scheduled time, if turned on | Management → Integrations, a SIEM's card → Rule Logging |
-| Backups | Daily, at the scheduled time, if turned on | Management → Backups |
+| Backups | Daily, at the scheduled time, if turned on; or in the maintenance window | Management → Backups |
+| Maintenance window (sync, back up, reclaim disk space) | On the days and at the time chosen, if turned on | Management → Maintenance window |
 | CVE data (CISA KEV) | Only when someone imports a file | CVE Overview → Actions → Import CVE |
 | Coverage and heatmaps | Worked out each time a page opens | — |
 
-Nothing else runs in the background. A rule sync is always started by a person, for one client at a time.
+Nothing else runs in the background. Outside the maintenance window, a rule sync is always started by a person, for one client at a time.
+
+### The maintenance window
+
+Out of hours, the maintenance window keeps Rule Monitoring current, backs up, and reclaims the disk space database files never give back on their own. It is off until a super admin turns it on in **Settings → Management → Maintenance window**: tick **Run the maintenance window**, choose the days and the start time (server time) and the steps, and **Save**. **Run now** runs it straight away. The steps run in this order, one client at a time:
+
+1. **Sync every client**: each client's destinations, as **Sync** does. A client already syncing is skipped. Each sync is listed in **Diagnostics → Sync activity**, by *maintenance window*.
+2. **Back up**: the backup **Backups** makes. While the window runs it, it replaces the daily backup schedule; how many to keep is still set under **Backups**.
+3. **Reclaim space**: a database file that is 30% or more empty space, and at least 200 MB, is compacted. Compacting needs the files closed, so TIDE restarts: every signed-in page says when, 15 minutes ahead, with **Delay 30 minutes** (up to 2 hours in all, then **Postpone to the next window**). At the restart, TIDE compacts each file as it starts, before opening any, the same way as [by hand](#reclaiming-disk-space): checked table by table, and left untouched if a check fails. The original is kept beside it as `<file>.duckdb.pre-compact-<time>`, until the file is next compacted. TIDE is back within a few minutes. The panel's **Restart now** and **Postpone to the next window** do the same for a super admin.
+
+The panel shows the last run step by step, with each file's size before and after.
+
+Docker must restart TIDE when it stops, as `restart: unless-stopped` in the shipped `docker-compose.yml` does; if you changed that, don't use **Reclaim space**.
 
 ---
 
@@ -97,7 +110,7 @@ Files are written to `data/log/rules/<SIEM>/<date>-<space>-rules.log`, one JSON 
 
 ## How coverage is worked out
 
-**Which rules count for a system.** A rule lives in one destination: a SIEM and one of its spaces. Each system chooses which of its client's destinations count toward its coverage (its **SIEM coverage**), usually the production ones. A rule mapped to a baseline technique covers it on that system only if the rule, or a linked copy of it, is in a counted destination; otherwise the mapping is kept but shows **Not counted**. A system with no SIEM coverage chosen isn't scored.
+**Which rules count for a system.** A rule lives in one destination: a SIEM and one of its spaces. Each system chooses which of its client's destinations count toward its coverage (its **SIEM coverage**), usually the production ones. A rule mapped to a baseline technique covers it on that system only if the rule, or a linked copy of it, is enabled in a counted destination; otherwise the mapping is kept but shows **Not counted**. One Rule Monitoring finds can't work now still counts, but is left out of the system's **Effective** coverage. A system with no SIEM coverage chosen isn't scored.
 
 **Each system has its own copy of a baseline.** Applying a baseline template to a system copies it. Changing one system's copy, including mapping or relinking a rule, never changes the template or another system's copy.
 
@@ -113,7 +126,7 @@ Files are written to `data/log/rules/<SIEM>/<date>-<space>-rules.log`, one JSON 
 
 ### Scheduled backups
 
-Turn them on in **Settings → Management → Backups** (super admins): tick **Back up every day at**, choose the time (server time) and how many backups to keep, and **Save**. **Back up now** makes one straight away.
+Turn them on in **Settings → Management → Backups** (super admins): tick **Back up every day at**, choose the time (server time) and how many backups to keep, and **Save**. **Back up now** makes one straight away. While the [maintenance window](#the-maintenance-window) has its **Back up** step, it makes the backup instead, after syncing.
 
 - Each backup is a folder named for when it was made and the TIDE version that made it, `tide-backup-<date>-<time>-v<version>` (for example `tide-backup-20261020-181056-v6.2.3`), in the folder `BACKUP_PATH` names (default `backups/` next to `docker-compose.yml`). Put it on another disk if you can (see [Configuration](CONFIGURATION.md#optional)). Backups made before 6.2.3 have no version in their name; the Backups panel's **TIDE** column shows it.
 - It holds a copy of every database, `credentials.key` and your Sigma pipelines and templates. TIDE keeps running while it's made.
@@ -234,7 +247,7 @@ Importing adds and never deletes: existing rows are kept, and a baseline whose n
 
 ## Reclaiming disk space
 
-A database file never shrinks on its own: syncs rewrite rows and leave free space behind. To see how much each file could shrink, run:
+A database file never shrinks on its own: syncs rewrite rows and leave free space behind. The [maintenance window](#the-maintenance-window) can reclaim it out of hours. To do it by hand, first see how much each file could shrink:
 
 ```bash
 docker exec tide-app python -m app.scripts.diag_sync --state
@@ -267,6 +280,7 @@ The file is rewritten and checked table by table before it replaces the original
 - **Look up:** everything TIDE holds for one rule, user or destination, with names and spaces shown exactly as stored, so stray spaces or invisible characters are marked.
 - **Sync activity:** every rule and Threat Landscape sync for the last 90 days, with **Retry**.
 - **Fixes:** some checks offer a fix. Fixes are off for every client until a super admin turns on **Allow diagnostic fixes** for it. A fix shows what it will change first, copies the client's database to `data/diagnostics-backups/` before changing anything, and can be undone.
+- **Database files with no client:** database files in `data/` that belong to no client, such as those of a client deleted before TIDE 6.4.0 (which left them behind) or an old CTI database. **Delete these files** lists them again and, once you type the word it asks for, deletes them for good (super admins only).
 - **Access:** who has Platform Admin and who has Support on each client (super admins only).
 - **Query:** run a read-only SQL statement against TIDE's own database or a client's, and save the ones you use again (super admins only). It runs on a copy of the database, so it never changes or holds up the live one.
 

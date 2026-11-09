@@ -6,7 +6,7 @@
 {% from "macros/icons.html" import icon, icon_text %}
 
 {% macro severity(s) -%}
-<span class="status-pill status-{{ 'danger' if s == 'error' else 'warning' }}">{{ 'Error' if s == 'error' else 'Warning' }}</span>
+<span class="status-pill status-{{ {'error': 'danger', 'info': 'info'}.get(s, 'warning') }}">{{ {'error': 'Error', 'info': 'Info'}.get(s, 'Warning') }}</span>
 {%- endmacro %}
 
 {# How long since ``when``, at the time of this view. #}
@@ -34,12 +34,12 @@ hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset" hx-trigger="
     <tbody>
     {% for f in rows | sort(attribute='sort_name') %}
         {% if f.rule_id %}
-        <tr class="rule-row rule-row--val-{{ 'danger' if f.severity == 'error' else 'warning' }}" {{ open_attrs(f) }}>
+        <tr class="rule-row rule-row--val-{{ {'error': 'danger', 'info': 'info'}.get(f.severity, 'warning') }}" {{ open_attrs(f) }}>
             <td class="rt-name"><span class="rt-title" title="{{ f.name }}">{{ f.name or f.rule_id }}</span></td>
             <td class="rt-sub">{{ f.destination }}</td>
             <td>{{ 'Enabled' if f.enabled else 'Disabled' }}</td>
         {% else %}
-        <tr class="rule-row rule-row--val-{{ 'danger' if f.severity == 'error' else 'warning' }}">
+        <tr class="rule-row rule-row--val-{{ {'error': 'danger', 'info': 'info'}.get(f.severity, 'warning') }}">
             <td class="rt-name"><span class="text-muted">The whole destination</span></td>
             <td class="rt-sub">{{ f.destination }}</td>
             <td></td>
@@ -138,7 +138,7 @@ hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset" hx-trigger="
     <thead><tr><th>Issue</th><th>Cause</th><th>Severity</th><th>For</th><th>What was found</th><th class="rmon-col-mute"><span class="sr-only">Mute</span></th></tr></thead>
     <tbody>
     {% for f in node.rows %}
-        <tr class="rule-row rule-row--val-{{ 'danger' if f.severity == 'error' else 'warning' }}" {% if f.rule_id %}{{ open_attrs(f) }}{% endif %}>
+        <tr class="rule-row rule-row--val-{{ {'error': 'danger', 'info': 'info'}.get(f.severity, 'warning') }}" {% if f.rule_id %}{{ open_attrs(f) }}{% endif %}>
             <td class="rt-name"><span class="rt-title">{{ f.title }}</span> <span class="text-muted">· {{ f.fixer_label }}</span></td>
             <td class="rt-sub">{{ f.cause or '—' }}</td>
             <td>{{ severity(f.severity) }}</td>
@@ -152,7 +152,8 @@ hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset" hx-trigger="
 </div>
 {%- endmacro %}
 
-{# A cause's actions: Raise issue, Sync, Mute cause… or Unmute cause, then at the end of the row the GitLab
+{# A cause's actions: Raise issue, the cause's own fix (such as Expect new data every… on an index pattern gone
+   quiet, rule_monitoring.window_form), Sync, Mute cause… or Unmute cause, then at the end of the row the GitLab
    issues raised for it (open ones and those closed in the last few days, gitlab_issues.shown; state
    and assignee are GitLab's when TIDE last looked), so the buttons stay put. In the group's body, so
    a click never folds the group. #}
@@ -178,6 +179,12 @@ hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset" hx-trigger="
             hx-post="/api/rules/bulk-edit/dialog" hx-vals='{"action": "finish", "items": {{ node.rule_keys | tojson | tojson }}}'
             hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
             title="Record in TIDE the changes Kibana made to these rules">{{ icon_text('check', 'Finish them in TIDE', '13') }}</button>
+    {% endif %}
+    {% if node.issue == 'no_recent_data' %}
+    <button name="Expect New Data Every" type="button" class="btn btn-secondary btn-sm"
+            hx-get="/api/rule-monitoring/window-form?pattern={{ node.cause | urlencode }}&amp;cause_siem_ids={{ node.siem_ids | join(',') | urlencode }}&amp;label={{ node.label | urlencode }}"
+            hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+            title="How often new events should reach this index pattern: for a source that sends now and then, or is retired">{{ icon_text('clock', 'Expect new data every…', '13') }}</button>
     {% endif %}
     {% if node.rule_keys %}
     <button name="Sync These Rules" type="button" class="btn btn-secondary btn-sm"

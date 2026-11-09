@@ -1093,6 +1093,195 @@ def make_field_caps_fetcher(session, base_url, es_direct_url=None):
     return lambda pattern: fetch_field_caps(session, base_url, pattern, es_direct_url)
 
 
+NEWEST_BATCH = 100      # searches per _msearch request
+
+
+def _msearch(session, base_url, es_direct_url, searches, answer):
+    """Run ``searches`` (``(index pattern, body)``) as ``_msearch`` requests of ``NEWEST_BATCH``, through
+    Kibana's console proxy or straight to Elasticsearch, and give each search's answer through
+    ``answer`` (an answer dict -> its result), in order. An index pattern matching no index is
+    allowed; a request that fails is ``("error", why)`` for each of its searches."""
+    out = []
+    for at in range(0, len(searches), NEWEST_BATCH):
+        part = searches[at:at + NEWEST_BATCH]
+        lines = []
+        for pattern, body in part:
+            lines.append(json.dumps({"index": pattern, "ignore_unavailable": True, "allow_no_indices": True}))
+            lines.append(json.dumps(body))
+        data = ("\n".join(lines) + "\n").encode()
+        headers = {"Content-Type": "application/x-ndjson"}
+        try:
+            if es_direct_url:
+                res = session.post(f"{es_direct_url}/_msearch", data=data, headers=headers,
+                                   verify=siem_verify(es_direct_url), timeout=120)
+            else:
+                res = session.post(f"{base_url}/api/console/proxy", params={"path": "/_msearch", "method": "POST"},
+                                   data=data, headers=headers, timeout=120)
+        except Exception as exc:   # noqa: BLE001 - reported per search; the sync goes on
+            out += [("error", f"{type(exc).__name__}: {exc}")] * len(part)
+            continue
+        if res.status_code != 200:
+            out += [("error", f"HTTP {res.status_code}")] * len(part)
+            continue
+        answers = (res.json() or {}).get("responses") or []
+        out += [_answered(answers[i] if i < len(answers) else None) or answer(answers[i]) for i in range(len(part))]
+    return out
+
+
+def _answered(answer) -> Optional[tuple]:
+    """An _msearch answer that is an error, or from an index pattern matching no index, as
+    ``(status, value)``; None for one with results."""
+    if not isinstance(answer, dict):
+        return "error", "no answer"
+    if answer.get("error"):
+        err = answer["error"]
+        return "error", str(err.get("reason") or err.get("type") or err)[:300] if isinstance(err, dict) else str(err)[:300]
+    if not ((answer.get("_shards") or {}).get("total") or 0):
+        return "no_indices", None
+    return None
+
+
+def _newest_answer(answer: dict):
+    """One _msearch answer (``fetch_newest_events``) with results, as (status, value)."""
+    hits = (answer.get("hits") or {}).get("hits") or []
+    value = (hits[0].get("sort") or [None])[0] if hits else None
+    if value is None:
+        return "no_events", None
+    try:
+        return "ok", datetime.fromtimestamp(float(value) / 1000, tz=timezone.utc).replace(tzinfo=None)
+    except (TypeError, ValueError, OverflowError, OSError):
+        return "error", f"not a date: {str(value)[:40]}"
+
+
+def fetch_newest_events(session, base_url, items, es_direct_url=None):
+    """The newest event of each ``(index pattern, timestamp field)`` in ``items``, in order, with one
+    ``_msearch`` per ``NEWEST_BATCH``: ``("ok", naive UTC datetime)``, ``("no_events", None)`` when the
+    pattern's indexes hold no event with that field, ``("no_indices", None)`` when it matches no index,
+    or ``("error", message)``. Each search sorts by the field and returns one hit, which Elasticsearch
+    answers from the field's index without reading the events. An event dated more than five minutes
+    ahead is left out, so one from a device with a wrong clock doesn't hide a source that has stopped.
+    Used by Rule Monitoring's newest-event check (``app.services.data_freshness``)."""
+    return _msearch(session, base_url, es_direct_url, [(pattern, {
+        "size": 1, "_source": False, "track_total_hits": False,
+        "query": {"range": {field: {"lte": "now+5m"}}},
+        "sort": [{field: {"order": "desc", "unmapped_type": "date", "numeric_type": "date"}}]}) for pattern, field in items],
+        _newest_answer)
+
+
+def make_newest_events_fetcher(session, base_url, es_direct_url=None):
+    """An ``items -> answers`` callable for ``DataFreshness.ensure``."""
+    return lambda items: fetch_newest_events(session, base_url, items, es_direct_url)
+
+
+FIELD_DATA_DAYS = 7     # how far back an event with a value in a field counts (Rule Monitoring, #72)
+
+
+def fetch_field_data(session, base_url, items, es_direct_url=None):
+    """Whether any event of the last ``FIELD_DATA_DAYS`` has a value in each ``(index pattern, timestamp
+    field, field)`` of ``items``, in order: ``("has_data", None)``, ``("empty", None)``, ``("no_indices",
+    None)`` or ``("error", message)``. Each search stops at the first such event on each shard, and one
+    for a field no event has a value in is answered from the field's index alone, so it stays cheap on
+    large data. Used by Rule Monitoring's fields-with-no-data check (``data_freshness.FieldData``)."""
+    return _msearch(session, base_url, es_direct_url, [(pattern, {
+        "size": 0, "terminate_after": 1, "track_total_hits": True,
+        "query": {"bool": {"filter": [{"range": {ts: {"gte": f"now-{FIELD_DATA_DAYS}d", "lte": "now+5m"}}},
+                                      {"exists": {"field": field}}]}}}) for pattern, ts, field in items],
+        lambda a: ("has_data" if int(((a.get("hits") or {}).get("total") or {}).get("value") or 0) else "empty", None))
+
+
+def make_field_data_fetcher(session, base_url, es_direct_url=None):
+    """An ``items -> answers`` callable for ``FieldData.ensure``."""
+    return lambda items: fetch_field_data(session, base_url, items, es_direct_url)
+
+
+INGEST_SAMPLE = 1000    # events per shard the ingest delay is measured on (Rule Monitoring, #73)
+_DELAY_SCRIPT = ("if (doc.containsKey('event.ingested') && doc.containsKey('@timestamp') && doc['event.ingested'].size() > 0 "
+                 "&& doc['@timestamp'].size() > 0) { emit(doc['event.ingested'].value.toInstant().toEpochMilli() "
+                 "- doc['@timestamp'].value.toInstant().toEpochMilli()); }")
+
+
+def _delay_answer(answer: dict):
+    sample = (answer.get("aggregations") or {}).get("sample") or {}
+    count = int((sample.get("n") or {}).get("value") or 0)
+    p95 = ((sample.get("delay") or {}).get("values") or {}).get("95.0")
+    return ("ok", (int(p95), count)) if count and p95 is not None else ("no_sample", None)
+
+
+def fetch_ingest_delay(session, base_url, patterns, es_direct_url=None):
+    """How late events reach each of ``patterns``, in order: ``("ok", (p95 ms, events measured))``, the
+    95th percentile of event.ingested minus @timestamp over events that arrived in the last hour;
+    ``("no_sample", None)`` when none did with both fields, ``("no_indices", None)`` or ``("error",
+    message)``. Measured on at most ``INGEST_SAMPLE`` events per shard, so it stays cheap on large data.
+    Used by Rule Monitoring's ingest delay check (``data_freshness.IngestDelay``)."""
+    return _msearch(session, base_url, es_direct_url, [(pattern, {
+        "size": 0, "track_total_hits": False,
+        "query": {"bool": {"filter": [{"range": {"event.ingested": {"gte": "now-1h"}}}, {"exists": {"field": "@timestamp"}}]}},
+        "runtime_mappings": {"tide_ingest_delay_ms": {"type": "long", "script": {"source": _DELAY_SCRIPT}}},
+        "aggs": {"sample": {"sampler": {"shard_size": INGEST_SAMPLE}, "aggs": {
+            "delay": {"percentiles": {"field": "tide_ingest_delay_ms", "percents": [95]}},
+            "n": {"value_count": {"field": "tide_ingest_delay_ms"}}}}}}) for pattern in patterns],
+        _delay_answer)
+
+
+def make_ingest_delay_fetcher(session, base_url, es_direct_url=None):
+    """A ``patterns -> answers`` callable for ``IngestDelay.ensure``."""
+    return lambda patterns: fetch_ingest_delay(session, base_url, patterns, es_direct_url)
+
+
+ALERT_DAYS = 90         # how far back each rule's alerts are counted (Rule Monitoring, #68)
+ALERT_PAGES = 500       # composite pages of 1,000 (rule, day, status) buckets read at most per space
+
+
+def fetch_alert_counts(kibana_url, api_key, space, days=ALERT_DAYS, session=None):
+    """How many alerts each rule in ``space`` raised each day (UTC) of the last ``days``, by workflow
+    status, through Kibana's alert search: ``{"ok": True, "rows": [(rule uuid, rule_id, date, status,
+    alerts)]}``, or ``{"ok": False, "status": HTTP status or None, "error": why}``. A composite
+    aggregation, read 1,000 buckets at a time, so a space with thousands of alerting rules doesn't hit
+    Elasticsearch's limit on buckets. ``kibana.alert.rule.uuid`` tells apart two rules sharing a rule id."""
+    composite = {"size": 1000, "sources": [
+        {"uuid": {"terms": {"field": "kibana.alert.rule.uuid"}}},
+        {"rule_id": {"terms": {"field": "kibana.alert.rule.rule_id", "missing_bucket": True}}},
+        {"day": {"date_histogram": {"field": "@timestamp", "calendar_interval": "day", "format": "yyyy-MM-dd"}}},
+        {"status": {"terms": {"field": "kibana.alert.workflow_status", "missing_bucket": True}}}]}
+    body = {"size": 0, "track_total_hits": False, "query": {"range": {"@timestamp": {"gte": f"now-{int(days)}d/d"}}},
+            "aggs": {"counts": {"composite": composite}}}
+    session = session or _new_session(api_key, kibana_url)
+    url = f"{kibana_url.rstrip('/')}/s/{space}/api/detection_engine/signals/search"
+    rows = []
+    for _page in range(ALERT_PAGES):
+        try:
+            res = session.post(url, json=body, timeout=120)
+        except Exception as exc:   # noqa: BLE001 - reported on the destination; the sync goes on
+            return {"ok": False, "status": None, "error": f"{type(exc).__name__}: {exc}"}
+        if res.status_code != 200:
+            return {"ok": False, "status": res.status_code, "error": f"HTTP {res.status_code}: {res.text[:200]}"}
+        agg = ((res.json() or {}).get("aggregations") or {}).get("counts") or {}
+        for b in agg.get("buckets") or []:
+            k = b.get("key") or {}
+            rows.append((str(k.get("uuid") or ""), str(k.get("rule_id") or ""), str(k.get("day") or ""),
+                         str(k.get("status") or "open"), int(b.get("doc_count") or 0)))
+        if not agg.get("after_key") or len(agg.get("buckets") or []) < composite["size"]:
+            return {"ok": True, "rows": rows}
+        composite["after"] = agg["after_key"]
+    return {"ok": True, "rows": rows, "truncated": True}
+
+
+def fetch_exception_items(kibana_url, api_key, space, lists, session=None):
+    """Every item of each exception list in ``lists`` (``(list_id, namespace_type)``) the rules of
+    ``space`` use (Rule Monitoring, #75): ``{(list_id, namespace_type): [item], or None when Kibana
+    didn't give them all}``. One paged read per list; a list that fails doesn't stop the others."""
+    session = session or _new_session(api_key, kibana_url)
+    base = kibana_url.rstrip("/")
+    out = {}
+    for list_id, namespace_type in sorted(lists):
+        try:
+            out[(list_id, namespace_type)] = get_exception_list_entries(list_id, space, session, base, namespace_type)
+        except Exception as exc:   # noqa: BLE001 - its last items stand; the sync goes on
+            log_error(f"Could not read exception list {list_id} in {space}: {type(exc).__name__}: {exc}")
+            out[(list_id, namespace_type)] = None
+    return out
+
+
 # ==========================================
 # --- 3. SCORING & FETCH ---
 # ==========================================
@@ -1124,13 +1313,19 @@ def _new_session(api_key, url):
 
 
 def _process_rules(session, base_url, all_rules, check_mappings=True, catalogue=None,
-                   elasticsearch_url=None, force_catalogue=False, search_time_history=None, weights=None):
+                   elasticsearch_url=None, force_catalogue=False, search_time_history=None, weights=None,
+                   freshness=None, field_data=None, ingest_delay=None):
     """Turn raw Kibana rule payloads into scored rows.
 
     Field checks read the SIEM's field catalogue; the SIEM is only asked about index
     patterns the catalogue does not know yet, that are older than its refresh window, or
     when ``force_catalogue`` is set. ``search_time_history`` maps ``(rule_id, space)`` to
     ``[(executed_at, ms), ...]`` (this SIEM's recent runs) for the search-time median.
+    ``freshness`` (``app.services.data_freshness.DataFreshness``), when given, is asked for the
+    newest event of every index pattern the rules search, by each timestamp field they use;
+    ``field_data`` (``FieldData``) whether recent events have a value in each field enabled rules
+    match on that their index patterns map (refreshed as ``force_catalogue`` says, else daily);
+    ``ingest_delay`` (``IngestDelay``) how late events reach each pattern enabled rules search by @timestamp.
     """
     from app.services.mapping_catalogue import MappingCatalogue
     if check_mappings and catalogue is None:
@@ -1162,6 +1357,8 @@ def _process_rules(session, base_url, all_rules, check_mappings=True, catalogue=
 
     rule_meta_list = []
     wanted_patterns = set()
+    wanted_newest: Dict[str, set] = {}     # index pattern -> the timestamp fields rules search it by
+    wanted_delay: set = set()              # index patterns enabled rules search by @timestamp
     for i, r in enumerate(all_rules):
         query = r.get('query', '')
         language = normalize_rule_language(r.get('language', 'kuery'))
@@ -1201,6 +1398,15 @@ def _process_rules(session, base_url, all_rules, check_mappings=True, catalogue=
             r[DATA_VIEW_NOTE] = {"id": data_view["id"], "name": data_view["name"]}
             r.pop('data_view_id', None)
             r.pop('dataViewId', None)
+
+        # Kibana searches by the rule's timestamp override, falling back to @timestamp for events without it.
+        override = str(r.get('timestamp_override') or '').strip()
+        by_timestamp = not override or override in ('-', '@timestamp')
+        for p in clean_indices:
+            if not p.startswith(('_', '-')):
+                wanted_newest.setdefault(p, {'@timestamp'}).update([] if by_timestamp else [override])
+                if by_timestamp and r.get('enabled'):        # how late its events arrive matters to it
+                    wanted_delay.add(p)
 
         fields, created = set(), set()
         if check_mappings:
@@ -1242,8 +1448,19 @@ def _process_rules(session, base_url, all_rules, check_mappings=True, catalogue=
                                  force=force_catalogue)
         log_info(f"[perf] Field catalogue: {stats['cached']} cached, {stats['refreshed']} fetched, "
                  f"{stats['failed']} failed of {stats['patterns']} index patterns")
+    if freshness is not None and wanted_newest:
+        t0 = _time.perf_counter()
+        stats = freshness.ensure(wanted_newest, make_newest_events_fetcher(session, base_url, elasticsearch_url))
+        log_info(f"[perf] Newest events: {stats['checked']} of {stats['searches']} searches answered, "
+                 f"{stats['failed']} failed, in {(_time.perf_counter() - t0) * 1000:.0f}ms")
+    if ingest_delay is not None and wanted_delay:
+        t0 = _time.perf_counter()
+        stats = ingest_delay.ensure(wanted_delay, make_ingest_delay_fetcher(session, base_url, elasticsearch_url))
+        log_info(f"[perf] Ingest delay: {stats['checked']} of {stats['searches']} index patterns measured, "
+                 f"{stats['failed']} failed, in {(_time.perf_counter() - t0) * 1000:.0f}ms")
 
     processed_rules = []
+    wanted_fields: Dict[tuple, set] = {}    # (index pattern, timestamp field) -> fields enabled rules match on there
     for meta in rule_meta_list:
         r = meta["raw"]
         rule_language = normalize_rule_language(r.get('language', 'kuery'))
@@ -1281,6 +1498,13 @@ def _process_rules(session, base_url, all_rules, check_mappings=True, catalogue=
                 aux.add('event.ingested')
             aux_facts, _ = catalogue.check(meta["indices"], aux - set(meta["fields"]))
             aux_facts.update({f: v for f, v in field_facts.items() if f in aux})
+            # Fields an enabled rule matches on that its own index patterns map: do recent events fill them?
+            if field_data is not None and r.get('enabled'):
+                override = str(r.get('timestamp_override') or '').strip()
+                ts = override if override and override not in ('-', '@timestamp') else '@timestamp'
+                for idx, field, has, *_x in results:
+                    if has == "Yes" and idx in meta["indices"]:
+                        wanted_fields.setdefault((idx, ts), set()).add(field)
 
         # Search-time median: this run plus the recent runs TIDE has already recorded.
         key = ((r.get('id') or r.get('rule_id')), space_id)
@@ -1337,6 +1561,12 @@ def _process_rules(session, base_url, all_rules, check_mappings=True, catalogue=
         rule_data.pop("field_facts", None)
         rule_data.pop("aux_facts", None)
         processed_rules.append(rule_data)
+    if field_data is not None and wanted_fields:
+        t0 = _time.perf_counter()
+        stats = field_data.ensure(wanted_fields, make_field_data_fetcher(session, base_url, elasticsearch_url),
+                                  force=force_catalogue)
+        log_info(f"[perf] Fields with data: {stats['cached']} cached, {stats['checked']} of {stats['searches']} searches "
+                 f"answered, {stats['failed']} failed, in {(_time.perf_counter() - t0) * 1000:.0f}ms")
     return processed_rules
 
 
@@ -1344,8 +1574,10 @@ _SAVED_OBJECT_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}
 
 
 def fetch_single_rule(kibana_url, api_key, space, rule_id, catalogue=None, elasticsearch_url=None,
-                      force_catalogue=True, search_time_history=None, weights=None):
-    """Fetch and score ONE rule from its SIEM, without listing the space.
+                      force_catalogue=True, search_time_history=None, weights=None, freshness=None, field_data=None,
+                      ingest_delay=None):
+    """Fetch and score ONE rule from its SIEM, without listing the space; with ``freshness``, also
+    check the newest event of each of its index patterns.
 
     Returns a one-row DataFrame, or ``None`` when Kibana says the rule does not exist.
     Raises on any network or HTTP failure so an outage is never mistaken for a deleted rule.
@@ -1371,7 +1603,7 @@ def fetch_single_rule(kibana_url, api_key, space, rule_id, catalogue=None, elast
         return None
     rule['space_id'] = rule.get('space_id') or space
     rows = _process_rules(session, base_url, [rule], True, catalogue, elasticsearch_url,
-                          force_catalogue, search_time_history, weights)
+                          force_catalogue, search_time_history, weights, freshness, field_data, ingest_delay)
     return pd.DataFrame(rows)
 
 
@@ -1390,7 +1622,8 @@ def _preferred(rules: list) -> dict:
 
 def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True, catalogue=None,
                           elasticsearch_url=None, force_catalogue=False, search_time_history=None,
-                          weights=None, siem_label=""):
+                          weights=None, siem_label="", freshness=None, field_data=None,
+                          ingest_delay=None):
     """Fetch detection rules from a single SIEM's Kibana instance.
 
     All connection parameters are mandatory and resolved per-tenant from
@@ -1410,6 +1643,12 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True, cata
             search-time median.
         weights: the client's points per scoring check (defaults when omitted).
         siem_label: the SIEM's name, for log messages.
+        freshness: ``DataFreshness`` for this SIEM: check the newest event of each index pattern
+            the rules search (Rule Monitoring). Not checked when omitted.
+        field_data: ``FieldData`` for this SIEM: check recent events fill the fields enabled rules
+            match on (Rule Monitoring). Not checked when omitted.
+        ingest_delay: ``IngestDelay`` for this SIEM: measure how late events reach the index patterns
+            enabled rules search by @timestamp (Rule Monitoring). Not measured when omitted.
     """
     if not kibana_url or not api_key:
         log_error("fetch_detection_rules: kibana_url and api_key are required")
@@ -1690,7 +1929,8 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True, cata
             all_rules.extend(space_rules)
 
         processed_rules = _process_rules(session, base_url, all_rules, check_mappings, catalogue,
-                                         elasticsearch_url, force_catalogue, search_time_history, weights)
+                                         elasticsearch_url, force_catalogue, search_time_history, weights,
+                                         freshness, field_data, ingest_delay)
         df = pd.DataFrame(processed_rules)
         # Stash per-space diagnostics so the orchestrator can scope its
         # subtractive-delete pass to fully-fetched (siem, space) pairs.

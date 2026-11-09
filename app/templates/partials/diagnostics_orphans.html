@@ -1,0 +1,42 @@
+{#
+  Database files with no client: Delete these files (app.services.client_deletion), a super admin's,
+  inside the check's row as a fix is (partials/diagnostics_fix.html).
+    preview  the files as they are now, and the box to confirm (type delete_orphan_files)
+    refused  why nothing was deleted, with the files again
+    done     what was deleted, and any file that couldn't be
+  Context: mode, rows (file, size, last changed), size, confirm_word, message, done.
+#}
+{% from "macros/icons.html" import icon %}
+{% from "macros/diagnostics_ui.html" import table %}
+
+{% if mode == 'done' %}
+<div class="diag-fix diag-fix--done" role="status">
+    <p>{{ icon('check-circle', '14') }} Deleted {{ done.removed | length }} file{{ 's' if done.removed | length != 1 }} ({{ done.size }}).
+       Run the check again to see what is left.</p>
+    {% for k in done.kept %}
+    <p class="diag-fix__refused" role="alert">{{ icon('triangle-alert', '14') }} Could not delete {{ k.file }}: {{ k.error }}.</p>
+    {% endfor %}
+</div>
+
+{% else %}
+<div class="diag-fix">
+    {% if mode == 'refused' %}
+    <p class="diag-fix__refused" role="alert">{{ icon('triangle-alert', '14') }} {{ message }}</p>
+    {% endif %}
+    {% if rows %}
+    <p><strong>Delete these files</strong>: {{ rows | length }} file{{ 's' if rows | length != 1 }}, {{ size }}. They are deleted
+       for good: no copy is taken first, and nothing can bring them back.</p>
+    {{ table(['file', 'size', 'last changed'], rows) }}
+    <form class="diag-fix__confirm" hx-post="/api/diagnostics/orphans/delete" hx-target="closest .diag-fix" hx-swap="outerHTML"
+          hx-disabled-elt="find button" hx-indicator="find .htmx-indicator">
+        <label class="form-label" for="confirm-orphaned-db-files">Type <code>{{ confirm_word }}</code> to confirm</label>
+        <input id="confirm-orphaned-db-files" name="confirm" class="form-input" autocomplete="off" required
+               pattern="{{ confirm_word }}" title="Type {{ confirm_word }}">
+        <button name="Delete These Files" type="submit" class="btn btn-danger btn-sm">{{ icon('trash-2', '13') }} Delete them</button>
+        <span class="htmx-indicator text-secondary">{{ icon('loader', '14', 'spin') }} Deleting…</span>
+    </form>
+    {% elif mode != 'refused' %}
+    <p class="text-muted">There is no database file without a client now.</p>
+    {% endif %}
+</div>
+{% endif %}

@@ -13,6 +13,7 @@ python-multipart==0.0.32
 # --- Templates ---
 jinja2==3.1.6
 markdown==3.11.2
+nh3==0.3.7          # cleans the HTML Markdown makes from users' descriptions
 
 weasyprint==70.0
 

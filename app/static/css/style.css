@@ -991,6 +991,7 @@ a:hover { color: var(--color-primary); }
 .metric-value.success { color: var(--color-success); }
 .metric-value.warning { color: var(--color-warning); }
 .metric-value.danger  { color: var(--color-danger); }
+.metric-value.info    { color: var(--color-info); }
 
 .metric-label {
   font: var(--small);
@@ -2531,6 +2532,8 @@ a:hover { color: var(--color-primary); }
 
 @media (max-width: 1200px) { .metrics-grid { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 768px)  { .metrics-grid { grid-template-columns: repeat(2, 1fr); } }
+/* A system's figures: seven, Effective beside Covered (#79). */
+@media (min-width: 1201px) { .metrics-grid--7 { grid-template-columns: repeat(7, 1fr); } }
 
 .rules-grid {
   display: grid;
@@ -3104,6 +3107,8 @@ body.light {
  * ACCOUNT GROUP  (sidebar foot: Settings, theme, Log Out — a nav-group like the others)
  * ================================================================ */
 button.nav-child { border: 0; background: none; width: 100%; font: inherit; font-size: 0.85rem; text-align: left; }
+/* Log Out is a form (a POST), which mustn't change the group's layout. */
+.nav-form { display: contents; }
 /* Collapsed sidebar: at the foot, the flyout opens upwards from the account button. */
 .sidebar:not(.expanded) .sidebar-footer .nav-group__items { top: auto; bottom: 0; }
 
@@ -3205,6 +3210,15 @@ body.light.brand-custom {
 .backups__keep { width: 4.5rem; }
 .backups .form-hint { margin: 0; }
 .backups__message { margin: 0; font-size: var(--fs-md); }
+/* The maintenance window (#82): its form, and the restart notice at the top of every signed-in page. */
+.maint-form { display: flex; flex-direction: column; gap: 0.6rem; margin: 0; font-size: var(--fs-md); }
+.maint-form__row { display: flex; align-items: center; flex-wrap: wrap; gap: 0.6rem 0.9rem; }
+.maint-form__label { color: var(--color-text-secondary); }
+.maint-banner { display: flex; align-items: center; gap: 0.75rem; margin: 0 0 1rem; padding: 0.65rem 1rem; border-radius: var(--radius-md);
+  border: 1px solid var(--color-info); background: color-mix(in srgb, var(--color-info) 12%, transparent); font-size: var(--fs-md); }
+.maint-banner__text { flex: 1; }
+.maint-banner__by { color: var(--color-text-secondary); }
+.maint-banner--done { border-color: var(--color-success); background: color-mix(in srgb, var(--color-success) 10%, transparent); }
 .backups__restore > p { margin: 0.6rem 0; font-size: var(--fs-md); }
 .backups__restore .code-block { margin: 0.5rem 0; }
 
@@ -6931,6 +6945,7 @@ body.is-resizing-slide-panel {
 .rule-row--val-success { --edge: var(--color-success); }
 .rule-row--val-warning { --edge: var(--color-warning); }
 .rule-row--val-danger  { --edge: var(--color-danger); }
+.rule-row--val-info    { --edge: var(--color-info); }
 .rule-row--val-muted   { --edge: var(--color-border-strong); }
 .rule-row td { padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--color-border-muted); vertical-align: middle; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rule-row td:first-child { box-shadow: inset 3px 0 0 var(--edge); }
@@ -6944,6 +6959,7 @@ body.is-resizing-slide-panel {
 .rt-name { white-space: normal; }
 .rt-title { font-weight: 600; color: var(--color-text); display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .rt-sub, .rt-author, .rt-type, .rt-lang { color: var(--color-text-secondary); }
+.rt-alerts { text-align: right; font-variant-numeric: tabular-nums; }
 .rt-mitre .mitre-pills-wrap { flex-wrap: nowrap; justify-content: flex-start; overflow: hidden; }
 .rt-score .score-ring { margin: 0 auto; }
 .rules-table .status-pill { max-width: 100%; }
@@ -7066,6 +7082,17 @@ body.is-resizing-slide-panel {
 .rm-chart__line { fill: none; stroke: var(--color-primary); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 .rm-chart__dot { fill: var(--color-bg-surface); stroke: var(--color-primary); stroke-width: 2; }
 .rm-chart__dot:hover { r: 5; }
+.rm-chart__bar { fill: var(--color-primary); }
+.rm-chart__bar-slot:hover .rm-chart__bar { fill: var(--color-primary-hover, var(--color-primary)); opacity: 0.8; }
+.rm-alert-facts { display: block; padding: 0 0.85rem 0.85rem; }
+.rm-alert-facts .rm-runfacts { display: flex; flex-wrap: wrap; gap: 0.6rem 1.5rem; }
+/* A rule's search times in its Last run (#76): under the run facts, as tall as it needs. */
+.rm-search-chart { margin-top: 0.75rem; }
+.rm-search-chart .rm-label { margin-bottom: 0.25rem; }
+.rm-chart--small { max-height: 9rem; }
+/* A rule's exception items (#75): each item's conditions, wrapped, under its name. */
+.rm-exceptions .rm-label { margin: 0.5rem 0 0.25rem; }
+.rm-exceptions__text { font-size: 0.78rem; overflow-wrap: anywhere; margin: 0.15rem 0; }
 .rm-chart__evline { stroke-width: 1; stroke-dasharray: 3 3; opacity: 0.5; }
 .rm-chart__evline--validation { stroke: var(--color-success); }
 .rm-chart__evline--edit { stroke: var(--color-warning); }
@@ -7156,6 +7183,7 @@ body.is-resizing-slide-panel {
 .rm-run-message--danger { border-left-color: color-mix(in srgb, var(--color-danger) 60%, var(--color-bg-base)); }
 .rm-run-message--note { font-family: inherit; font-size: 0.78rem; color: var(--color-text-muted); }
 .rm-note--info { color: var(--color-info-text); border: 1px solid var(--color-info); background: var(--color-info-glow); }
+.rm-note--warn { color: var(--color-warning-text); border: 1px solid var(--color-warning); background: var(--color-warning-glow); }
 .rm-flash { margin: 0.6rem 1.25rem 0; flex-shrink: 0; }
 /* Last run: the run in one row, its schedule in the next, sharing one set of columns (subgrid) so
    they line up; Status sizes to its badge. Narrow, the rows wrap onto three columns. Test sits below. */
@@ -7859,6 +7887,8 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
   border-radius: var(--radius-md); background: var(--bg-level-3-inner);
 }
 .rm-item--warn { border-left-color: var(--color-warning); }
+.rm-item--error { border-left-color: var(--color-danger); }
+.rm-item--info { border-left-color: var(--color-info); }
 .rm-item--gap { border-left-color: var(--color-warning); }
 .rm-item--gap .rm-item__name { color: var(--color-warning-text); }
 .rm-item--na, .rm-item--muted { border-left-color: var(--color-border-strong); }

@@ -134,8 +134,10 @@ def build_report_data(
     if show_defense:
         display_ttps.update(covered_ttps)
 
-    # ── Batch-fetch rule names for all display TTPs ──────────────────────
-    rule_names_by_ttp = _batch_rule_names(db, list(display_ttps))
+    # ── The rules the report counts, for every technique shown: their names per technique come
+    #    from the same rules as the figures, enabled at the client's destinations (#94) ──
+    shown_rules = _counted_rules(db, client_id, display_ttps)
+    rule_names_by_ttp = _rule_names_by_ttp(shown_rules)
 
     # ── Map TTPs where the actor's intel source is OpenCTI ──────────────
     opencti_ttps: Set[str] = set()
@@ -191,6 +193,13 @@ def build_report_data(
     gap_count     = sum(1 for t in relevant_ttps if t not in covered_ttps)
     covered_count = len(relevant_ttps) - gap_count
     coverage_pct  = int(covered_count / len(relevant_ttps) * 100) if relevant_ttps else 0
+
+    # ── The rules counted, their health and effective coverage (#79, #80) ─
+    counted_rules   = {k: (name, tids & relevant_ttps) for k, (name, tids) in shown_rules.items() if tids & relevant_ttps}
+    effective_ttps  = _effective_ttps(counted_rules, client_id) & covered_ttps
+    effective_count = len(relevant_ttps & effective_ttps)
+    effective_pct   = int(effective_count / len(relevant_ttps) * 100) if relevant_ttps else 0
+    rule_health     = _rule_health(db, client_id, counted_rules)
 
     all_rule_names: Set[str] = set()
     for names in rule_names_by_ttp.values():
@@ -249,6 +258,9 @@ def build_report_data(
         "covered_count":             covered_count,
         "gap_count":                 gap_count,
         "coverage_pct":              coverage_pct,
+        "effective_count":           effective_count,
+        "effective_pct":             effective_pct,
+        "rule_health":               rule_health,
         "total_elastic_rules":       total_elastic_rules,
         "sigma_opportunity_count":   sigma_opportunity_count,
         "tactic_coverage_scores":    tactic_coverage_scores,
@@ -259,6 +271,65 @@ def build_report_data(
         "classification":            classification,
         "overlap_table":             overlap_table,
     }
+
+
+# ── The rules counted: health and effective coverage (#79, #80) ─────────────
+
+def _counted_rules(db, client_id: Optional[str], ttps: Set[str]) -> Dict[Tuple[str, str, str], Tuple[str, Set[str]]]:
+    """The rules the report counts toward its techniques, as its coverage does
+    (``get_all_covered_ttps``): enabled, at the client's destinations, carrying any of ``ttps``.
+    ``{(rule_id, siem_id, space): (name, its techniques among ttps)}``."""
+    if not ttps:
+        return {}
+    from app.services.database import _scope_predicate
+    where, params = "enabled = 1", []
+    try:
+        if client_id:
+            scopes = db.get_client_siem_scopes(client_id)
+            if not scopes:
+                return {}
+            frag, params = _scope_predicate(scopes)
+            where += f" AND {frag}"
+        with db.get_connection() as conn:
+            rows = conn.execute(f"SELECT rule_id, siem_id, space, name, mitre_ids FROM detection_rules WHERE {where}",
+                                params).fetchall()
+    except Exception:
+        logger.warning("Could not read the rules a threat report counts", exc_info=True)
+        return {}
+    out: Dict[Tuple[str, str, str], Tuple[str, Set[str]]] = {}
+    for rule_id, siem_id, space, name, mitre_ids in rows:
+        tids = {str(t).strip().upper() for t in (mitre_ids or []) if t} & ttps
+        if tids:
+            out[(rule_id, siem_id, space)] = (name or rule_id, tids)
+    return out
+
+
+def _effective_ttps(counted: Dict[Tuple[str, str, str], Tuple[str, Set[str]]], client_id: Optional[str]) -> Set[str]:
+    """The techniques carried by a counted rule that can work now: none of Rule Monitoring's errors,
+    no field it matches on missing or empty, no runs missing (as a system's Effective, #79)."""
+    from app.inventory_engine import rule_states
+    try:
+        states = rule_states(counted.keys(), client_id=client_id)
+    except Exception:
+        logger.warning("Could not tell which rules a threat report counts are effective", exc_info=True)
+        states = {}
+    return {t for key, (_name, tids) in counted.items() if not (states.get(key) or {}).get("problems") for t in tids}
+
+
+def _rule_health(db, client_id: Optional[str], counted: Dict[Tuple[str, str, str], Tuple[str, Set[str]]]) -> Dict[str, Any]:
+    """The report's Rule health section (rule_issues.report_rule_health) for the rules it counts."""
+    try:
+        names = {(d.get("id"), str(d.get("space") or "default")): d.get("name") or d.get("label")
+                 for d in (db.get_client_siems(client_id) or [])} if client_id else {}
+    except Exception:
+        names = {}
+    try:
+        with db.get_connection() as conn:
+            return rule_issues.report_rule_health(conn, {k: v[0] for k, v in counted.items()}, names)
+    except Exception:
+        logger.warning("Rule health unavailable for a threat report", exc_info=True)
+        return rule_issues.report_rule_health(None, {}, {}) | {"unavailable": True,
+                                                              "summary": "Rule Monitoring's findings couldn't be read, so they aren't shown."}
 
 
 # ── Helper: Top Adversary Overlap ────────────────────────────────────────────
@@ -334,41 +405,17 @@ def _lookup_sigma_opportunities(gap_tids: List[str]) -> Dict[str, List[Dict[str,
     return result
 
 
-# ── Batch rule name fetch ─────────────────────────────────────────────────────
+# ── Rule names per technique ──────────────────────────────────────────────────
 
-def _batch_rule_names(db, technique_ids: List[str]) -> Dict[str, List[str]]:
-    """
-    Fetch rule names for all supplied technique IDs in a single DuckDB query.
-    Returns {technique_id: [rule_name, ...]}
-    """
-    if not technique_ids:
-        return {}
-
-    result: Dict[str, List[str]] = {}
-    try:
-        placeholders = ", ".join(["?" for _ in technique_ids])
-        query = f"""
-            SELECT UPPER(unnested_id) AS tid, name AS rule_name
-            FROM (
-                SELECT unnest(mitre_ids) AS unnested_id, name
-                FROM detection_rules
-                WHERE enabled = 1
-            )
-            WHERE UPPER(unnested_id) IN ({placeholders})
-            ORDER BY tid, rule_name
-        """
-        with db.get_connection() as conn:
-            rows = conn.execute(query, technique_ids).fetchall()
-
-        for tid, rule_name in rows:
-            if tid and rule_name:
-                result.setdefault(tid, [])
-                if rule_name not in result[tid]:
-                    result[tid].append(rule_name)
-    except Exception as exc:
-        logger.error(f"Batch rule-name fetch failed: {exc}")
-
-    return result
+def _rule_names_by_ttp(rules: Dict[Tuple[str, str, str], Tuple[str, Set[str]]]) -> Dict[str, List[str]]:
+    """``{technique_id: [rule name, ...]}`` (each name once, A to Z) from the rules the report counts
+    (``_counted_rules``): never a rule the figures beside it leave out (#94)."""
+    result: Dict[str, Set[str]] = {}
+    for name, tids in rules.values():
+        for tid in tids:
+            if name:
+                result.setdefault(tid, set()).add(name)
+    return {tid: sorted(names, key=str.lower) for tid, names in result.items()}
 
 
 # ── Markdown generator ────────────────────────────────────────────────────────
@@ -403,6 +450,7 @@ def generate_markdown(data: Dict[str, Any]) -> str:
         f"| Selected Actors | {len(data['selected_actors'])} |",
         f"| Total Adversary TTPs | {data['total_ttps']} |",
         f"| Detection Coverage | {data['coverage_pct']}% |",
+        f"| Effective Coverage | {data.get('effective_pct', data['coverage_pct'])}% |",
         f"| Covered TTPs | {data['covered_count']} |",
         f"| Critical Gaps | {data['gap_count']} |",
         f"| Mapped Elastic Rules | {data['total_elastic_rules']} |",
@@ -467,6 +515,11 @@ def generate_markdown(data: Dict[str, Any]) -> str:
                 f"{actors_str_o} | **{row['actor_count']}** |"
             )
         lines.append("")
+
+    # ── Rule health of the rules counted (both audiences, #80) ────────────
+    if data.get("rule_health"):
+        lines += rule_issues.report_rule_health_markdown(data["rule_health"], data.get("rules_synced") or "",
+                                                         level == "technical")
 
     # ── Detailed per-tactic tables (technical only) ───────────────────────
     if level == "technical":

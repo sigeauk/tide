@@ -71,7 +71,7 @@
 </div>
 
 {% if baselines %}
-<div class="metrics-grid" id="system-steps-metrics"
+<div class="metrics-grid metrics-grid--7" id="system-steps-metrics"
      hx-get="/api/systems/{{ system.id }}/steps-metrics"
      hx-trigger="stepsChanged from:body"
      hx-swap="innerHTML">

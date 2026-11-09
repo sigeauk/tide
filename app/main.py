@@ -31,7 +31,7 @@ except Exception:  # pragma: no cover
 from app.config import get_settings
 from app.api.deps import CurrentUser, DbDep, ActiveClient, OptionalClient
 from app.services import keycloak_config
-from app.api import auth, rules, heatmap, threats, promotion, sigma, elastic as elastic_api, rule_upstream as rule_upstream_api, hunting as hunting_api, settings as settings_api, inventory, external_sharing, clients as clients_api, management as management_api, mitre as mitre_api, bulk_edit as bulk_edit_api, diagnostics as diagnostics_api, dashboard as dashboard_api, rule_monitoring as rule_monitoring_api
+from app.api import auth, rules, heatmap, threats, promotion, sigma, elastic as elastic_api, rule_upstream as rule_upstream_api, hunting as hunting_api, settings as settings_api, inventory, external_sharing, clients as clients_api, management as management_api, mitre as mitre_api, bulk_edit as bulk_edit_api, diagnostics as diagnostics_api, dashboard as dashboard_api, rule_monitoring as rule_monitoring_api, maintenance as maintenance_api
 
 # 4.1.0 P1: structured JSON logging with per-request context. Replaces the
 # old basicConfig() call. Format selected by TIDE_LOG_FORMAT env (default
@@ -129,13 +129,14 @@ _sync_jobs: "OrderedDict[str, dict]" = OrderedDict()
 
 
 def _start_sync_job(client_id: str, message: str = "Initialising sync…", *, actor: Optional[str] = None,
-                    scope: Optional[dict] = None, retry_of: Optional[str] = None) -> str:
+                    scope: Optional[dict] = None, retry_of: Optional[str] = None, trigger: str = "manual") -> str:
     """Create a new sync job record and return its id. The run is also recorded in sync_history
     under the same id (app.services.sync_runs), which outlives a restart; this in-memory record
-    only carries the live progress message."""
+    only carries the live progress message. ``trigger``: "manual", or "maintenance" (#82)."""
     from app.services import sync_runs
     job_id = uuid.uuid4().hex
-    sync_runs.start("rules", run_id=job_id, client_id=client_id, actor=actor, scope=scope, retry_of=retry_of)
+    sync_runs.start("rules", run_id=job_id, client_id=client_id, trigger=trigger, actor=actor, scope=scope,
+                    retry_of=retry_of)
     _sync_jobs[job_id] = {
         "state": "running",
         "message": message,
@@ -197,7 +198,7 @@ def get_last_sync_time(rules=None) -> str:
 
 async def scheduled_sync(force_mapping=False, client_id: str | None = None, job_id: str | None = None,
                          only_siem_id: str | None = None, only_space: str | None = None):
-    """Per-tenant Elastic sync, triggered by user actions only.
+    """Per-tenant Elastic sync, triggered by user actions, or the opt-in maintenance window (#82).
 
     Detection rules are per-tenant since 4.1.13 — there is no scheduled
     background sync any more. ``client_id`` is **required**; passing
@@ -311,6 +312,13 @@ async def lifespan(app: FastAPI):
                 "Set a random SESSION_SECRET in the environment before starting TIDE "
                 "(or set AUTH_DISABLED=true for local/dev use only)."
             )
+
+    # The maintenance window's restart (#82): compact the files it chose before any is opened.
+    try:
+        from app.services import maintenance
+        maintenance.reclaim_at_startup()
+    except Exception as exc:
+        logger.error(f"Maintenance window: compacting at startup failed: {exc}", exc_info=True)
 
     # Initialize database
     from app.services.database import get_database_service
@@ -569,8 +577,9 @@ async def lifespan(app: FastAPI):
     try:
         _schedule_rule_log_job(db)
         _schedule_backup_job()
+        _schedule_maintenance_job()
         scheduler.start()
-        logger.info("Scheduler started (rule-log export and backups; sync is per-tenant on demand)")
+        logger.info("Scheduler started (rule-log export, backups and the maintenance window; sync is otherwise on demand)")
     except Exception as exc:
         logger.error(f"Rule-log export scheduler failed to start: {exc}", exc_info=True)
 
@@ -734,14 +743,18 @@ def reschedule_rule_log_job():
 
 def _schedule_backup_job():
     """(Re)schedule the daily backup (Management -> Backups, app.services.backups), or remove it
-    when backups are off. CLAUDE.md Hard Stop 6 (c)."""
-    from app.services import backups
+    when backups are off, or when the maintenance window runs the backup instead. CLAUDE.md Hard
+    Stop 6 (b)."""
+    from app.services import backups, maintenance
     try:
         if scheduler.get_job("tide_backup"):
             scheduler.remove_job("tide_backup")
         schedule = backups.get_schedule()
         if not schedule["enabled"]:
             logger.info("Scheduled backups are off")
+            return
+        if maintenance.takes_backup():
+            logger.info("Backups run in the maintenance window, not on their own schedule")
             return
         hour, minute = (int(x) for x in schedule["time"].split(":"))
         scheduler.add_job(_run_scheduled_backup, "cron", hour=hour, minute=minute, id="tide_backup", replace_existing=True)
@@ -759,6 +772,90 @@ def _run_scheduled_backup():
 def reschedule_backup_job():
     """Called when the backup settings are saved."""
     _schedule_backup_job()
+
+
+# ── The maintenance window (#82, app.services.maintenance; CLAUDE.md Hard Stop 6 (c)) ──
+
+def _schedule_maintenance_job():
+    """(Re)schedule the out-of-hours maintenance window on its days and time, or remove it when it
+    is off; and the restart it announced, if TIDE restarted before it was due."""
+    from app.services import maintenance
+    try:
+        if scheduler.get_job("tide_maintenance"):
+            scheduler.remove_job("tide_maintenance")
+        schedule = maintenance.get_schedule()
+        if schedule["enabled"] and schedule["days"]:
+            hour, minute = (int(x) for x in schedule["time"].split(":"))
+            scheduler.add_job(_run_maintenance_window, "cron", day_of_week=",".join(schedule["days"]), hour=hour,
+                              minute=minute, id="tide_maintenance", replace_existing=True,
+                              kwargs={"trigger": "scheduled", "by": "maintenance window"})
+            logger.info(f"Maintenance window scheduled: {maintenance.summary(schedule)}")
+        else:
+            logger.info("The maintenance window is off")
+        due = maintenance.stale_restart()
+        if due:
+            schedule_maintenance_restart(due)
+    except Exception as e:
+        logger.warning(f"Could not schedule the maintenance window: {e}")
+
+
+def reschedule_maintenance_job():
+    """Called when the maintenance window is saved: its own job, and the backup it may take over."""
+    _schedule_maintenance_job()
+    _schedule_backup_job()
+
+
+def schedule_maintenance_restart(when) -> None:
+    """The restart the window announced (or a delay moved), at ``when``; None cancels it."""
+    if scheduler.get_job("tide_maintenance_restart"):
+        scheduler.remove_job("tide_maintenance_restart")
+    if when is not None:
+        scheduler.add_job(_maintenance_restart, "date", run_date=when, id="tide_maintenance_restart",
+                          replace_existing=True)
+        logger.info(f"Maintenance restart at {when:%Y-%m-%d %H:%M}")
+
+
+def _maintenance_restart():
+    from app.services import db_fatal, maintenance
+    maintenance.request_restart(db_fatal.restart)
+
+
+async def _run_maintenance_window(trigger: str = "scheduled", by: str = "maintenance window"):
+    """The window's steps (maintenance.run): each client synced as the Sync button does, one after
+    another, then the backup, then the files to compact and the restart it announces."""
+    import asyncio
+    from app.services import backups, maintenance, sync_runs
+    from app.services.connection_pool import get_pool
+    from app.services.database import get_database_service
+    db = get_database_service()
+    loop = asyncio.get_running_loop()
+
+    def clients():
+        return [c for c in sorted(db.list_clients(), key=lambda c: (c.get("name") or "").lower())
+                if db.get_client_siems(c["id"])]
+
+    async def sync_client(client_id: str) -> dict:
+        job_id = _start_sync_job(client_id, actor=by, trigger="maintenance")
+        await scheduled_sync(client_id=client_id, job_id=job_id)
+        run = next((r for r in sync_runs.recent([client_id], kind="rules", limit=5) if r["id"] == job_id), None) or {}
+        return {"status": run.get("status") or "success", "detail": run.get("error") or ""}
+
+    async def backup() -> dict:
+        return await loop.run_in_executor(None, lambda: backups.run_now(db, trigger="maintenance", by=by))
+
+    def measure_all() -> list:
+        out = []
+        for d in backups._databases(db):
+            with get_pool().acquire(str(d["path"])) as conn:
+                out.append(maintenance.measure(str(d["path"]), conn))
+        return out
+
+    async def measure_files() -> list:
+        return await loop.run_in_executor(None, measure_all)
+
+    return await maintenance.run(db, trigger=trigger, by=by, clients=clients, sync_running=sync_running,
+                                 sync_client=sync_client, backup=backup, measure_files=measure_files,
+                                 schedule_restart=schedule_maintenance_restart)
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -1488,13 +1585,25 @@ def create_app() -> FastAPI:
 
     # --- Markdown filter for description fields ---
     import markdown as _md_lib
+    import nh3 as _nh3
     import re as _re
+
+    # Descriptions are typed by users (systems, baselines, baseline techniques) as well as bundled
+    # (ATT&CK, NIST), and Markdown passes raw HTML and any link through. Keep only what Markdown
+    # itself makes: no script, style, image or frame, no event, style or class attributes, and
+    # links only to http(s), mailto or a path on TIDE.
+    _MD_TAGS = {"p", "br", "hr", "h1", "h2", "h3", "h4", "h5", "h6", "strong", "em", "b", "i", "code",
+                "pre", "blockquote", "ul", "ol", "li", "a", "table", "thead", "tbody", "tr", "th", "td",
+                "dl", "dt", "dd", "abbr", "sup", "sub"}
+    _MD_ATTRS = {"a": {"href", "title"}, "abbr": {"title"}}
 
     def md_filter(text: str) -> Markup:
         """Convert Markdown text to safe HTML."""
         if not text:
             return Markup("")
         html = _md_lib.markdown(str(text), extensions=["extra", "nl2br", "sane_lists"])
+        html = _nh3.clean(html, tags=_MD_TAGS, attributes=_MD_ATTRS, url_schemes={"http", "https", "mailto"})
+        # After cleaning: the ATT&CK links below gain TIDE's own hx-* attributes, built from a checked id.
 
         def _rewrite_attack_href(match) -> str:
             kind = (match.group(1) or "").lower()
@@ -1539,6 +1648,10 @@ def create_app() -> FastAPI:
     # render the Migration 37 banner without each route plumbing the flag
     # through context.
     templates.env.globals["migration37_resync_required"] = migration37_resync_required
+    # The maintenance window's restart notice on every signed-in page (#82): read from data/, cheap.
+    from app.services import maintenance as _maintenance
+    templates.env.globals["maintenance_notice"] = _maintenance.notice
+    templates.env.globals["maintenance_on"] = lambda: _maintenance.get_schedule()["enabled"] or bool(_maintenance.pending())
 
     # 4.1.0 P4 — content-hashed asset bundles. Reads app/static/manifest.json
     # produced by `python -m app.scripts.build_assets` (run at container
@@ -1786,6 +1899,7 @@ def create_app() -> FastAPI:
     app.include_router(rules.router)
     app.include_router(bulk_edit_api.router)
     app.include_router(rule_monitoring_api.router)
+    app.include_router(maintenance_api.router)
     app.include_router(heatmap.router)
     app.include_router(threats.router)
     app.include_router(promotion.router)
@@ -1853,6 +1967,7 @@ def create_app() -> FastAPI:
         Login page - shows login button that redirects to Keycloak.
         This is a public route (no auth required).
         """
+        next = auth.local_path(next)   # from the URL: only ever a path on TIDE
         # If auth is disabled, redirect to home
         if settings.auth_disabled:
             return RedirectResponse(url=next, status_code=302)
@@ -2866,7 +2981,7 @@ def create_app() -> FastAPI:
                     siem_rule_counts[str(space)] = entry  # legacy fallback
         except Exception as _exc:
             logger.warning(f"siem_rule_counts read for client {client_id} failed: {_exc}")
-        from app.api.management import can_switch_to_client, client_gitlab_context
+        from app.api.management import can_switch_to_client, client_data_windows_context, client_gitlab_context
         return render_template(
             "pages/admin/client_detail.html",
             request,
@@ -2892,6 +3007,7 @@ def create_app() -> FastAPI:
                 "siem_rule_counts_by_pair": siem_rule_counts_by_pair,
                 "all_clients": [c for c in db.list_clients() if c["id"] != client_id],
                 "can_switch": can_switch_to_client(user, client_id, db),
+                **client_data_windows_context(client_id, db),
                 **{k: v for k, v in client_gitlab_context(client_id, db).items() if k != "client"},
             }
         )

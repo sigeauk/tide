@@ -279,6 +279,48 @@
                     {% endif %}
                 </div>
 
+                {# Its alerts (rule_alerts.for_rule, #68): each of the last 30 days as a bar (UTC days; hover
+                   for the count), then those days' alerts by status, and the total since TIDE counts back.
+                   As of the last sync. Only once its space's alerts have been read. #}
+                {% if alerts %}
+                <div class="rm-panel rm-panel--chart" data-fold="alerts" data-section="alerts" data-section-label="Alerts">
+                    <div class="rm-panel__head">
+                        {{ collapse_ctl('alerts') }}
+                        <h3 class="rm-panel__title">Alerts</h3>
+                        {% set _month = alerts.by_status.values() | sum %}
+                        <span class="rm-chart-delta text-muted" title="Alerts in the last {{ alerts.days }} days">{{ '{:,}'.format(_month) }}</span>
+                        {{ drag_ctl('Alerts') }}
+                    </div>
+                    {% if not alerts.read.ok %}
+                    <p class="rm-note rm-note--warn">{{ icon('triangle-alert', '13') }} Its alerts couldn't be read at the last sync{% if alerts.read.error %}: {{ alerts.read.error }}{% endif %}.{% if alerts.total %} These are from the sync before.{% endif %}</p>
+                    {% endif %}
+                    {% if alert_chart %}
+                    <svg class="rm-chart" viewBox="0 0 {{ alert_chart.width }} {{ alert_chart.height }}" role="img"
+                         aria-label="Alerts per day over the last {{ alerts.days }} days, {{ '{:,}'.format(_month) }} in all">
+                        {% for t in alert_chart.ticks %}
+                        <line class="rm-chart__grid" x1="{{ alert_chart.pad_l }}" x2="{{ alert_chart.plot_right }}" y1="{{ t.y }}" y2="{{ t.y }}"/>
+                        <text class="rm-chart__tick" x="{{ alert_chart.pad_l - 5 }}" y="{{ t.y + 3 }}" text-anchor="end">{{ t.label }}</text>
+                        {% endfor %}
+                        {% for b in alert_chart.bars %}
+                        <g class="rm-chart__bar-slot"><rect x="{{ b.x - 1 }}" y="{{ alert_chart.plot_top }}" width="{{ b.w + 2 }}" height="{{ alert_chart.plot_bottom - alert_chart.plot_top }}" fill="transparent"/>{% if b.path %}<path class="rm-chart__bar" d="{{ b.path }}"/>{% endif %}<title>{{ b.day.strftime('%d %b %Y') }}: {{ '{:,}'.format(b.alerts) }} alert{{ 's' if b.alerts != 1 }}</title></g>
+                        {% endfor %}
+                        <text class="rm-chart__tick" x="{{ alert_chart.pad_l }}" y="{{ alert_chart.height - 4 }}" text-anchor="start">{{ alert_chart.first_label }}</text>
+                        <text class="rm-chart__tick" x="{{ alert_chart.plot_right }}" y="{{ alert_chart.height - 4 }}" text-anchor="end">{{ alert_chart.last_label }} (UTC)</text>
+                    </svg>
+                    <div class="rm-runfacts-grid rm-alert-facts">
+                    <dl class="rm-runfacts">
+                        {% for s, label in (('open', 'Open'), ('acknowledged', 'Acknowledged'), ('closed', 'Closed')) %}
+                        <div><dt>{{ label }}</dt><dd>{{ '{:,}'.format(alerts.by_status[s]) }}</dd></div>
+                        {% endfor %}
+                        <div><dt>{{ alerts.total_days }} days</dt><dd title="Newest alert: {{ alerts.last_day.strftime('%d %b %Y') if alerts.last_day else 'none' }}">{{ '{:,}'.format(alerts.total) }}</dd></div>
+                    </dl>
+                    </div>
+                    {% else %}
+                    <p class="rm-empty">No alerts in the last {{ alerts.total_days }} days{% if alerts.read.read_at %}, as of the last sync ({{ alerts.read.read_at.strftime('%Y-%m-%d %H:%M') }}){% endif %}.</p>
+                    {% endif %}
+                </div>
+                {% endif %}
+
                 {# Baseline techniques this rule is mapped to, one card each (the same cards as the
                    technique window's Detection rules). A name opens that technique's window in
                    place, from any page. #}
@@ -291,6 +333,13 @@
                         {{ drag_ctl('Covers') }}
                     </div>
                     {% if covers %}
+                    {# Whether it counts (#79): a disabled or deprecated rule covers nothing; one Rule
+                       Monitoring finds can't work counts, but is left out of Effective coverage. #}
+                    {% if rule.deprecated or not rule.enabled %}
+                    <p class="rm-note rm-note--warn">{{ 'Deprecated' if rule.deprecated else 'Disabled' }}: it counts toward none of these techniques' coverage{{ ' until enabled' if not rule.deprecated }}.</p>
+                    {% elif covers_problems %}
+                    <p class="rm-note rm-note--warn" title="{{ covers_problems | join('; ') }}">Not effective: it counts, but can't work now ({{ covers_problems | join('; ') }}), so it is left out of these techniques' Effective coverage.</p>
+                    {% endif %}
                     <div class="rm-items">
                         {% for b in covers %}
                         {% set sys = b.systems[0] if b.systems else none %}
@@ -350,6 +399,39 @@
                     </div>
                 </details>
 
+                {# What Rule Monitoring found on this rule (rule_issues.rule_findings), only when it found
+                   something: each in full -- severity, issue, cause, what was found, who fixes it and
+                   since when -- unmuted first; a muted one says by whom and why. The count is of those
+                   not muted. Acting on them is Rule Monitoring's: the link opens it on this rule. #}
+                {% if monitoring %}
+                {% set _live = monitoring | rejectattr('muted') | list %}
+                <details class="rm-fold" open data-fold="monitoring" data-section="monitoring" data-section-label="Rule Monitoring">
+                    <summary><span>Rule Monitoring{% if _live %} <span class="rm-fold__count">{{ _live | length }}</span>{% endif %}</span>{{ drag_ctl('Rule Monitoring') }}</summary>
+                    <div class="rm-about">
+                    <div class="rm-items">
+                        {% for f in monitoring %}
+                        <div class="rm-item rm-item--{{ 'muted' if f.muted else {'error': 'error', 'info': 'info'}.get(f.severity, 'warn') }}">
+                            <div class="rm-item__main">
+                                <div class="rm-item__name" title="{{ f.title }}">{{ icon('triangle-alert', '13') }} {{ f.title }}</div>
+                                {% if f.cause %}<p class="rm-item__text mono">{{ f.cause }}</p>{% endif %}
+                                {% if f.detail %}<p class="rm-item__text">{{ f.detail }}</p>{% endif %}
+                                <div class="rm-item__meta">
+                                    <span class="status-pill status-{{ {'error': 'danger', 'info': 'info'}.get(f.severity, 'warning') }}">{{ f.severity | title }}</span>
+                                    {{ tag(f.fixer_label, title='Who fixes it') }}
+                                    {% if f.first_seen %}<span class="text-muted" title="First seen {{ f.first_seen.strftime('%Y-%m-%d %H:%M') }}">for {{ f.age }}</span>{% endif %}
+                                    {% if f.muted %}<span class="text-muted">Muted{{ ' with its cause' if f.muted.what == 'cause' }} by {{ f.muted.by }} on {{ f.muted.at.strftime('%Y-%m-%d') }}{% if f.muted.note %}: {{ f.muted.note }}{% endif %}</span>{% endif %}
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    <p class="text-muted fs-sm">{% if not rule.enabled %}The rule is disabled: these would stop it working if it were switched on. {% endif %}As of
+                        the last sync. Act on them in <a href="/rule-monitoring?rules=all&amp;group=rule&amp;search={{ rule.name | urlencode }}"
+                        title="Open Rule Monitoring on this rule">Rule Monitoring</a>.</p>
+                    </div>
+                </details>
+                {% endif %}
+
                 {# The rule's last run in Kibana, as of TIDE's last sync of it (#63): the run in one row, how
                    it is scheduled in the next, then Kibana's message and Test. Per destination, so
                    Compare leaves it out. #}
@@ -381,6 +463,25 @@
                     {# A succeeded run's message only repeats its status; a warning or failure says why. #}
                     {% if not last_run %}<p class="rm-run-message rm-run-message--note">Kibana has no run for this rule{% if not rule.enabled %}: it is disabled{% endif %}.</p>
                     {% elif last_run.message and last_run.tone != 'success' %}<pre class="rm-run-message rm-run-message--{{ last_run.tone }}">{{ last_run.message }}</pre>{% endif %}
+                    {# Its search times, a bar per run TIDE recorded at a sync (#76): Rule Monitoring lists it
+                       as getting slow when the median nears its interval or doubles in two weeks. #}
+                    {% if search_chart and search_chart.runs > 1 %}{% set sc = search_chart %}
+                    <div class="rm-search-chart">
+                    <p class="rm-label">Search time, last {{ sc.runs }} runs <span class="text-muted" title="The median of the last {{ sc.median_runs }} runs, as the score and Rule Monitoring take it">· median {{ '%.1f s' | format(sc.median / 1000) if sc.median >= 1000 else '%.0f ms' | format(sc.median) }}{% if sc.share is not none %}, {{ 'under 1' if sc.share < 1 else sc.share }}% of the time between runs{% endif %}</span></p>
+                    <svg class="rm-chart rm-chart--small" viewBox="0 0 {{ sc.width }} {{ sc.height }}" role="img"
+                         aria-label="Search time of each of the last {{ sc.runs }} runs">
+                        {% for t in sc.ticks %}
+                        <line class="rm-chart__grid" x1="{{ sc.pad_l }}" x2="{{ sc.plot_right }}" y1="{{ t.y }}" y2="{{ t.y }}"/>
+                        <text class="rm-chart__tick" x="{{ sc.pad_l - 5 }}" y="{{ t.y + 3 }}" text-anchor="end">{{ t.label }}</text>
+                        {% endfor %}
+                        {% for b in sc.bars %}
+                        <g class="rm-chart__bar-slot"><rect x="{{ b.x - 1 }}" y="{{ sc.plot_top }}" width="{{ b.w + 2 }}" height="{{ sc.plot_bottom - sc.plot_top }}" fill="transparent"/>{% if b.path %}<path class="rm-chart__bar" d="{{ b.path }}"/>{% endif %}<title>{{ b.at.strftime('%d %b %Y %H:%M') }} UTC: {{ '{:,}'.format(b.value) }} ms</title></g>
+                        {% endfor %}
+                        <text class="rm-chart__tick" x="{{ sc.pad_l }}" y="{{ sc.height - 4 }}" text-anchor="start">{{ sc.first_label }}</text>
+                        <text class="rm-chart__tick" x="{{ sc.plot_right }}" y="{{ sc.height - 4 }}" text-anchor="end">{{ sc.last_label }} (UTC)</text>
+                    </svg>
+                    </div>
+                    {% endif %}
                     {# Test runs the rule's query through Kibana's preview: a machine learning rule has none. #}
                     {% if not (rule.raw_data is mapping and rule.raw_data.type == 'machine_learning') %}
                     <div class="rm-test">
@@ -473,6 +574,39 @@
                     </div>
                     {% endif %}
                 </div>
+
+                {# The items of the exception lists the rule uses (#75), as the last sync read them: each
+                   item's conditions (an event is excepted when all of them hold), who added it and when.
+                   One matching almost anything is marked; one past its expiry no longer applies. #}
+                {% if exceptions and exceptions.lists %}
+                <details class="rm-fold" open data-fold="exceptions" data-section="exceptions" data-section-label="Exceptions">
+                    <summary><span>Exceptions <span class="rm-fold__count" title="Exception items that apply">{{ exceptions.count }}</span></span>{{ drag_ctl('Exceptions') }}</summary>
+                    <div class="rm-about rm-exceptions">
+                    {% for lst in exceptions.lists %}
+                    <p class="rm-label" title="List {{ lst.list_id }}">{{ lst.label }}</p>
+                    {% if not lst.read %}<p class="rm-empty">Not read yet: the next sync reads it.</p>
+                    {% elif not lst.list_items %}<p class="rm-empty">No items.</p>{% endif %}
+                    {% if lst.list_items %}
+                    <div class="rm-items">
+                        {% for i in lst.list_items %}
+                        <div class="rm-item rm-item--{{ 'warn' if i.broad and i.active else ('muted' if not i.active else 'na') }}">
+                            <div class="rm-item__main">
+                                <div class="rm-item__name" title="{{ i.name }}">{{ i.name or 'Unnamed' }}</div>
+                                <div class="rm-exceptions__text mono">{{ i.text or 'No conditions' }}</div>
+                                <div class="rm-item__meta text-muted">
+                                    <span>Added{% if i.created_by %} by {{ i.created_by }}{% endif %}{% if i.created_at %} on {{ i.created_at.strftime('%Y-%m-%d') }}{% endif %}</span>
+                                    {% if i.broad and i.active %}<span class="text-warning" title="Every condition is a wildcard-only value: it excepts every event that has these fields">{{ icon('triangle-alert', '10') }} Matches almost anything</span>{% endif %}
+                                    {% if not i.active %}<span>Expired {{ i.expire_time.strftime('%Y-%m-%d') }}: no longer applies</span>{% endif %}
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                    {% endfor %}
+                    </div>
+                </details>
+                {% endif %}
 
                 {% if details.guide_html %}
                 <details class="rm-fold" open data-fold="guide" data-section="guide" data-section-label="Investigation guide">

@@ -21,7 +21,7 @@ docker compose up -d
 | Setting | What it does |
 |---------|--------------|
 | `TIDE_VERSION` | The TIDE image tag to run, for example `6.1.4`. |
-| `APP_URL` | The address people open TIDE at, for example `https://tide.example.local`. Single sign-on returns people here after they sign in, and sign-in cookies are marked secure when it starts with `https://`. |
+| `APP_URL` | The address people open TIDE at, for example `https://tide.example.local`. Single sign-on starts and ends here: someone who opens TIDE at another address (an IP address, another name) is taken here to sign in. Sign-in cookies are marked secure when it starts with `https://`. |
 | `SESSION_SECRET` | A long random string that signs sign-in sessions. TIDE will not start without it. Changing it signs out everyone using a TIDE account. Make one offline with `openssl rand -base64 48`. |
 
 ### First start

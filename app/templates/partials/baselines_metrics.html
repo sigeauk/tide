@@ -45,6 +45,11 @@
     {{ metric_change(changes.fully_covered) }}
     <div class="metric-tip" role="tooltip">All techniques monitored{{ metric_change_tip(changes.fully_covered) }}</div>
 {% endcall %}
+{% call metric_card('not_effective', keys, link, 'metric-card--tip', tip=true) %}
+    <p class="metric-value {{ 'warning' if ru.not_effective else '' }}">{{ ru.not_effective | default(0) }}</p>
+    <p class="metric-label">Not Effective</p>
+    <div class="metric-tip" role="tooltip">System baselines with a technique covered only by rules that can't work now (a Rule Monitoring error, or a field they match on missing or empty)</div>
+{% endcall %}
 {% else %}
 <div class="metric-card metric-card--empty">
     <p class="metric-value fs-lg">—</p>

@@ -134,6 +134,12 @@ def handle(db_path: str, exc: BaseException) -> None:
     _restart()
 
 
+def restart() -> None:
+    """End TIDE so Docker starts it again (its ``restart: unless-stopped``), as after a fatal error:
+    the maintenance window's restart to compact the databases (#82) uses it too."""
+    _restart()
+
+
 def _restart() -> None:
     """End TIDE so Docker starts it again: a graceful stop first (SIGTERM to the server, process 1 in
     TIDE's container: uvicorn, or its reloader in development), then a hard exit if that hasn't

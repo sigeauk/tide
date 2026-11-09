@@ -1,5 +1,5 @@
 {% from "macros/icons.html" import icon, icon_text %}
-{% from "macros/rule_ui.html" import state_badge, upstream_badge %}
+{% from "macros/rule_ui.html" import state_badge, upstream_badge, problems_badge %}
 {% from "components/mitre_pill.html" import mitre_pill %}
 {#
   Rule Card — THE one rule card (Rule Health grid, MITRE side panel, validate refresh).
@@ -7,8 +7,8 @@
   modal, which holds every action). No buttons on the card face.
     head   : score ring | title (2 lines), and beneath it one line of plain facts: the
              destination (dot = enabled / disabled), severity, ATT&CK techniques (two, then +n)
-    flags  : only when there is something to notice: Linked / Deprecated / SIEM offline, and an
-             upstream update or a retired upstream rule
+    flags  : only when there is something to notice: what Rule Monitoring found (one pill, its
+             count), Linked / Deprecated / SIEM offline, and an upstream update or a retired upstream rule
     footer : validation status (left) · author (right). The card's left edge is coloured by the
              destination's colour, else by validation status (green valid · amber due soon ·
              red expired · grey never).
@@ -66,8 +66,9 @@
 
     {% set _state = state_badge(lifecycle_state, lifecycle_titles.get(lifecycle_key, "") if lifecycle_titles is defined else "") %}
     {% set _upstream = upstream_badge(upstream_states.get(lifecycle_key) if upstream_states is defined else none, only_news=true) %}
-    {% if _state | trim or _upstream | trim %}
-    <div class="rc-flags">{{ _state }}{{ _upstream }}</div>
+    {% set _problems = problems_badge(rule_problems.get(lifecycle_key) if rule_problems is defined else none) %}
+    {% if _state | trim or _upstream | trim or _problems | trim %}
+    <div class="rc-flags">{{ _problems }}{{ _state }}{{ _upstream }}</div>
     {% endif %}
 
     <div class="rc-foot">

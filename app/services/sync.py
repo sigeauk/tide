@@ -617,8 +617,8 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False, only_siem_id: 
     DuckDB file (one per client) since 4.1.13 — there is no shared
     ``detection_rules`` table any more, so a sync MUST be scoped to a single
     tenant. Triggers: manual ``Sync`` button, ``promote-rule`` post-action
-    refresh, ``deploy-sigma`` post-action refresh. There is no scheduled /
-    background sync.
+    refresh, ``deploy-sigma`` post-action refresh, and the opt-in maintenance window (#82, app.services.maintenance).
+    There is no other scheduled or background sync.
 
     Flow:
       1. Resolve ``client_siem_map`` rows for this client → ``{siem_id: {spaces}}``.
@@ -829,7 +829,9 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False, only_siem_id: 
                     f"@ {kurl} spaces={spaces}"
                 )
                 try:
+                    from app.services.data_freshness import DataFreshness, FieldData, IngestDelay
                     from app.services.mapping_catalogue import MappingCatalogue
+                    freshness, field_data, delay = DataFreshness(db, siem_id), FieldData(db, siem_id), IngestDelay(db, siem_id)
                     siem_df = elastic_helper.fetch_detection_rules(
                         kibana_url=kurl,
                         api_key=token,
@@ -841,7 +843,42 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False, only_siem_id: 
                         search_time_history=siem_search_history,
                         weights=scoring_weights,
                         siem_label=siem.get('label') or '',
+                        freshness=freshness,
+                        field_data=field_data,
+                        ingest_delay=delay,
                     )
+                    # The newest event in each index pattern, whether recent events fill the fields rules
+                    # match on, and how late events arrive (Rule Monitoring): their last answers stand.
+                    for step, check in (("Newest events", freshness), ("Fields with data", field_data),
+                                        ("Ingest delay", delay)):
+                        if check.error:
+                            sync_runs.step_failed(step, check.error)
+                    # Each rule's alerts in each space read (Rule Monitoring): a key that can't read them
+                    # is reported on the destination, not as a failed sync.
+                    try:
+                        from app.services import rule_alerts
+                        read = {sp: elastic_helper.fetch_alert_counts(kurl, token, sp) for sp in spaces}
+                        with db.get_connection() as _conn:
+                            for sp, result in read.items():
+                                rule_alerts.store(_conn, siem_id, sp, result)
+                    except Exception as _exc:
+                        logger.warning("Could not count the alerts of SIEM '%s'", siem.get('label'), exc_info=True)
+                        sync_runs.step_failed("Alert counts", _exc)
+                    # The exception lists the rules use (Rule Monitoring, #75): what changed since the
+                    # last read goes into the history of each rule using the list.
+                    # The rules just read say which lists they use: they aren't stored until later.
+                    try:
+                        from app.services import rule_exceptions
+                        users = rule_exceptions.list_users(siem_df)
+                        with db.get_connection() as _conn:
+                            wanted = {sp: rule_exceptions.space_lists(_conn, siem_id, sp)
+                                      | {key for key in users.get(sp, {})} for sp in spaces}
+                        for sp, lists in wanted.items():
+                            rule_exceptions.read_lists(db, client_id, siem_id, sp, lists, kurl, token,
+                                                       {lid: ids for (lid, _ns), ids in users.get(sp, {}).items()})
+                    except Exception as _exc:
+                        logger.warning("Could not read the exception lists of SIEM '%s'", siem.get('label'), exc_info=True)
+                        sync_runs.step_failed("Exceptions", _exc)
                     # Pull per-space drift diagnostics so the subtractive
                     # passes below can be skipped for any (siem, space) where
                     # the fetch was incomplete (e.g. Kibana outage mid-sync).

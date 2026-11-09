@@ -22,16 +22,17 @@
         <p class="page-subtitle">{{ client.description or 'No description.' }}</p>
     </div>
     <div class="rh-more shrink-0" data-more>
-        {{ more_button('More actions', title='Edit this client' ~ ('' if client.is_default else ', or delete it'), attrs='name="Client Actions"') }}
+        {% set can_delete = not client.is_default and user and user.is_superadmin %}
+        {{ more_button('More actions', title='Edit this client' ~ (', or delete it' if can_delete else ''), attrs='name="Client Actions"') }}
         <div class="rh-more__menu" role="menu" hidden>
             <button name="Edit Client" type="button" role="menuitem" class="rh-more__item"
                     data-click="el.show" data-target="edit-client-modal">
                 {{ icon('pencil', '15') }}<span>Edit client</span>
             </button>
-            {% if not client.is_default %}
+            {% if can_delete %}
             <div class="rh-more__sep" role="separator"></div>
             <button name="Delete" type="button" role="menuitem" class="rh-more__item rh-more__item--danger"
-                    data-click="clients.delete" data-id="{{ client.id }}" data-name="{{ client.name }}" data-after="/settings/management?tab=clients">
+                    hx-get="/api/clients/{{ client.id }}/delete" hx-target="#modal-container" hx-swap="innerHTML">
                 {{ icon('trash-2', '15') }}<span>Delete client</span>
             </button>
             {% endif %}

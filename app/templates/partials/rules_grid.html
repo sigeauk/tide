@@ -26,10 +26,10 @@
             hx-trigger="tideLoadMore once"
             hx-target="this"
             hx-swap="outerHTML">
-            <td colspan="11">{{ loading_state("Loading more rules…", inline=true) }}</td>
+            <td colspan="12">{{ loading_state("Loading more rules…", inline=true) }}</td>
         </tr>
         {% else %}
-        <tr class="infinite-scroll-end"><td colspan="11">All {{ total }} rules loaded</td></tr>
+        <tr class="infinite-scroll-end"><td colspan="12">All {{ total }} rules loaded</td></tr>
         {% endif %}
     {% elif rules and rules | length > 0 %}
     <table class="rules-table">
@@ -49,6 +49,7 @@
                 <th data-col="mitre">MITRE</th>
                 <th data-col="type" class="rt-th--sortable" data-sort-col="type" data-sort-default="asc" title="Sort by rule type">Type {{ sort_arrow(sort_dir if sort_col == 'type' else '') }}</th>
                 <th data-col="lang" class="rt-th--sortable" data-sort-col="language" data-sort-default="asc" title="Sort by query language">Lang {{ sort_arrow(sort_dir if sort_col == 'language' else '') }}</th>
+                <th data-col="alerts" class="rt-th--sortable" data-sort-col="alerts" data-sort-default="desc" title="Sort by how many alerts it raised in the last 7 days, as of the last sync">Alerts (7 days) {{ sort_arrow(sort_dir if sort_col == 'alerts' else '') }}</th>
                 <th class="rt-cols" data-col="cols"><button type="button" id="rt-cols-btn" class="rt-cols__btn" aria-haspopup="dialog" aria-expanded="false" title="Choose and arrange columns"><span aria-hidden="true">&hellip;</span><span class="sr-only">Choose columns</span></button></th>
             </tr>
         </thead>
@@ -60,10 +61,10 @@
                 hx-trigger="tideLoadMore once"
                 hx-target="this"
                 hx-swap="outerHTML">
-                <td colspan="11">{{ loading_state("Loading more rules…", inline=true) }}</td>
+                <td colspan="12">{{ loading_state("Loading more rules…", inline=true) }}</td>
             </tr>
             {% else %}
-            <tr class="infinite-scroll-end"><td colspan="11">All {{ total }} rules loaded</td></tr>
+            <tr class="infinite-scroll-end"><td colspan="12">All {{ total }} rules loaded</td></tr>
             {% endif %}
         </tbody>
     </table>

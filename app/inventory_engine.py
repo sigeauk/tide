@@ -1135,36 +1135,14 @@ def get_system_summaries(client_id: str = None):
     applied_map = _load_applied_detections(client_id=client_id)
     # Preload baseline assignment counts per system
     baseline_counts: dict[str, int] = {}
-    baseline_step_totals: dict[str, int] = {}
-    baseline_step_covered: dict[str, int] = {}
     try:
         with _get_conn() as conn:
             rows = conn.execute(
                 "SELECT system_id, COUNT(*) FROM system_baselines GROUP BY system_id"
             ).fetchall()
-            step_rows = conn.execute(
-                "SELECT sb.system_id, COUNT(ps.id) "
-                "FROM system_baselines sb "
-                "JOIN playbook_steps ps ON ps.playbook_id = sb.playbook_id "
-                "GROUP BY sb.system_id"
-            ).fetchall()
-            covered_rows = conn.execute(
-                "SELECT sb.system_id, COUNT(DISTINCT sd.step_id) "
-                "FROM system_baselines sb "
-                "JOIN playbook_steps ps ON ps.playbook_id = sb.playbook_id "
-                "JOIN step_detections sd ON sd.step_id = ps.id "
-                "LEFT JOIN hosts h ON h.system_id = sb.system_id "
-                "JOIN applied_detections ad ON ad.detection_id = sd.id "
-                "  AND (ad.system_id = sb.system_id OR ad.host_id = h.id) "
-                "GROUP BY sb.system_id"
-            ).fetchall()
         baseline_counts = {str(system_id): int(cnt) for system_id, cnt in rows}
-        baseline_step_totals = {str(system_id): int(cnt) for system_id, cnt in step_rows}
-        baseline_step_covered = {str(system_id): int(cnt) for system_id, cnt in covered_rows}
     except Exception:
         baseline_counts = {}
-        baseline_step_totals = {}
-        baseline_step_covered = {}
     summaries = []
     for system in systems:
         hosts = all_hosts.get(system.id, [])
@@ -1205,14 +1183,16 @@ def get_system_summaries(client_id: str = None):
             worst_status = "amber"
         else:
             worst_status = "green"
-        total_steps = baseline_step_totals.get(str(system.id), 0)
-        covered_steps = baseline_step_covered.get(str(system.id), 0)
-        baseline_coverage_pct = int(round((covered_steps / total_steps) * 100)) if total_steps > 0 else 0
+        # Across its baselines, as its page scores them: covered (and effectively) of those scored.
+        scored = sum(b["total_steps"] - b["na_steps"] for b in system_baselines)
+        covered_steps = sum(b["covered_steps"] for b in system_baselines)
+        effective_steps = sum(b["effective_steps"] for b in system_baselines)
         summaries.append(SystemSummary(
             system=system, host_count=len(hosts), vuln_count=len(vuln_cves),
             software_count=sw_count,
             baseline_count=baseline_counts.get(str(system.id), 0),
-            baseline_coverage_pct=baseline_coverage_pct,
+            baseline_coverage_pct=int(round(covered_steps / scored * 100)) if scored else 0,
+            baseline_effective_pct=int(round(effective_steps / scored * 100)) if scored else 0,
             baselines=system_baselines,
             worst_status=worst_status))
     return summaries
@@ -1756,6 +1736,7 @@ def ingest_cisa_feed(json_bytes):
 # ---------------------------------------------------------------------------
 
 STATUS_LABELS = {"green": "Covered", "amber": "Known gap", "grey": "Not applicable", "red": "No coverage"}
+PARTIAL_LABEL = "Partial coverage"      # an amber technique with coverage beside its known gaps (#92)
 _PRIORITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 REPORT_TECHNIQUE_SCOPES = ("gaps", "all", "none")
 
@@ -1794,13 +1775,15 @@ def build_system_report_data(system_id: str, include_devices: bool = True, clien
     scored = totals["total"] - totals["na"]
     undefined = view["coverage_undefined"]
     coverage_pct = None if undefined else (round(totals["covered"] / scored * 100) if scored else 0)
+    effective_pct = None if undefined else (round(totals["effective"] / scored * 100) if scored else 0)
 
     baselines = []
     for b in chosen:
         bt = step_totals([r for r in rows if r["baseline_id"] == b["id"]])
         b_scored = bt["total"] - bt["na"]
         baselines.append({**b, "totals": bt,
-                          "coverage_pct": round(bt["covered"] / b_scored * 100) if b_scored else 0})
+                          "coverage_pct": round(bt["covered"] / b_scored * 100) if b_scored else 0,
+                          "effective_pct": round(bt["effective"] / b_scored * 100) if b_scored else 0})
 
     scope = techniques if techniques in REPORT_TECHNIQUE_SCOPES else "gaps"
     detailed = [t for t in techs if scope == "all" or (scope == "gaps" and t["status"] in ("red", "amber"))]
@@ -1830,6 +1813,7 @@ def build_system_report_data(system_id: str, include_devices: bool = True, clien
         "all_baselines": len(chosen) == len(view["baselines"]),
         "totals": totals,
         "coverage_pct": coverage_pct,
+        "effective_pct": effective_pct,
         "coverage_undefined": undefined,
         "narrative": _coverage_narrative(totals, coverage_pct, len(chosen)),
         "trend": _coverage_trend(system_id, baselines, client_id),
@@ -1838,9 +1822,20 @@ def build_system_report_data(system_id: str, include_devices: bool = True, clien
         "detailed_techniques": detailed,
         "priority_gaps": gaps,
         **_siem_coverage(techs, details, counted, undefined, dest_names),
+        "rule_health": _report_rule_health(techs, details, dest_names),
     }
     data.update(_system_device_report(system_id, client_id=client_id) if include_devices else _NO_DEVICES)
     return data
+
+
+def _report_rule_health(techs: List[Dict], details: Dict[str, Dict], dest_names: Dict[Tuple[str, str], Dict]) -> Dict:
+    """The system report's Rule health (#80): Rule Monitoring's open findings on the rules covering
+    its techniques, those that count and are applied here (each copy that counts)."""
+    from app.services import rule_issues
+    rules = {key: d["name"] for t in techs for d in details[t["step_id"]]["detections"]
+             if d["counts"] and d["applied"] for key in d.get("counted_rules") or []}
+    with _get_conn() as conn:
+        return rule_issues.report_rule_health(conn, rules, {k: (v or {}).get("name") for k, v in dest_names.items()})
 
 
 def _report_technique(row: Dict, detail: Dict) -> Dict:
@@ -1868,9 +1863,11 @@ def _report_technique(row: Dict, detail: Dict) -> Dict:
         elif d["unresolved"]:
             flag, tone = "Needs relinking", "warning"
         elif not d["counts"]:
-            flag, tone = "Not in SIEM coverage", "danger"
+            flag, tone = NOT_COUNTED_FLAG.get(d["why_not"], "Not in SIEM coverage"), "danger"
         elif not d["applied"]:
             flag, tone = "Not applied", "warning"
+        elif not d["effective"]:
+            flag, tone = "Not effective", "warning"
         else:
             flag, tone = "Counts", "success"
         coverage.append({
@@ -1886,8 +1883,11 @@ def _report_technique(row: Dict, detail: Dict) -> Dict:
         "step_id": row["step_id"], "number": row.get("step_number"), "title": row["title"],
         "description": row.get("description") or "",
         "baseline_id": row["baseline_id"], "baseline_name": row["baseline_name"], "tactic": row["tactic"],
-        "status": detail["status"], "status_label": STATUS_LABELS.get(detail["status"], "No coverage"),
-        "non_alerting": detail["non_alerting"], "review_due": detail["review_due"],
+        "status": detail["status"],
+        "status_label": PARTIAL_LABEL if detail["partial"] else STATUS_LABELS.get(detail["status"], "No coverage"),
+        "non_alerting": detail["non_alerting"], "partial": detail["partial"], "review_due": detail["review_due"],
+        "not_effective": detail["not_effective"], "not_effective_why": detail["not_effective_why"],
+        "evidence_how": detail["evidence_how"],
         "priority": step.priority, "priority_label": dict(STEP_PRIORITIES).get(step.priority, ""),
         "category_label": dict(STEP_CATEGORIES).get(step.category, ""),
         "attack": detail["techniques"],
@@ -1896,9 +1896,23 @@ def _report_technique(row: Dict, detail: Dict) -> Dict:
         "mark_reason": detail["blind_spot_reason"],
         "coverage": coverage,
         "rule_names": [d["name"] for d in detail["detections"] if d["counts"]],
-        "uncounted_rule_names": [d["name"] for d in detail["detections"] if not d["counts"]],
+        # Counted rules that can't work now (#79), and those that don't count, each with why.
+        "not_effective_rule_names": [d["name"] for d in detail["detections"]
+                                     if d["counts"] and d["source"] != "manual" and not d["effective"]],
+        "uncounted_rules": [{"name": d["name"], "why": NOT_COUNTED[d["why_not"]]}
+                            for d in detail["detections"] if not d["counts"]],
+        "uncounted_note": _uncounted_note({d["why_not"] for d in detail["detections"] if not d["counts"]}),
         "detailed": False,
     }
+
+
+def _uncounted_note(whys: set) -> str:
+    """A technique's mapped rules that don't count, in a phrase: why, for a report's gaps."""
+    if not whys:
+        return ""
+    if "destination" not in whys:
+        return "Mapped rules are disabled or deprecated"
+    return "Mapped only outside SIEM coverage" if len(whys) == 1 else "Mapped rules disabled or outside SIEM coverage"
 
 
 def _siem_coverage(techs: List[Dict], details: Dict[str, Dict], counted: set, undefined: bool,
@@ -1930,7 +1944,8 @@ def _siem_coverage(techs: List[Dict], details: Dict[str, Dict], counted: set, un
                 row["covering"].add(t["step_id"])
             if not d["counts"]:
                 uncounted.append({"rule": d["name"], "destination": row["name"], "technique": t["title"],
-                                  "baseline": t["baseline_name"], "added": d["created_at"]})
+                                  "baseline": t["baseline_name"], "added": d["created_at"],
+                                  "why": NOT_COUNTED_FLAG[d["why_not"]]})
     rows = [
         {"name": r["name"], "color": r["color"], "counted": r["counted"], "rules": len(r["rules"]),
          "mapped": len(r["mapped"]), "covering": len(r["covering"])}
@@ -2317,7 +2332,7 @@ def get_system_baselines_rollup(client_id: str = None) -> Dict[str, int]:
     by_system: Dict[str, List[str]] = {}
     for sys_id, pb_id in rows:
         by_system.setdefault(sys_id, []).append(pb_id)
-    out = {"baselines": 0, "rules_mapped": 0, "red": 0, "green": 0}
+    out = {"baselines": 0, "rules_mapped": 0, "red": 0, "green": 0, "not_effective": 0}
     for sys_id, ids in by_system.items():
         for b in get_system_baselines(sys_id, playbook_ids=ids, include_detection_details=False, client_id=client_id):
             red = b["total_steps"] - b["covered_steps"] - b["gap_steps"] - b["na_steps"]
@@ -2325,6 +2340,8 @@ def get_system_baselines_rollup(client_id: str = None) -> Dict[str, int]:
             out["rules_mapped"] += sum(t["mapped_count"] for t in b["tactics"])
             out["red"] += 1 if red else 0
             out["green"] += 1 if not red and not b["gap_steps"] and b["covered_steps"] else 0
+            # With a technique covered only by rules that don't work (#79).
+            out["not_effective"] += 1 if any(t["not_effective"] for t in b["tactics"]) else 0
     return out
 
 
@@ -2880,53 +2897,115 @@ def set_system_coverage_destinations(system_id: str, scopes: List[Tuple[str, str
     return len(after)
 
 
+# Rule Monitoring findings that leave a rule counting toward coverage not effective (#79): any of
+# error severity (no index, no recent events on any pattern, a query that won't parse or is refused,
+# an ML job not running...), and these warnings: a field it matches on that no index has or no event
+# fills, and runs that never happened.
+NOT_EFFECTIVE_WARNINGS = ("field_missing", "field_empty", "never_run")
+# Why a mapped rule doesn't count toward a system, as a report says it beside the rule, and as its flag.
+NOT_COUNTED = {"destination": "not in SIEM coverage", "disabled": "disabled", "deprecated": "deprecated"}
+NOT_COUNTED_FLAG = {"destination": "Not in SIEM coverage", "disabled": "Disabled", "deprecated": "Deprecated"}
+
+
+def rule_states(keys, client_id: str = None) -> Dict[Tuple[str, str, str], Dict]:
+    """Each rule's state as coverage needs it, by ``(rule_id, siem_id, space)``: ``enabled``,
+    ``deprecated``, and ``problems``, the open Rule Monitoring findings that leave it not effective
+    (each its title, with what it is about). A rule TIDE doesn't have is left out."""
+    keys = sorted({(str(r), str(s), str(sp or "default")) for r, s, sp in keys if r and s})
+    if not keys:
+        return {}
+    from app.services.database import DatabaseService as db
+    from app.services.rule_issues import KNOWN
+    arrays = db._key_arrays(keys)
+    out: Dict[Tuple[str, str, str], Dict] = {}
+    with _get_conn() as conn:
+        for rid, sid, sp, enabled, deprecated in conn.execute(
+                f"WITH {db._KEYS_CTE} SELECT d.rule_id, d.siem_id, d.space, COALESCE(d.enabled, 0) = 1, "
+                "COALESCE(d.deprecated, false) FROM detection_rules d "
+                "JOIN k ON d.rule_id = k.r AND d.siem_id = k.s AND d.space = k.sp", arrays).fetchall():
+            out[(rid, sid, sp)] = {"enabled": bool(enabled), "deprecated": bool(deprecated), "problems": []}
+        try:
+            found = conn.execute(
+                f"WITH {db._KEYS_CTE} SELECT i.rule_id, i.siem_id, i.space, i.issue, i.cause FROM rule_issues i "
+                "JOIN k ON i.rule_id = k.r AND i.siem_id = k.s AND i.space = k.sp "
+                f"WHERE i.resolved_at IS NULL AND (i.severity = 'error' OR i.issue IN "
+                f"({', '.join('?' * len(NOT_EFFECTIVE_WARNINGS))})) ORDER BY i.issue, i.cause",
+                arrays + list(NOT_EFFECTIVE_WARNINGS)).fetchall()
+        except Exception:      # noqa: BLE001 - Rule Monitoring not run on this tenant yet
+            logger.debug("No Rule Monitoring findings to judge coverage by", exc_info=True)
+            found = []
+    for rid, sid, sp, issue, cause in found:
+        if (rid, sid, sp) in out:
+            known = KNOWN.get(issue)
+            title = known.title if known and issue != "other" else "Kibana reports an error"
+            out[(rid, sid, sp)]["problems"].append(f"{title} ({cause})" if cause and issue != "other" else title)
+    return out
+
+
 def _counted_scope_resolver(system_id: str, steps_detections, client_id: str = None):
-    """Build ``(detection) -> bool`` for "does this mapping count toward this system?".
+    """Build ``(detection) -> dict`` for "does this mapping count toward this system, and is it
+    effective?" (``standing``).
 
     A mapping names one destination, but the same detection may have been copied to others --
     that is what Move-as-copy does, and ``rule_links`` records it. So the anchor destination the
-    user picked AND every destination it is linked to are considered; if any of them is one this
-    system counts, the mapping counts.
+    user picked AND every destination it is linked to are considered: the mapping counts when the
+    rule is enabled, and not deprecated, at one of them this system counts. A disabled rule is as
+    good as no rule. It is effective when one of those copies also has no Rule Monitoring finding
+    that stops it working (``NOT_EFFECTIVE_WARNINGS``, and any error) (#79).
 
-    Returns ``(counts_fn, counted_scopes, undefined)``. ``undefined`` is True when the system has
-    no answer recorded at all, in which case ``counts_fn`` passes everything through -- coverage
-    is unchanged until somebody says what counts.
+    Returns ``(standing_fn, counted_scopes, undefined)``. ``undefined`` is True when the system has
+    no answer recorded at all, in which case every destination counts -- coverage is unchanged
+    until somebody says what counts. ``standing_fn(d)`` gives ``{counts, why_not, effective, rules,
+    problems}``: ``why_not`` a key of ``NOT_COUNTED``, ``rules`` the copies that count (their keys),
+    ``problems`` why it isn't effective.
     """
     counted = {(s, sp) for s, sp in get_system_coverage_destinations(system_id, client_id=client_id)}
-    if not counted:
-        return (lambda _d: True), counted, True
+    undefined = not counted
 
     anchors = [
         (d.rule_ref, d.siem_id, d.space or "default")
         for d in steps_detections
-        if getattr(d, "siem_id", None) and d.rule_ref
+        if getattr(d, "siem_id", None) and d.rule_ref and (getattr(d, "source", None) or "manual") != "sigma"
     ]
-    linked_map: Dict[Tuple[str, str, str], set] = {}
+    linked_map: Dict[Tuple[str, str, str], List[Tuple[str, str, str]]] = {}
     if anchors:
         try:
             from app.services.database import get_database_service
             links = get_database_service().get_rule_links_bulk(anchors)
             for key, entries in (links or {}).items():
-                linked_map[key] = {
-                    (e.get("siem_id"), str(e.get("space") or "default"))
-                    for e in entries if not e.get("missing")
-                }
+                linked_map[key] = [(e.get("rule_id"), e.get("siem_id"), str(e.get("space") or "default"))
+                                   for e in entries if not e.get("missing")]
         except Exception:
             logger.warning("Rule links unavailable while scoring coverage; using anchors only", exc_info=True)
+    try:
+        states = rule_states(anchors + [c for copies in linked_map.values() for c in copies], client_id=client_id)
+    except Exception:
+        logger.warning("Rule states unavailable while scoring coverage; counting every mapped rule", exc_info=True)
+        states = {}
 
-    def counts(d) -> bool:
+    def standing(d) -> Dict:
         source = (getattr(d, "source", None) or "manual")
-        if source == "manual":
-            return True   # a human assertion of coverage, not a SIEM rule -- no destination to check
         anchor_siem = getattr(d, "siem_id", None)
-        if not anchor_siem:
-            return True   # unresolved mapping: flagged for relinking, not silently failed
-        anchor_space = d.space or "default"
-        scopes = {(anchor_siem, anchor_space)}
-        scopes |= linked_map.get((d.rule_ref, anchor_siem, anchor_space), set())
-        return bool(scopes & counted)
+        if source == "manual" or not anchor_siem:
+            # By hand: a person's word, no rule to check. No destination: an unresolved mapping,
+            # flagged for relinking, not silently failed.
+            return {"counts": True, "why_not": "", "effective": True, "problems": [], "rules": []}
+        anchor = (d.rule_ref, anchor_siem, d.space or "default")
+        copies = [anchor] + linked_map.get(anchor, [])
+        here = [c for c in copies if undefined or (c[1], c[2]) in counted]
+        if not here:
+            return {"counts": False, "why_not": "destination", "effective": False, "problems": [], "rules": []}
+        # A copy TIDE doesn't have (the anchor, gone since) counts as before: it is flagged for relinking.
+        on = [c for c in here if c not in states or (states[c]["enabled"] and not states[c]["deprecated"])]
+        if not on:
+            why = "deprecated" if all(states[c]["deprecated"] for c in here) else "disabled"
+            return {"counts": False, "why_not": why, "effective": False, "problems": [], "rules": []}
+        if any(not (states.get(c) or {}).get("problems") for c in on):
+            return {"counts": True, "why_not": "", "effective": True, "problems": [], "rules": on}
+        problems = list(dict.fromkeys(p for c in on for p in states[c]["problems"]))
+        return {"counts": True, "why_not": "", "effective": False, "problems": problems, "rules": on}
 
-    return counts, counted, False
+    return standing, counted, undefined
 
 
 def _applied_detection_ids(system_id: str, client_id: str = None) -> set:
@@ -2987,12 +3066,14 @@ def get_system_step_details(system_id: str, playbook_ids: List[str], client_id: 
 
 def attach_step_evidence(system_id: str, rows: List[Dict], client_id: str = None) -> None:
     """Give each of a system's technique rows (get_system_steps) its card's ring: the strongest
-    counted rule's score and name (``evidence_score``, ``evidence_rule``), as its window's header
-    shows them; None when it isn't covered by a rule."""
+    counted rule's score and name (``evidence_score``, ``evidence_rule``; for a partly covered
+    technique, the share its rules make up and ``evidence_how``), as its window's header shows
+    them; None when it isn't covered by a rule."""
     details = get_system_step_details(system_id, sorted({r["baseline_id"] for r in rows}), client_id=client_id)
     for r in rows:
         d = details.get(r["step_id"]) or {}
         r["evidence_score"], r["evidence_rule"] = d.get("evidence_score"), d.get("evidence_rule") or ""
+        r["evidence_how"] = d.get("evidence_how") or ""
 
 
 def _destination_names(client_id: str = None) -> Dict[Tuple[str, str], Dict]:
@@ -3050,7 +3131,7 @@ def _step_detail_context(system_id: str, steps: List[PlaybookStep], client_id: s
     logs, and (for the window) the history."""
     dets = [d for st in steps for d in st.detections]
     step_ids = [st.id for st in steps]
-    counts, counted_scopes, undefined = _counted_scope_resolver(system_id, dets, client_id=client_id)
+    standing, counted_scopes, undefined = _counted_scope_resolver(system_id, dets, client_id=client_id)
 
     # What a rule looks like right now, per destination -- the mapping names one, so look it up
     # by (rule_id, siem_id, space) and never by rule_id alone.
@@ -3072,7 +3153,7 @@ def _step_detail_context(system_id: str, steps: List[PlaybookStep], client_id: s
     return {
         "system_id": system_id,
         "system_name": system.name if system else "",
-        "counts": counts, "counted_scopes": counted_scopes, "undefined": undefined,
+        "standing": standing, "counted_scopes": counted_scopes, "undefined": undefined,
         "applied_ids": _applied_detection_ids(system_id, client_id=client_id),
         "blind_spots": _step_blind_spots(step_ids, system_id, client_id=client_id),
         "watched": get_step_coverage(step_ids),
@@ -3096,7 +3177,7 @@ def _rule_display_name(rule, d, recorded: Dict[Tuple[str, str], str]) -> str:
 def _step_detail(step: PlaybookStep, ctx: Dict) -> Dict:
     """One step's window on one system, from its own rows and the shared ``ctx``."""
     system_id, step_id = ctx["system_id"], step.id
-    counts_toward_coverage, applied_ids = ctx["counts"], ctx["applied_ids"]
+    standing, applied_ids = ctx["standing"], ctx["applied_ids"]
     rules_now, dest_names = ctx["rules_now"], ctx["dest_names"]
     bs = ctx["blind_spots"].get(step_id, [])
     has_na = any(b.override_type == "na" for b in bs)
@@ -3107,6 +3188,7 @@ def _step_detail(step: PlaybookStep, ctx: Dict) -> Dict:
         source = d.source or "manual"
         rule = rules_now.get((d.rule_ref, d.siem_id, d.space or "default")) if d.siem_id else None
         dest = dest_names.get((d.siem_id, d.space or "default")) if d.siem_id else None
+        st = standing(d) if source != "sigma" else {"counts": False, "why_not": "", "effective": False, "problems": [], "rules": []}
         detections.append({
             "id": d.id,
             "source": source,
@@ -3130,7 +3212,14 @@ def _step_detail(step: PlaybookStep, ctx: Dict) -> Dict:
             ),
             # What Relink searches for: the rule's name (older mappings stored it as the rule id).
             "relink_query": d.note or ("" if _UUID_RE.match(d.rule_ref or "") else d.rule_ref),
-            "counts": counts_toward_coverage(d),
+            "counts": st["counts"],
+            # Why it doesn't count: a key of NOT_COUNTED ("destination", "disabled", "deprecated").
+            "why_not": st["why_not"],
+            # Counts, but a Rule Monitoring finding stops it working: why (#79).
+            "effective": st["effective"],
+            "problems": st["problems"],
+            # The copies of the rule that count here, by (rule_id, siem_id, space): a report's Rule health (#80).
+            "counted_rules": st["rules"],
             "applied": d.id in applied_ids,
             "created_at": d.created_at,
             "created_by": d.created_by,
@@ -3143,6 +3232,7 @@ def _step_detail(step: PlaybookStep, ctx: Dict) -> Dict:
         x["evidence"] = _evidence(x)
     sigma_refs = [x for x in detections if x["source"] == "sigma"]
     is_applied = any(x["applied"] and x["counts"] for x in live)
+    working = any(x["applied"] and x["counts"] and x["effective"] for x in live)
     watched = ctx["watched"].get(step_id, [])
     status = _technique_status(is_applied, has_gap, has_na, bool(watched))
 
@@ -3158,24 +3248,38 @@ def _step_detail(step: PlaybookStep, ctx: Dict) -> Dict:
     history = (ctx["history"] or {}).get(step_id, [])
 
     # The header ring: the strongest rule actually protecting this system, from the scores
-    # app/scoring.py already gave each rule. Only a covered technique has one -- a known gap or
-    # N/A is decided by the mark, so a rule score there would contradict the status.
-    protecting = [x for x in live if x["counts"] and x["applied"] and x["score"] is not None]
-    best = max(protecting, key=lambda x: x["score"]) if status == "green" and protecting else None
+    # app/scoring.py already gave each rule. A covered technique shows it; a partly covered one
+    # (rules beside known gaps, #92) shows it in the share its rules make up; a known gap with
+    # nothing covering, or N/A, has none -- the mark decides, so a rule score would contradict it.
+    gaps = sum(1 for b in bs if b.override_type != "na")
+    partial = _partly_covered(status, is_applied, bool(watched))
+    covering = [x for x in live if x["counts"] and x["applied"]]
+    # The ring is the strongest rule that works; only when none does, the strongest that counts.
+    protecting = [x for x in covering if x["score"] is not None and x["effective"]] or \
+        [x for x in covering if x["score"] is not None]
+    best = max(protecting, key=lambda x: x["score"]) if (status == "green" or partial) and protecting else None
+    evidence = best["score"] if best else None
+    how = ""
+    if best and partial:
+        evidence = partial_score(best["score"], len(covering), gaps)
+        how = _ring_how(best["name"], best["score"], len(covering), gaps)
 
-    mark = bs[0] if bs else None
     return {
         "step": step,
         "system_id": system_id,
         "system_name": ctx["system_name"],
         "as_of": datetime.now(),
         "status": status,
-        "blind_spot_reason": next((b.reason for b in bs), ""),
+        # Why it is marked: the N/A's reason (it decides), else each known gap's.
+        "blind_spot_reason": "; ".join(b.reason for b in bs if (b.override_type == "na") == has_na and b.reason),
         "override_type": "na" if has_na else ("gap" if has_gap else ""),
         "technique_ids": technique_ids,
         "techniques": _technique_names(technique_ids, canonical_tactic(step.tactic) if step.tactic else ""),
         # Covered only by a dashboard, report or log: watched, but nothing alerts.
         "non_alerting": status == "green" and not is_applied,
+        # Covered only by rules a Rule Monitoring finding stops working (#79), and why.
+        "not_effective": _not_effective(status, partial, is_applied, working, bool(watched)),
+        "not_effective_why": _not_effective_why(covering) if not working else [],
         # Dashboards, reports and logs watching it (non-alerting coverage).
         "watched": watched,
         "risk_labels": {"priority": dict(STEP_PRIORITIES), "category": dict(STEP_CATEGORIES),
@@ -3196,9 +3300,12 @@ def _step_detail(step: PlaybookStep, ctx: Dict) -> Dict:
              "updated_by": b.updated_by, "updated_at": b.updated_at}
             for b in bs
         ],
-        "review_due": bool(mark and mark.review_due),
-        "evidence_score": best["score"] if best else None,
+        "review_due": any(b.review_due for b in bs),
+        "partial": partial,
+        "gap_count": gaps,
+        "evidence_score": evidence,
         "evidence_rule": best["name"] if best else "",
+        "evidence_how": how,
         # Newest first, as Recent activity is in the rule window.
         "history": history,
         "history_users": sorted({h["actor"] for h in history if h["actor"]}),
@@ -3286,10 +3393,15 @@ def _evidence(x: Dict) -> Dict:
         why = "Recorded by hand, not a SIEM rule, so it has no score."
     elif not x["rule_id"]:
         why = "This rule is no longer in TIDE."
+    elif not x["counts"] and x.get("why_not") in ("disabled", "deprecated"):
+        why = f"The rule is {x['why_not']}{where}, so it covers nothing here."
     elif not x["counts"]:
         why = f"Mapped{where}, which this system is not measured on."
     elif not x["applied"]:
         why = "Mapped, but not applied to this system."
+    elif not x.get("effective", True):
+        why = (f"Applied to this system{where}, but not effective: {'; '.join(x['problems'])}. "
+               f"Its rule score is {x['score']}%.")
     else:
         why = f"Applied to this system{where}. Its rule score is {x['score']}%."
     scored = x["score"] is not None and x["counts"] and x["applied"] and not x["unresolved"]
@@ -3327,6 +3439,49 @@ def _technique_status(covered: bool, has_gap: bool, has_na: bool, non_alerting: 
     if has_gap:
         return "amber"
     return "green" if covered or non_alerting else "red"
+
+
+def _partly_covered(status: str, covered: bool, non_alerting: bool = False) -> bool:
+    """Partial coverage (#92): known gaps beside coverage that counts (a rule, or a dashboard, report
+    or log). Its status stays amber, as Non-alerting is a kind of green, so everything that counts
+    known gaps -- the Known gaps card, Covered, the Dashboard, reports, the history -- still does."""
+    return status == "amber" and (covered or non_alerting)
+
+
+def _not_effective(status: str, partial: bool, applied: bool, working: bool, watched: bool) -> bool:
+    """Covered, or partly, only through rules that count but that a Rule Monitoring finding stops
+    working (#79): no rule that works and no dashboard, report or log covers it."""
+    return (status == "green" or partial) and applied and not working and not watched
+
+
+def _uncounted_why(uncounted: int, disabled: int) -> str:
+    """Why a technique's mapped rules that don't count, don't: disabled (or deprecated), or only at
+    a destination the system doesn't count, or both."""
+    if not uncounted:
+        return ""
+    if disabled == uncounted:
+        return "disabled or deprecated, so they cover nothing" if uncounted > 1 else "disabled or deprecated, so it covers nothing"
+    if not disabled:
+        return "only at a destination this system does not count toward coverage"
+    return "disabled, or only at a destination this system does not count toward coverage"
+
+
+def _not_effective_why(covering: List[Dict]) -> List[str]:
+    """Why each rule covering a technique isn't effective: "<rule>: <finding>; <finding>"."""
+    return [f"{x['name']}: {'; '.join(x['problems'])}" for x in covering if not x.get("effective", True) and x["problems"]]
+
+
+def partial_score(strongest: int, rules: int, gaps: int) -> int:
+    """A partly covered technique's ring: its strongest counted rule's score in the share of its
+    coverage its rules make up, beside its known gaps: 50 with one gap is 25, with two 17."""
+    return int(strongest * rules / (rules + gaps) + 0.5) if rules + gaps else strongest
+
+
+def _ring_how(rule: str, strongest: int, rules: int, gaps: int) -> str:
+    """What a partly covered technique's ring says when hovered."""
+    return (f"Partial coverage: the strongest rule protecting this system, {rule}, scored {strongest}%; "
+            f"with {rules} rule{'s' if rules != 1 else ''} and {gaps} known gap{'s' if gaps != 1 else ''} it counts "
+            f"{strongest} × {rules} ÷ {rules + gaps} = {partial_score(strongest, rules, gaps)}")
 
 
 def update_step_risks(step_id: str, system_id: str, *, priority: str, category: str,
@@ -3580,7 +3735,8 @@ def group_system_steps(steps: List[Dict], group_by: List[str], tactic_sort: str 
     def counts(rows):   # a template's rows have no status: none are scored
         scored = [r for r in rows if r.get("status") not in (None, "grey")]
         covered = sum(1 for r in scored if r["status"] == "green")
-        return {"total": len(rows), "scored": len(scored), "covered": covered,
+        effective = sum(1 for r in scored if r["status"] == "green" and not r.get("not_effective"))
+        return {"total": len(rows), "scored": len(scored), "covered": covered, "effective": effective,
                 "pct": round(covered / len(scored) * 100) if scored else None}
 
     def by(rows, field, order_key):
@@ -3634,7 +3790,11 @@ def get_system_steps(system_id: str, client_id: str = None, search: str = "", ta
 
     totals = step_totals(steps)
 
-    if status:
+    if status == "partial":           # Partial coverage: the known gaps with coverage beside them
+        steps = [s for s in steps if s.get("partial")]
+    elif status == "not_effective":   # covered only by rules that don't work (#79)
+        steps = [s for s in steps if s.get("not_effective")]
+    elif status:
         steps = [s for s in steps if s["status"] == status]
     if mapping == "unmapped":
         steps = [s for s in steps if not s.get("mapped_count")]
@@ -3653,11 +3813,17 @@ def get_system_steps(system_id: str, client_id: str = None, search: str = "", ta
 
 
 def step_totals(steps: List[Dict]) -> Dict[str, int]:
-    """The system page's metric strip for these techniques: Covered is ``covered / (total - na)``."""
+    """The system page's metric strip for these techniques: Covered is ``covered / (total - na)``,
+    Effective ``effective / (total - na)``: covered, less those covered only by rules a Rule
+    Monitoring finding stops working (``not_effective``, partly covered ones included) (#79).
+    ``gap`` counts every technique with a known gap, ``partial`` those of them partly covered."""
     return {
         "total": len(steps),
         "covered": sum(1 for s in steps if s["status"] == "green"),
+        "effective": sum(1 for s in steps if s["status"] == "green" and not s.get("not_effective")),
+        "not_effective": sum(1 for s in steps if s.get("not_effective")),
         "gap": sum(1 for s in steps if s["status"] == "amber"),
+        "partial": sum(1 for s in steps if s.get("partial")),
         "na": sum(1 for s in steps if s["status"] == "grey"),
         "none": sum(1 for s in steps if s["status"] == "red"),
         "unmapped": sum(1 for s in steps if not s.get("mapped_count")),
@@ -3810,7 +3976,7 @@ def get_system_baselines(
     _all_dets = [d for sts in _all_steps_by_pb.values() for st in sts for d in st.detections]
     # Dashboards, reports and logs watching each step (non-alerting coverage), in one query.
     _watched = get_step_coverage([st.id for sts in _all_steps_by_pb.values() for st in sts])
-    counts_toward_coverage, counted_scopes, coverage_undefined = _counted_scope_resolver(
+    standing, counted_scopes, coverage_undefined = _counted_scope_resolver(
         system_id, _all_dets, client_id=client_id,
     )
 
@@ -3819,6 +3985,7 @@ def get_system_baselines(
         steps = _all_steps_by_pb[pb_id]
         step_results = []
         covered = 0
+        effective_covered = 0
         gap_count = 0
         na_count = 0
         for step in steps:
@@ -3827,23 +3994,24 @@ def get_system_baselines(
             sys_blind_spots = [bs for bs in step_bs if bs.system_id == system_id]
             has_na = any(bs.override_type == "na" for bs in sys_blind_spots)
             has_gap = any(bs.override_type == "gap" for bs in sys_blind_spots)
-            bs_reason = next((bs.reason for bs in sys_blind_spots), "")
+            bs_reason = "; ".join(bs.reason for bs in sys_blind_spots     # the N/A's (it decides), else each gap's
+                                  if (bs.override_type == "na") == has_na and bs.reason)
             review_by = min((bs.review_by for bs in sys_blind_spots if bs.review_by), default=None)
 
             # A detection counts for this step only if it is applied to a host on this system AND
-            # its rule lives somewhere this system is actually graded on (§4.3). A rule sitting
-            # only in staging protects nothing, so it must not read as covered here.
-            step_det_ids = {
-                d.id for d in step.detections
-                if (d.source or 'manual') != 'sigma' and counts_toward_coverage(d)
-            }
+            # its rule lives, enabled, somewhere this system is actually graded on (§4.3). A rule
+            # sitting only in staging, or switched off, protects nothing, so it must not read as
+            # covered here. One that counts is effective unless Rule Monitoring finds it can't work.
+            judged = [(d, standing(d)) for d in step.detections if (d.source or 'manual') != 'sigma']
+            step_det_ids = {d.id for d, st in judged if st["counts"]}
             is_applied = bool(step_det_ids & applied_step_det_ids) if step_det_ids else False
+            working = bool({d.id for d, st in judged if st["counts"] and st["effective"]} & applied_step_det_ids)
             # Mapped but not counted: there IS a rule for this step, it just isn't anywhere this
-            # system is graded on. Shown distinctly rather than as "nothing here".
-            uncounted_count = sum(
-                1 for d in step.detections
-                if (d.source or 'manual') != 'sigma' and not counts_toward_coverage(d)
-            )
+            # system is graded on, or is disabled there. Shown distinctly rather than as "nothing here".
+            uncounted_count = sum(1 for _d, st in judged if not st["counts"])
+            disabled_count = sum(1 for _d, st in judged if st["why_not"] in ("disabled", "deprecated"))
+            problems = list(dict.fromkeys(p for d, st in judged if st["counts"] and d.id in applied_step_det_ids
+                                          for p in st["problems"]))
             # How many rules are mapped to *this step* -- every one of them, counted or not, so
             # the card can say "2 rules, 1 not counted" rather than quietly showing 1. Deliberately
             # separate from the per-technique rule counts below, which are tenant-wide ("some rule
@@ -3852,8 +4020,11 @@ def get_system_baselines(
             mapped_count = len(step_det_ids) + uncounted_count
 
             status = _technique_status(is_applied, has_gap, has_na, bool(_watched.get(step.id)))
+            partial = _partly_covered(status, is_applied, bool(_watched.get(step.id)))
+            not_effective = _not_effective(status, partial, is_applied, working, bool(_watched.get(step.id)))
             if status == "green":
                 covered += 1
+                effective_covered += 0 if not_effective else 1
             elif status == "grey":
                 na_count += 1
             elif status == "amber":
@@ -3899,6 +4070,12 @@ def get_system_baselines(
                 "status": status,
                 # Covered only by a dashboard, report or log: watched, but nothing alerts.
                 "non_alerting": status == "green" and not is_applied,
+                # Known gaps beside coverage that counts: amber, labelled Partial coverage (#92).
+                "partial": partial,
+                # Covered, or partly, only by rules a Rule Monitoring finding stops working (#79).
+                "not_effective": not_effective,
+                "not_effective_why": problems if not_effective else [],
+                "gap_count": sum(1 for bs in sys_blind_spots if bs.override_type != "na"),
                 "priority": step.priority,
                 "category": step.category,
                 "blind_spot_reason": bs_reason,
@@ -3907,6 +4084,8 @@ def get_system_baselines(
                 "review_due": bool(review_by and review_by <= date.today()),
                 "mapped_count": mapped_count,
                 "uncounted_count": uncounted_count,
+                "disabled_count": disabled_count,
+                "uncounted_why": _uncounted_why(uncounted_count, disabled_count),
                 # Tenant-wide: how many rules anywhere carry this step's techniques. A prompt to go
                 # looking, never a statement about this step. `rule_count`/`has_detection` below are
                 # the same number per technique and are named for the technique, not the step.
@@ -3928,8 +4107,10 @@ def get_system_baselines(
             })
         total = len(steps)
         # New math: Green / (Total - Grey) * 100
-        effective_total = total - na_count
-        pct = round(covered / effective_total * 100) if effective_total else (100 if total else 0)
+        scored = total - na_count
+        pct = round(covered / scored * 100) if scored else (100 if total else 0)
+        # Effective: covered by a rule that works, or by a dashboard, report or log (#79).
+        effective_pct = round(effective_covered / scored * 100) if scored else (100 if total else 0)
         result.append({
             "baseline_id": sb_id,
             "playbook_id": pb_id,
@@ -3944,9 +4125,11 @@ def get_system_baselines(
             "tactics": step_results,
             "total_steps": total,
             "covered_steps": covered,
+            "effective_steps": effective_covered,
             "gap_steps": gap_count,
             "na_steps": na_count,
             "coverage_pct": pct,
+            "effective_pct": effective_pct,
         })
     return result
 

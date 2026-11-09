@@ -2101,6 +2101,45 @@ async def update_validation_thresholds(
     )
 
 
+# Rule Monitoring's thresholds a client can set (clients columns): what each is called, and its range.
+_MONITORING_SETTINGS = {
+    "data_window_hours": ("Expect new data every", 1, 24 * 366),
+    "noisy_per_day": ("Noisy over", 1, 1_000_000),
+    "noisy_share_pct": ("Or over", 1, 100),
+    "silent_days": ("Silent after", 1, 90),
+    "silent_enabled_days": ("Once enabled for", 1, 3660),
+    "upstream_pending_days": ("Upstream update pending after", 1, 3660),
+    "exceptions_many": ("Many exceptions over", 1, 10000),
+}
+# Rule Monitoring checks the client turns on or off (a ticked box saves 1, else 0).
+_MONITORING_SWITCHES = {"validation_stale": "List expired or changed validations"}
+
+
+@router.post("/clients/{client_id}/rule-monitoring", response_class=HTMLResponse)
+async def update_rule_monitoring_settings(request: Request, client_id: str, db: DbDep, user: ClientAdmin):
+    """Save the client's Rule Monitoring thresholds (blank: TIDE's default), and find again what its
+    rules need when one changed."""
+    from starlette.concurrency import run_in_threadpool
+    form = await request.form()
+    values = {}
+    for name, (label, lo, hi) in _MONITORING_SETTINGS.items():
+        raw = str(form.get(name) or "").strip()
+        try:
+            values[name] = int(raw) if raw else None
+        except ValueError:
+            values[name] = -1
+        if values[name] is not None and not lo <= values[name] <= hi:
+            return _render_client_siems_partial(client_id, db, toast=f"{label} must be a whole number from {lo:,} to {hi:,}.")
+    for name in _MONITORING_SWITCHES:
+        values[name] = 1 if str(form.get(name) or "").lower() in ("1", "on", "true") else 0
+    before = db.get_client(client_id) or {}
+    db.update_client(client_id, **values)
+    logger.info("Client %s Rule Monitoring settings updated by %s: %s", client_id, user.username, values)
+    if any(before.get(k) != v for k, v in values.items()):
+        await run_in_threadpool(_refresh_monitoring, db, client_id)
+    return _render_client_siems_partial(client_id, db, toast="Rule Monitoring settings saved.")
+
+
 # ---------------------------------------------------------------------------
 # Rule scoring weights (Linked SIEMs section of the client page)
 # ---------------------------------------------------------------------------
@@ -3076,6 +3115,48 @@ def _keycloak_card(i: dict) -> str:
 # Client detail page partial helpers
 # ---------------------------------------------------------------------------
 
+def client_data_windows_context(client_id: str, db) -> dict:
+    """For the client's Rule Monitoring settings, below the validation thresholds: how often it expects
+    new data by default (``default_data_window``, in hours), TIDE's other defaults
+    (``monitoring_defaults``), and the index patterns given a window of their own (``data_windows``)."""
+    from app.services import data_freshness as df
+    from app.services.tenant_manager import tenant_context_for
+    rows = []
+    try:
+        with tenant_context_for(client_id), db.get_connection() as conn:
+            own = df.windows(conn)
+        labels = {s["id"]: s.get("label") or s["id"] for s in db.list_siem_inventory() or []}
+        for (siem_id, pattern), w in sorted(own.items(), key=lambda kv: (kv[0][1].lower(), kv[0][0])):
+            rows.append({"siem_id": siem_id, "pattern": pattern, "siem": labels.get(siem_id, siem_id),
+                         "expected": "Not expected (a retired source)" if w["hours"] == df.NOT_EXPECTED
+                         else f"Every {df.hours_text(w['hours'])}", "by": w["by"], "at": w["at"], "note": w["note"]})
+    except Exception:
+        logger.warning("Could not read the data windows of client %s", client_id, exc_info=True)
+    from app.services.rule_alerts import DEFAULTS
+    return {"data_windows": rows, "default_data_window": df.DEFAULT_HOURS, "monitoring_defaults": DEFAULTS}
+
+
+def _refresh_monitoring(db, client_id: str) -> None:
+    """Find again what the client's rules need (Rule Monitoring) after a setting it uses changed."""
+    from app.services import rule_issues
+    rule_issues.refresh_tenant(db, client_id, db.get_client_siem_scopes(client_id) or [])
+
+
+@router.post("/clients/{client_id}/data-window/remove", response_class=HTMLResponse)
+async def remove_data_window(request: Request, client_id: str, db: DbDep, user: ClientAdmin):
+    """An index pattern's own window goes: new data is expected in it as in the client's others."""
+    from starlette.concurrency import run_in_threadpool
+    from app.services import data_freshness as df
+    from app.services.tenant_manager import tenant_context_for
+    form = await request.form()
+    siem_id, pattern = str(form.get("siem_id") or ""), str(form.get("pattern") or "")
+    with tenant_context_for(client_id), db.get_connection() as conn:
+        df.set_window(conn, [siem_id], pattern, None, "", user.username)
+    await run_in_threadpool(_refresh_monitoring, db, client_id)
+    logger.info("Client %s: %s removed the data window of %s on %s", client_id, user.username, pattern, siem_id)
+    return _render_client_siems_partial(client_id, db, toast=f"{pattern}: new data is expected as for the client.")
+
+
 def _render_client_siems_partial(client_id: str, db, toast: str = None) -> HTMLResponse:
     """Re-render the client SIEMs section using Jinja2 partial."""
     from html import escape
@@ -3200,6 +3281,7 @@ def _render_client_siems_partial(client_id: str, db, toast: str = None) -> HTMLR
         settings=_settings,
         destination_color_palette=DESTINATION_COLOR_PALETTE,
         next_free_color=next_free_color,
+        **client_data_windows_context(client_id, db),
     )
 
     toast_html = ""
@@ -4995,7 +5077,14 @@ def _backups_panel(request: Request, message: str = "", ok: bool = True, restore
         "restore": backups.restore_steps(chosen["name"], chosen["tide_version"]) if chosen else backups.restore_steps(),
         "restore_relation": backups.version_relation(chosen["tide_version"]) if chosen else None,
         "running_version": get_settings().tide_version, "size": backups.size, "message": message, "ok": ok,
+        "window": _window_backup(),
     })
+
+
+def _window_backup() -> str:
+    """When the maintenance window (#82) makes the backup instead of the daily schedule: when it runs."""
+    from app.services import maintenance
+    return maintenance.summary().lower() if maintenance.takes_backup() else ""
 
 
 @router.get("/backups", response_class=HTMLResponse)

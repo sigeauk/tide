@@ -946,6 +946,7 @@ def get_system_heatmap_matrix(
                 "title": title,
                 "tactic": display_tactic,
                 "status": status,
+                "partial": bool(step.get("partial")),       # known gaps beside coverage (#92)
                 "baseline": bl["playbook_name"],
                 "step_id": step.get("step_id", ""),
                 "all_techniques": tech_ids,
@@ -973,7 +974,7 @@ def get_system_heatmap_matrix(
             css_class=STATUS_CSS.get(entry["status"], "status-gap"),
             tooltip=(
                 f'{entry["tech_id"]}: {entry["title"] or "Untitled"} | '
-                f'{STATUS_TOOLTIP.get(entry["status"], "MISSING")} | '
+                f'{"PARTIAL COVERAGE" if entry["partial"] else STATUS_TOOLTIP.get(entry["status"], "MISSING")} | '
                 f'Baseline: {entry["baseline"]}'
                 + (
                     f' | Tagged: {", ".join(entry["all_techniques"])}'

@@ -1,0 +1,60 @@
+{#
+  Rule Monitoring's Expect new data every… dialog (rule_monitoring.window_form), on a "No recent events in
+  the index pattern" cause: how often new events are expected in that index pattern, as the client
+  expects (its own window taken away), every so many hours or days, or not at all (a retired source).
+  Context: pattern, cause_siem_ids (comma-separated: the SIEM records of one cluster), label (the cause as
+  listed), default (the client's window, as text), own ({hours, note, by, at} or None), every, unit.
+  Saving closes the dialog and refreshes the list (rmonChanged).
+#}
+{% from "macros/modal.html" import close_button %}
+{% set choice = 'client' if not own else ('none' if own.hours == 0 else 'every') %}
+<div class="modal-overlay" data-click="backdrop.remove">
+    <div class="modal-content modal-sm" data-stop-click role="dialog" aria-modal="true" aria-labelledby="rmon-window-title">
+        <div class="modal-header">
+            <h3 class="modal-title" id="rmon-window-title">Expect new data every</h3>
+            {{ close_button('data-click="modal.remove"', 'Cancel') }}
+        </div>
+        <form name="Expect New Data" hx-post="/api/rule-monitoring/window" hx-target="#modal-container" hx-swap="innerHTML">
+            <input type="hidden" name="pattern" value="{{ pattern }}">
+            <input type="hidden" name="cause_siem_ids" value="{{ cause_siem_ids }}">
+            <p class="text-secondary mb-md">How often new events should reach <strong>{{ label }}</strong>. When none has
+                for longer, Rule Monitoring lists it under <strong>No recent events in the index pattern</strong>.</p>
+            {% if own %}
+            <p class="text-muted fs-sm mb-md">Set by {{ own.by }} on {{ own.at.strftime('%Y-%m-%d') }}{% if own.note %}: {{ own.note }}{% else %}.{% endif %}</p>
+            {% endif %}
+            <fieldset class="border-0 p-0 mt-0 mx-0 mb-md">
+                <legend class="form-label">Expect new data</legend>
+                <label class="flex gap-sm items-start mb-sm">
+                    <input type="radio" name="expect" value="client"{{ ' checked' if choice == 'client' }}>
+                    <span><strong>As the client does: every {{ default }}</strong><br>
+                    <span class="text-muted fs-sm">Set on the client's page.</span></span>
+                </label>
+                <label class="flex gap-sm items-start mb-sm">
+                    <input type="radio" name="expect" value="every"{{ ' checked' if choice == 'every' }}>
+                    <span><strong>Every</strong>
+                        <span class="flex gap-sm items-center mt-sm">
+                            <input type="number" name="every" min="1" max="366" class="form-input siem-num-input"
+                                   value="{{ every }}" aria-label="How many">
+                            <select name="unit" class="form-input" aria-label="Hours or days">
+                                <option value="hours"{{ ' selected' if unit == 'hours' }}>hours</option>
+                                <option value="days"{{ ' selected' if unit == 'days' }}>days</option>
+                            </select>
+                        </span>
+                        <span class="text-muted fs-sm">For a source that sends now and then, such as a weekly upload.</span></span>
+                </label>
+                <label class="flex gap-sm items-start">
+                    <input type="radio" name="expect" value="none"{{ ' checked' if choice == 'none' }}>
+                    <span><strong>Don't expect new data</strong><br>
+                    <span class="text-muted fs-sm">A retired source: it isn't listed however long it stays quiet.</span></span>
+                </label>
+            </fieldset>
+            <label class="form-label" for="rmon-window-note">Note</label>
+            <textarea id="rmon-window-note" name="note" class="form-input" rows="2" maxlength="1000"
+                      placeholder="Why, for example: this source uploads once a week.">{{ own.note if own else '' }}</textarea>
+            <div class="modal-actions">
+                <button name="Cancel" type="button" class="btn btn-secondary" data-click="modal.remove">Cancel</button>
+                <button name="Save" type="submit" class="btn btn-primary">Save</button>
+            </div>
+        </form>
+    </div>
+</div>

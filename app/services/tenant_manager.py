@@ -128,6 +128,12 @@ def resolve_tenant_db_path(client_id: str, data_dir: str) -> Optional[str]:
     return None
 
 
+def forget_tenant(client_id: str) -> None:
+    """Drop a deleted client from the cache, so nothing resolves (and reopens) its database file."""
+    with _cache_lock:
+        _tenant_db_cache.pop(client_id, None)
+
+
 def refresh_tenant_cache(data_dir: str, shared_db_path: str):
     """Reload the client_id → db_filename mapping from the shared database."""
     try:

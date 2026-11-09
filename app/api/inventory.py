@@ -2651,6 +2651,14 @@ def _review_date(value: str):
         raise HTTPException(status_code=400, detail="Review date must be a date (YYYY-MM-DD)")
 
 
+def _one_na(step_id: str, system_id: str, client_id: str, but: str = "") -> None:
+    """Refuse a second N/A mark on a technique on one system (``but``: the mark being edited)."""
+    if any(b.system_id == system_id and b.override_type == "na" and b.id != but
+           for b in get_blind_spots("tactic", step_id, client_id=client_id)):
+        raise HTTPException(status_code=409, detail="This technique is already marked not applicable on this "
+                                                    "system: update that mark instead.")
+
+
 @router.post("/api/blind-spots", response_class=HTMLResponse)
 def api_add_blind_spot(
     request: Request, user: RequireUser, client_id: ActiveClient,
@@ -2662,8 +2670,11 @@ def api_add_blind_spot(
     review_by: str = Form(""),
 ):
     if entity_type == "tactic":
-        # A technique's gap or N/A belongs to the system whose baseline the technique is in.
+        # A technique's gap or N/A belongs to the system whose baseline the technique is in. It can
+        # have any number of known gaps (#92), but one N/A: that decides it whatever else is there.
         _system_step_or_404(system_id or "", entity_id, client_id)
+        if override_type == "na":
+            _one_na(entity_id, system_id, client_id)
     username = user.username if user else ""
     add_blind_spot(entity_type, entity_id, reason,
                    system_id=system_id or None, host_id=host_id or None,
@@ -2702,6 +2713,8 @@ def api_edit_blind_spot(
     owned = {b.id for b in get_blind_spots("tactic", entity_id, client_id=client_id) if b.system_id == system_id}
     if blind_spot_id not in owned:
         raise HTTPException(status_code=404, detail="Mark not found on this technique")
+    if override_type == "na":
+        _one_na(entity_id, system_id, client_id, but=blind_spot_id)
     update_blind_spot(blind_spot_id, reason.strip(), override_type, review_by=_review_date(review_by),
                       actor=_actor(user), client_id=client_id)
     resp = _step_modal_response(request, system_id, entity_id, client_id)
@@ -3033,14 +3046,20 @@ def _generate_system_markdown(data: dict, classification: str) -> str:
 
     if show_baselines:
         covered = "—" if data["coverage_pct"] is None else f"{data['coverage_pct']}% ({t['covered']} of {scored} scored)"
+        effective = "—" if data["effective_pct"] is None else f"{data['effective_pct']}% ({t['effective']} of {scored} scored)"
         lines += [
             data["narrative"],
             "",
-            "| Covered | Techniques | No coverage | Known gaps | Unmapped | Not counted |",
-            "|---------|------------|-------------|------------|----------|-------------|",
-            f"| {covered} | {t['total']} | {t['none']} | {t['gap']} | {t['unmapped']} | {t['uncounted']} |",
+            "| Covered | Effective | Techniques | No coverage | Known gaps | Unmapped | Not counted |",
+            "|---------|-----------|------------|-------------|------------|----------|-------------|",
+            f"| {covered} | {effective} | {t['total']} | {t['none']} | {t['gap']}"
+            + (f" ({t['partial']} partial coverage)" if t.get("partial") else "") + f" | {t['unmapped']} | {t['uncounted']} |",
             "",
         ]
+        if t.get("not_effective"):
+            lines += [f"> Effective leaves out {t['not_effective']} technique{'s' if t['not_effective'] != 1 else ''} "
+                      "covered only by rules that can't work now (a Rule Monitoring error, or a field they match on "
+                      "missing or empty).", ""]
         if data["coverage_undefined"]:
             lines += ["> No SIEM coverage destinations are set for this system, so Covered is not scored.", ""]
 
@@ -3062,13 +3081,13 @@ def _generate_system_markdown(data: dict, classification: str) -> str:
         lines += [
             "## Baselines",
             "",
-            "| Baseline | Techniques | Covered | No coverage | Known gaps | N/A | Coverage |",
-            "|----------|------------|---------|-------------|------------|-----|----------|",
+            "| Baseline | Techniques | Covered | No coverage | Known gaps | N/A | Coverage | Effective |",
+            "|----------|------------|---------|-------------|------------|-----|----------|-----------|",
         ]
         for b in data["baselines"]:
             bt = b["totals"]
             lines.append(f"| {_md(b['name'])} | {bt['total']} | {bt['covered']} | {bt['none']} | {bt['gap']} | "
-                         f"{bt['na']} | {b['coverage_pct']}% |")
+                         f"{bt['na']} | {b['coverage_pct']}% | {b['effective_pct']}% |")
         lines.append("")
 
         lines += ["## Priority Gaps", ""]
@@ -3094,14 +3113,19 @@ def _generate_system_markdown(data: dict, classification: str) -> str:
             lines.append("No rules are mapped and no SIEM coverage destinations are set.")
         lines.append("")
         if data["uncounted_mappings"]:
-            lines += ["### Rules outside SIEM coverage", "",
-                      "These rules are mapped, but sit where this system is not measured, so they do not count as coverage.", "",
-                      "| Rule | Destination | Technique | Baseline | Added |",
-                      "|------|-------------|-----------|----------|-------|"]
+            lines += ["### Rules that don't count", "",
+                      "These rules are mapped, but are disabled, or sit where this system is not measured, so they do "
+                      "not count as coverage.", "",
+                      "| Rule | Why | Destination | Technique | Baseline | Added |",
+                      "|------|-----|-------------|-----------|----------|-------|"]
             for u in data["uncounted_mappings"]:
-                lines.append(f"| {_md(u['rule'])} | {_md(u['destination'])} | {_md(u['technique'])} | "
+                lines.append(f"| {_md(u['rule'])} | {_md(u['why'])} | {_md(u['destination'])} | {_md(u['technique'])} | "
                              f"{_md(u['baseline'])} | {_md_date(u['added'])} |")
             lines.append("")
+
+        if data.get("rule_health"):          # #80
+            from app.services.rule_issues import report_rule_health_markdown
+            lines += report_rule_health_markdown(data["rule_health"], data.get("rules_synced") or "", mode == "technical")
 
         if data.get("trend"):
             # The weeks where a baseline's figures changed (and its first), newest first.
@@ -3165,11 +3189,13 @@ def _generate_system_markdown(data: dict, classification: str) -> str:
                     lines += ["", f"#### {tactic or 'Unassigned'}", "",
                               "| # | Technique | ATT&CK | Priority | Status | Covered by |",
                               "|---|-----------|--------|----------|--------|------------|"]
-                by = tech["rule_names"] + [f"{n} (not in SIEM coverage)" for n in tech["uncounted_rule_names"]]
+                by = [f"{n} (not effective)" if n in tech["not_effective_rule_names"] else n for n in tech["rule_names"]]
+                by += [f"{u['name']} ({u['why']})" for u in tech["uncounted_rules"]]
                 by += [f"{c['label']}: {c['name']}" for c in tech["coverage"] if c["flag"] == "Non-alerting"]
                 if tech["status"] in ("amber", "grey"):
                     by = [tech["mark_reason"]] + by
-                status = tech["status_label"] + (" (non-alerting)" if tech["non_alerting"] else "")
+                status = tech["status_label"] + (" (non-alerting)" if tech["non_alerting"] else "") \
+                    + (" (not effective)" if tech["not_effective"] else "")
                 lines.append(f"| {tech['number'] or ''} | {_md(tech['title'])} | "
                              f"{_md(', '.join(a['id'] for a in tech['attack']))} | {_md(tech['priority_label'])} | "
                              f"{status} | {_md('; '.join(n for n in by if n))} |")
@@ -3180,7 +3206,8 @@ def _generate_system_markdown(data: dict, classification: str) -> str:
             if data["technique_scope"] == "gaps":
                 lines += ["_Techniques with no coverage or a known gap._", ""]
             for tech in data["detailed_techniques"]:
-                facts = [f"**Status:** {tech['status_label']}" + (" (non-alerting)" if tech["non_alerting"] else "")]
+                facts = [f"**Status:** {tech['status_label']}" + (" (non-alerting)" if tech["non_alerting"] else "")
+                         + (" (not effective)" if tech["not_effective"] else "")]
                 if tech["priority_label"]:
                     facts.append(f"**Priority:** {tech['priority_label']}")
                 if tech["category_label"]:

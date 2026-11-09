@@ -1,8 +1,8 @@
 /*
- * The New Client dialog (#client-modal) on Management's Clients tab, and Delete client (a client's
- * own page; its Edit client has its own dialog). What follows a save or a delete is the control's
- * data-after: "tab" refreshes Management's Clients tab, a path opens that page, anything else
- * reloads the page.
+ * The New Client dialog (#client-modal) on Management's Clients tab, and where Delete client goes
+ * after deleting (a client's own page; its Edit client has its own dialog). What follows a save or a
+ * delete is the control's data-after: "tab" refreshes Management's Clients tab, a path opens that
+ * page, anything else reloads the page.
  */
 (function () {
     'use strict';
@@ -58,19 +58,8 @@
                 showToast(TIDE.UNREACHABLE, 'error');
             }
         },
-        delete: async function (e, el) {
-            if (!confirm('Delete client "' + el.dataset.name + '"? This cannot be undone.')) return;
-            try {
-                var resp = await fetch('/api/clients/' + el.dataset.id, { method: 'DELETE' });
-                if (!resp.ok) {
-                    var err = await resp.json();
-                    showToast(err.detail || 'Could not delete the client.', 'error');
-                    return;
-                }
-                after(el.dataset.after);
-            } catch (ex) {
-                showToast(TIDE.UNREACHABLE, 'error');
-            }
-        },
+        // Delete client is a dialog from TIDE (components/client_delete.html); once it has deleted the
+        // client, its Close (and its backdrop) go to its data-after, as the page behind is gone.
+        after: function (e, el) { after(el.dataset.after); },
     });
 })();

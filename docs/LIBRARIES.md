@@ -25,13 +25,13 @@ The libraries are as they were when your TIDE image was built; upgrading TIDE br
    - **Pipeline**: how Sigma's field names map to your SIEM's, or **No Pipeline** to leave them as Sigma writes them.
    - **Custom pipelines** and **Templates**: your own pipelines and output templates, applied in the order you tick them. Your administrator manages these in **Settings → Management**.
 3. The open rule's **Query** shows the conversion with these settings, and follows any change to them.
-4. Click **Convert**. The rule form opens, filled in with the converted rule, to change and create in your SIEM (see [Create a rule](RULES.md#create-a-rule)).
+4. Click **Deploy**. The rule form opens, filled in with the converted rule, to change and create in your SIEM (see [Create a rule](RULES.md#create-a-rule)).
 
 A Sigma rule converted in TIDE is remembered as coming from Sigma, with how it was converted, so a later Sigma update to it can be converted the same way.
 
 ### Use a Sigma rule of your own
 
-**⋮ › Add your own Sigma rule** opens an editor. Paste or write the rule, **Validate** it, then **Show rule**: it opens on the right like the library's rules, converted with the settings across the top, ready to **Convert**. **Clear** empties the editor.
+**⋮ › Add your own Sigma rule** opens an editor. Paste or write the rule, **Validate** it, then **Show rule**: it opens on the right like the library's rules, converted with the settings across the top, ready to **Deploy**. **Clear** empties the editor.
 
 ## Elastic rules
 

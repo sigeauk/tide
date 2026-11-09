@@ -37,6 +37,7 @@ class Check:
     run: Callable[..., Tuple[List[str], List[tuple]]]   # (conn, ctx) -> (columns, rows)
     listing: bool = False    # rows are information to read, not problems to fix
     on_demand: bool = False  # slow (copies files): its own Run only, not Run all checks
+    action: Optional[Tuple[str, str]] = None   # an install check's own remedy: (button, the GET that previews it)
 
 
 def _tables(conn) -> set:
@@ -72,6 +73,16 @@ def _missing_tenant_db(conn, ctx):
         if not os.path.exists(os.path.join(ctx["data_dir"], fname))
     ]
     return ["client", "database file"], rows
+
+
+def _orphaned_db_files(conn, ctx):
+    """Database files in the data folder that belong to no client (client_deletion.orphans)."""
+    from app.services import client_deletion
+    if "clients" not in _tables(conn):
+        return [], []
+    return ["file", "size", "last changed"], [
+        (f["file"], client_deletion.size_text(f["size"]), f["modified"].strftime("%d %b %Y %H:%M"))
+        for f in client_deletion.orphans(conn, ctx["data_dir"])]
 
 
 # ── client checks (one client's database) ────────────────────────────────
@@ -330,6 +341,15 @@ CHECKS: List[Check] = [
         "TIDE has a client whose data file is not in the data folder; that client's pages show nothing.",
         "Restore the file from a backup, or remove the client in Management if it is no longer used.",
         _missing_tenant_db,
+    ),
+    Check(
+        "orphaned_db_files", "Database files with no client", "install", "warning",
+        "Database files in the data folder that belong to no client: left by a client deleted before TIDE 6.4.0, "
+        "which deleted only its settings, by a file TIDE couldn't delete with its client, or a client's CTI "
+        "database from before 6.3.0. Nothing reads them; they only take disk space.",
+        "Delete these files deletes them for good (it asks you to confirm first). Copy one out of the data "
+        "folder first only if you need what a deleted client held.",
+        _orphaned_db_files, action=("Delete these files", "/api/diagnostics/orphans/preview"),
     ),
     Check(
         "unknown_siem", "Destinations linked to a SIEM that no longer exists", "install", "error",

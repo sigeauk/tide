@@ -178,9 +178,12 @@ Children are indented, slightly muted, icon-free.
                 <button name="Theme" type="button" class="nav-child" data-click="nav.theme">
                     <span class="nav-label" id="theme-label">Light Mode</span>
                 </button>
-                <a name="Log Out" href="/logout" class="nav-child" hx-boost="false">
-                    <span class="nav-label">Log Out</span>
-                </a>
+                {# A POST, so another site can't sign anyone out with a link (#100). #}
+                <form method="post" action="/auth/logout" class="nav-form" hx-boost="false">
+                    <button name="Log Out" type="submit" class="nav-child">
+                        <span class="nav-label">Log Out</span>
+                    </button>
+                </form>
             </div>
         </div>
         {% else %}

@@ -1,0 +1,93 @@
+{#
+  Management -> Maintenance window (super admins, #82, app.services.maintenance): when it runs and
+  which steps, Run now, a restart it has announced (Restart now, Postpone), and its last run step by
+  step. Laid out as the Backups panel; while it runs the panel reloads itself every 3 s.
+  Context: schedule, summary, days, steps, last, running, pending, reclaim_pct, reclaim_min_mb,
+  message, ok.
+#}
+{% from "macros/icons.html" import icon %}
+{% set labels = {'sync': 'Sync', 'backup': 'Back up', 'reclaim': 'Reclaim space'} %}
+{% set tones = {'success': 'success', 'partial': 'warning', 'skipped': 'muted', 'failed': 'danger', 'waiting': 'info',
+                'restarting': 'info', 'done': 'success', 'postponed': 'muted', 'running': 'info'} %}
+<div id="maintenance-panel" class="backups"
+     {% if running %}hx-get="/api/maintenance/panel" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
+
+    <div class="backups__status" role="status">
+        {% if running %}
+        <span class="status-pill status-info">{{ icon('loader', '12') }} Running</span>
+        <span class="text-secondary">Started {{ last.started[11:16] if last else '' }}.</span>
+        {% elif pending %}
+        <span class="status-pill status-info">{{ icon('refresh-cw', '12') }} Restart at {{ pending.restart_at.strftime('%H:%M') }}</span>
+        <span class="text-secondary">To compact {{ pending.files | map(attribute='name') | join(', ') }}{% if pending.delays %}; delayed by {{ pending.delays | map(attribute='by') | unique | join(', ') }}{% endif %}.</span>
+        {% elif schedule.enabled %}
+        <span class="status-pill status-success">On</span>
+        <span class="text-secondary">{{ summary }}.</span>
+        {% else %}
+        <span class="status-pill status-muted">Off</span>
+        {% endif %}
+    </div>
+
+    <form name="Save Maintenance Window" class="maint-form" hx-post="/api/maintenance/schedule"
+          hx-target="#maintenance-panel" hx-swap="outerHTML">
+        <label class="check-label"><input type="checkbox" name="enabled" {% if schedule.enabled %}checked{% endif %}> Run the maintenance window</label>
+        <div class="maint-form__row">
+            <span class="maint-form__label">On</span>
+            {% for key, name in days.items() %}
+            <label class="check-label"><input type="checkbox" name="days" value="{{ key }}" {% if key in schedule.days %}checked{% endif %}> {{ name[:3] }}</label>
+            {% endfor %}
+            <label class="maint-form__label" for="maint-time">at</label>
+            <input type="time" id="maint-time" name="time" value="{{ schedule.time }}" class="form-input backups__time" required>
+        </div>
+        <div class="maint-form__row">
+            <span class="maint-form__label">Steps, in order</span>
+            {% for key, label in steps %}
+            <label class="check-label" title="{{ {'sync': 'Each client\'s destinations, one client after another, as Sync does', 'backup': 'The backup Backups makes; while this is on it replaces the daily backup', 'reclaim': 'Compact a database file ' ~ reclaim_pct ~ '% empty space or more, restarting TIDE'}[key] }}">
+                <input type="checkbox" name="step_{{ key }}" {% if schedule.steps[key] %}checked{% endif %}> {{ label }}
+            </label>
+            {% endfor %}
+        </div>
+        <div class="maint-form__row">
+            <button name="Save" type="submit" class="btn btn-primary btn-sm">Save</button>
+            <button name="Run Maintenance Now" type="button" class="btn btn-secondary btn-sm" hx-post="/api/maintenance/run"
+                    hx-target="#maintenance-panel" hx-swap="outerHTML" {% if running %}disabled{% endif %}
+                    title="Run the steps chosen now">{{ icon('play', '14') }} Run now</button>
+            {% if pending %}
+            <button name="Restart Now" type="button" class="btn btn-secondary btn-sm" hx-post="/api/maintenance/restart-now"
+                    hx-target="#maintenance-panel" hx-swap="outerHTML"
+                    hx-confirm="Restart TIDE now to compact the databases? Everyone signed in is cut off for a few minutes."
+                    data-confirm-title="Restart TIDE" data-confirm-label="Restart now">
+                {{ icon('refresh-cw', '14') }} Restart now</button>
+            <button name="Postpone Restart" type="button" class="btn btn-secondary btn-sm" hx-post="/api/maintenance/postpone"
+                    hx-target="#maintenance-panel" hx-swap="outerHTML">Postpone to the next window</button>
+            {% endif %}
+        </div>
+    </form>
+    <p class="form-hint">
+        Server time. Out of hours, it syncs each client's destinations one after another, as <strong>Sync</strong> does, then makes the backup
+        (in place of the daily backup above while it is on), then compacts any database file that is {{ reclaim_pct }}% or more empty space
+        (and at least {{ reclaim_min_mb }} MB). Compacting restarts TIDE: everyone signed in sees when, 15 minutes ahead, and can delay it.
+        Each file's original is kept beside it until it is next compacted.
+    </p>
+    {% if message %}
+    <p class="backups__message {{ 'text-success' if ok else 'text-danger' }}">{{ message }}</p>
+    {% endif %}
+
+    {% if last and last.steps %}
+    <div class="diag-table-wrap backups__list"><table class="diag-table">
+        <caption class="text-left fw-600">Last run: {{ last.started[:16] | replace('T', ' ') }}{% if last.by %}, by {{ last.by }}{% endif %}</caption>
+        <thead><tr><th>Step</th><th>For</th><th>Result</th><th>Detail</th></tr></thead>
+        <tbody>
+        {% for s in last.steps %}
+        <tr>
+            <td>{{ labels.get(s.step, s.step) }}</td>
+            <td>{{ s.client or '' }}</td>
+            <td><span class="status-pill status-{{ tones.get(s.status, 'muted') }}">{{ (s.status or '') | replace('_', ' ') | capitalize }}</span></td>
+            <td>{{ s.detail }}
+                {% for f in s.files or [] %}<div class="text-secondary">{{ f.name }}{% if f.after is defined %}: {{ (f.before / 1048576) | round | int }} MB → {{ (f.after / 1048576) | round | int }} MB{% if not f.ok %} (left as it was){% endif %}{% elif f.reclaim is defined %}: {{ (f.reclaim / 1048576) | round | int }} MB of {{ (f.before / 1048576) | round | int }} MB empty{% endif %}</div>{% endfor %}
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table></div>
+    {% endif %}
+</div>

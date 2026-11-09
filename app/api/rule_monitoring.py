@@ -212,6 +212,65 @@ async def unmute_rule(request: Request, db: DbDep, user: RequireUser, client_id:
     return _changed("Rule unmuted.")
 
 
+def _pattern_siems(db, client_id: str, params) -> List[str]:
+    """The SIEM records (of the client's) a window dialog's ``cause_siem_ids`` names."""
+    linked = {d["id"] for d in db.get_client_siems(client_id) or []}
+    return sorted({s.strip() for s in str(params.get("cause_siem_ids") or "").split(",") if s.strip() in linked})
+
+
+@router.get("/window-form", response_class=HTMLResponse)
+def window_form(request: Request, db: DbDep, user: RequireUser, client_id: ActiveClient):
+    """Expect new data every…, on a "No recent events in the index pattern" cause (``pattern``,
+    ``cause_siem_ids``): how often new events are expected in the pattern, with its window now."""
+    from app.services import data_freshness as df
+    p = request.query_params
+    pattern, siem_ids = str(p.get("pattern") or ""), _pattern_siems(db, client_id, p)
+    if not (pattern and siem_ids):
+        return HTMLResponse('<div class="alert alert-danger">Could not open it: that index pattern is not known.</div>',
+                            status_code=400)
+    with db.get_connection() as conn:
+        own = next((w for s in siem_ids if (w := df.windows(conn).get((s, pattern)))), None)
+    hours = own["hours"] if own and own["hours"] else df.default_hours(db, client_id)
+    days = hours >= 48 and hours % 24 == 0
+    return request.app.state.templates.TemplateResponse(request, "components/rule_monitoring_window.html", {
+        "pattern": pattern, "cause_siem_ids": ",".join(siem_ids), "label": p.get("label") or pattern, "own": own,
+        "default": df.hours_text(df.default_hours(db, client_id)),
+        "every": hours // 24 if days else hours, "unit": "days" if days else "hours"})
+
+
+@router.post("/window", response_class=HTMLResponse)
+async def set_window(request: Request, db: DbDep, user: RequireUser, client_id: ActiveClient):
+    """Save how often new events are expected in an index pattern (``expect``: ``client``, ``every``
+    with ``every`` and ``unit``, or ``none``), then find what that changes in the client's rules."""
+    from starlette.concurrency import run_in_threadpool
+    from app.services import data_freshness as df
+    form = await request.form()
+    pattern, siem_ids = str(form.get("pattern") or ""), _pattern_siems(db, client_id, form)
+    if not (pattern and siem_ids):
+        return HTMLResponse('<p class="inline-error">Could not save it: that index pattern is not known.</p>', status_code=400)
+    expect = form.get("expect") or "client"
+    hours = df.NOT_EXPECTED if expect == "none" else None       # None: the client's window
+    if expect == "every":
+        try:
+            hours = int(form.get("every") or 0) * (24 if form.get("unit") == "days" else 1)
+        except ValueError:
+            hours = 0
+        if not 1 <= hours <= df.MAX_HOURS:
+            return HTMLResponse('<p class="inline-error">Could not save it: give a number of hours or days, up to a year.</p>',
+                                status_code=400)
+    actor = user.label if user else "Unknown"
+    with db.get_connection() as conn:
+        df.set_window(conn, siem_ids, pattern, hours, str(form.get("note") or ""), actor)
+    scopes = [(s, sp) for s, sp in db.get_client_siem_scopes(client_id) or [] if s in siem_ids]
+    await run_in_threadpool(rule_issues.refresh_tenant, db, client_id, scopes)
+    logger.info("Rule Monitoring: %s set new data expected in %s on %s to %s", actor, pattern, siem_ids,
+                "the client's" if hours is None else hours)
+    return _changed(f"{pattern}: " + (
+        f"new data is expected every {df.hours_text(df.default_hours(db, client_id))}, as for the client." if hours is None
+        else "no new data is expected, so it isn't listed however long it stays quiet." if hours == df.NOT_EXPECTED
+        else f"new data is expected every {df.hours_text(hours)}."))
+
+
 def _selection(db, client_id: str, params, user) -> Dict[str, Any]:
     """What Raise issue (and Raise in GitLab) is for: one cause (issue, cause, siem_id, space);
     one issue as it is listed (``node``: its path, as JSON), every cause of it; or with ``all`` every

@@ -43,16 +43,18 @@
 {# A baseline technique's ring on one system, on its card and in its window's header: its strongest
    counted rule's own score (``ev``, app/scoring.py; ``rule`` its name), coloured as a rule's. One no
    rule covers shows an empty ring in its status's colour: covered by a dashboard, report or log,
-   a known gap (rule scores don't count while it stands), not applicable, or no coverage. #}
-{% macro technique_ring(status, ev, rule, cls='') -%}
+   a known gap with nothing covering it, not applicable, or no coverage. A partly covered technique
+   (rules beside known gaps, #92) shows that score in the share its rules make up, and ``how``
+   says the sum when hovered. #}
+{% macro technique_ring(status, ev, rule, cls='', how='') -%}
 {% if ev is not none %}
 {% set tone = 'success' if ev >= 80 else ('warning' if ev >= 50 else 'danger') %}
-{% set title = 'Strongest rule protecting this system: ' ~ rule ~ ', scored ' ~ ev ~ '%' %}
+{% set title = how or ('Strongest rule protecting this system: ' ~ rule ~ ', scored ' ~ ev ~ '%') %}
 {% else %}
 {% set tone = {'green': 'success', 'amber': 'warning', 'grey': 'muted'}.get(status, 'danger') %}
 {% set title = {
     'green': 'Covered by a dashboard, report or log: no rule score applies',
-    'amber': 'Known gap: rule scores do not count while the gap stands',
+    'amber': 'Known gap: no rule is protecting this system yet',
     'grey': 'Not applicable: no rule score applies',
 }.get(status, 'No rule is protecting this system yet') %}
 {% endif %}
@@ -60,6 +62,12 @@
      title="{{ title }}" role="img" aria-label="{{ title }}">
     <span class="score-ring__value">{{ ev if ev is not none else '–' }}</span>
 </div>
+{%- endmacro %}
+
+{# A technique covered, or partly, only by rules that count but that a Rule Monitoring finding stops
+   working (#79), on its card, its row and its window's header. ``why``: each rule's reasons. #}
+{% macro not_effective_pill(why, size='11') -%}
+<span class="status-pill status-warning" title="Covered only by rules that can't work now, so not effective coverage{{ ': ' ~ (why | join('; ')) if why }}. Rule Monitoring lists what to fix.">{{ icon('triangle-alert', size) }} <span class="status-pill__text">Not effective</span></span>
 {%- endmacro %}
 
 {# A rule as one card, inside an .rm-item: score ring (e: its evidence -- pct, tone, applicable,

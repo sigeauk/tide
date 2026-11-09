@@ -58,6 +58,13 @@ RUN sigma plugin list >/dev/null && \
     sigma plugin install splunk || true && \
     sigma plugin install microsoft365defender || true
 
+# Nothing installs Python packages once TIDE runs, and the step above is the last to need pip. So pip
+# goes from the runtime image, both the venv's and the base image's (with the old libraries it bundles),
+# and so do the venv's setuptools and wheel.
+RUN /opt/venv/bin/python -m pip uninstall -y -q pip setuptools wheel && \
+    /usr/local/bin/python3 -m pip uninstall -y -q pip && \
+    rm -rf /usr/local/lib/python3.13/ensurepip/_bundled
+
 # ─── DATA REPOS ───────────────────
 RUN git clone --depth 1 https://github.com/SigmaHQ/sigma.git /opt/repos/sigma
 # Elastic's detection rules (main): the rules, building blocks, hunting queries, version lock and

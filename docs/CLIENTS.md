@@ -31,7 +31,16 @@ The API key needs to read and write detection rules in every space TIDE should u
 1. In **Management**, under **Tenants & Users**, open **Clients** and click **New Client**.
 2. Give it a name and create it. Click the client to open its page.
 
-A client's page has a section for each part of its set-up, most with a **⋮** menu to manage it: **Linked SIEMs**, **Assigned Users**, **Systems**, **Baselines**, **Linked CTI Connectors**, **GitLab Projects**, **Rule scoring** and **Role Templates**. The **⋮** at the top of the page has **Edit client** and **Delete client**.
+A client's page has a section for each part of its set-up, most with a **⋮** menu to manage it: **Linked SIEMs**, **Assigned Users**, **Systems**, **Baselines**, **Linked CTI Connectors**, **GitLab Projects**, **Rule scoring** and **Role Templates**. The **⋮** at the top of the page has **Edit client** and, for a super admin, **Delete client**.
+
+## Delete a client
+
+Only a super admin can delete a client, and never TIDE's default client.
+
+1. On the client's page, open the **⋮** at the top and choose **Delete client**.
+2. The dialog says what goes with it, and lists its database files with their size. Type the client's name and choose **Delete client**.
+
+Everything TIDE holds for the client is deleted, for good: its rules as TIDE has them, its systems, baselines and coverage, its history and Rule Monitoring, its reports, dashboards, settings and API keys, everyone's access to it, and its files in `data/` (its database, and the copies the maintenance window and Diagnostics fixes keep). Its rules in Kibana and its GitLab project are left as they are, and backups made before still hold it: to keep a copy, make a backup first in **Settings → Management → Backups**. TIDE won't delete a client while it is syncing or the maintenance window is running. The deletion is recorded in the audit log.
 
 ## Link destinations to a client
 
@@ -59,6 +68,15 @@ In **Linked SIEMs**, **Validation mode** decides when a rule's validation turns 
 - **By criticality**: a schedule per severity, so critical rules are rechecked sooner.
 
 Click **Save thresholds**.
+
+Below them are [Rule Monitoring](RULES.md#rule-monitoring)'s thresholds for this client; leave one blank for TIDE's default, and click **Save**:
+
+- **Expect new data every (hours)**: how long an index pattern may go without a new event before it is listed under **No recent events in the index pattern** (default 24). An index pattern can have its own, set from Rule Monitoring with **Expect new data every…** for a source that sends now and then or is retired. Those are listed below, each with **Use the client's** to go back to the client's window.
+- **Noisy over (alerts a day)** and **Or over (% of its space)**: a rule is listed under **Too many alerts** when it averages more alerts a day than the first over the last 7 days (default 100), or makes more than the second share of its space's alerts while the space has that many a day (default 50%).
+- **Silent after (days without alerts)** and **Once enabled for (days)**: an enabled rule is listed under **No alerts for a long time** when it has raised no alert in the first (default 90, and at most 90, as far back as TIDE counts alerts) and has been enabled at least the second (default 30).
+- **Upstream update pending after (days)**: a rule whose Elastic or Sigma original was updated longer ago than this, and not reviewed, is listed under **Upstream update not reviewed** (default 30).
+- **Many exceptions over (items)**: a rule with more exception items than this, across its own list and the shared lists it uses, is listed under **Many exceptions** (default 10).
+- **List expired or changed validations**: lists, as Info, each enabled rule never validated, whose validation has expired under the validation policy above, or that was edited since it was last validated. Off by default.
 
 ## Choose how rules are scored
 

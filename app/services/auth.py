@@ -146,9 +146,10 @@ class AuthService:
         try:
             logger.debug(f"Validating token, expected issuer: {kc.issuer}")
             
-            # First, decode without verification to check expiration time
+            # First, decode without verification to check expiration time (for the log lines only;
+            # the token is verified against Keycloak's signing keys below, and only that result is used)
             try:
-                unverified = jwt.decode(token, options={"verify_signature": False})
+                unverified = jwt.decode(token, options={"verify_signature": False})  # nosemgrep: python.jwt.security.unverified-jwt-decode.unverified-jwt-decode # read for logging; verified below
                 exp_time = unverified.get("exp", 0)
                 current_time = int(time.time())
                 time_left = exp_time - current_time
@@ -275,9 +276,10 @@ class AuthService:
         """
         Check if token expires within threshold_seconds.
         Returns True if token will expire soon (should proactively refresh).
+        Only asked about a token the same request has already verified (get_user_from_token).
         """
         try:
-            unverified = jwt.decode(token, options={"verify_signature": False})
+            unverified = jwt.decode(token, options={"verify_signature": False})  # nosemgrep: python.jwt.security.unverified-jwt-decode.unverified-jwt-decode # the caller verified this token first
             exp_time = unverified.get("exp", 0)
             current_time = int(time.time())
             time_left = exp_time - current_time
@@ -369,7 +371,11 @@ class AuthService:
         return None
 
     def _token_data_from_password_grant(self, tokens: dict) -> Optional[TokenData]:
-        """Extract user claims from a successful password grant response."""
+        """Extract user claims from a successful password grant response.
+
+        The token comes straight from Keycloak's token endpoint, in its answer to TIDE's own request,
+        over the same TLS settings TIDE fetches Keycloak's signing keys with, so checking its signature
+        would add nothing (OpenID Connect allows this for tokens received directly from the endpoint)."""
         raw_token = tokens.get("id_token") or tokens.get("access_token")
         if not raw_token:
             logger.warning("Password grant response did not include an ID or access token")
@@ -379,7 +385,7 @@ class AuthService:
             payload = jwt.decode(
                 raw_token,
                 options={
-                    "verify_signature": False,
+                    "verify_signature": False,  # nosemgrep: python.jwt.security.unverified-jwt-decode.unverified-jwt-decode # straight from Keycloak's token endpoint
                     "verify_aud": False,
                     "verify_exp": False,
                     "verify_iss": False,

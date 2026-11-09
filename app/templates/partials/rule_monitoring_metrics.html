@@ -39,6 +39,15 @@
         {{ metric_flow_tip(flows.warnings, 'With a new warning', 'With every warning fixed') }}</div>
 {% endcall %}
 
+{% call metric_card('info', keys, link, 'metric-card--tip', tip=true) %}
+    <p class="metric-value{{ ' info' if m.info }}">{{ m.info | default(0) }}</p>
+    <p class="metric-label">Info</p>
+    {% if flows.info %}{{ metric_flow(flows.info) }}
+    {% else %}<p class="metric-sub">{% if new_known %}{{ m.new_info | default(0) }} new in 7 days{% else %}tracked since {{ m.tracked_since.strftime('%d %b') }}{% endif %}</p>{% endif %}
+    <div class="metric-tip" role="tooltip">Rules with only information: worth knowing, such as a validation that has expired, when the client lists those. {{ new_tip if not flows.info }}
+        {{ metric_flow_tip(flows.info, 'With new information', 'With nothing left to know') }}</div>
+{% endcall %}
+
 {% call metric_card('causes', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value">{{ m.causes }}</p>
     <p class="metric-label">Things to Fix</p>

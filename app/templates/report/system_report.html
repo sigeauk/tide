@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+{% from "report/rule_health_section.html" import rule_health_section %}<!DOCTYPE html>
 <!--
     TIDE System Report — PDF Template  (v6 — matches the system page)
     ─────────────────────────────────────────────────────────────────
@@ -155,6 +155,7 @@ html, body {
 .summary-grid {
     display:grid; grid-template-columns:repeat(6,1fr); gap:3mm; margin-bottom:5mm;
 }
+.summary-grid--7 { grid-template-columns:repeat(7,1fr); }
 .stat-card {
     background:#f3f4f6; border:1px solid var(--border); border-top:3px solid var(--primary);
     border-radius:2mm; padding:3.5mm 2.5mm; text-align:center; page-break-inside:avoid;
@@ -403,11 +404,17 @@ a { color:inherit; text-decoration:none; }
 </div>
 
 {%- set pct = report.coverage_pct -%}
-<div class="summary-grid avoid-break">
+<div class="summary-grid summary-grid--7 avoid-break">
     <div class="stat-card">
         <span class="stat-value {% if pct is none %}plain{% elif pct >= 80 %}success{% elif pct >= 40 %}warning{% else %}danger{% endif %}">{{ '—' if pct is none else pct ~ '%' }}</span>
         <span class="stat-label">Covered</span>
         <span class="stat-sub">{% if pct is none %}no counted destinations{% else %}{{ t.covered }} of {{ scored }} scored{% endif %}</span>
+    </div>
+    {%- set epct = report.effective_pct %}
+    <div class="stat-card">
+        <span class="stat-value {% if epct is none %}plain{% elif epct >= 80 %}success{% elif epct >= 40 %}warning{% else %}danger{% endif %}">{{ '—' if epct is none else epct ~ '%' }}</span>
+        <span class="stat-label">Effective</span>
+        <span class="stat-sub">{% if epct is none %}no counted destinations{% else %}by rules that can work now{% endif %}</span>
     </div>
     <div class="stat-card">
         <span class="stat-value plain">{{ t.total }}</span>
@@ -432,7 +439,7 @@ a { color:inherit; text-decoration:none; }
     <div class="stat-card">
         <span class="stat-value {% if t.uncounted %}warning{% else %}plain{% endif %}">{{ t.uncounted }}</span>
         <span class="stat-label">Not counted</span>
-        <span class="stat-sub">rule is only where this system isn't measured</span>
+        <span class="stat-sub">rule is disabled, or only where this system isn't measured</span>
     </div>
 </div>
 
@@ -447,10 +454,10 @@ a { color:inherit; text-decoration:none; }
 <table class="avoid-break">
     <thead><tr><th>Status</th><th>Techniques</th><th>What it means</th></tr></thead>
     <tbody>
-        <tr><td><span class="badge badge-green">Covered</span></td><td>{{ t.covered }}{% if non_alerting %} <span class="muted">({{ non_alerting }} non-alerting)</span>{% endif %}</td>
-            <td>A counted rule applied to this system, or a dashboard, report or log watching it (non-alerting: someone has to look).</td></tr>
-        <tr><td><span class="badge badge-amber">Known gap</span></td><td>{{ t.gap }}{% if review_due %} <span class="flag-danger">({{ review_due }} review due)</span>{% endif %}</td>
-            <td>Accepted, with a reason recorded.</td></tr>
+        <tr><td><span class="badge badge-green">Covered</span></td><td>{{ t.covered }}{% if non_alerting %} <span class="muted">({{ non_alerting }} non-alerting)</span>{% endif %}{% if t.not_effective %} <span class="flag-danger">({{ t.not_effective }} not effective)</span>{% endif %}</td>
+            <td>An enabled rule applied to this system at a destination it counts, or a dashboard, report or log watching it (non-alerting: someone has to look). Not effective: covered only by rules that can't work now (a Rule Monitoring error, or a field they match on missing or empty), so left out of Effective.</td></tr>
+        <tr><td><span class="badge badge-amber">Known gap</span></td><td>{{ t.gap }}{% if t.partial %} <span class="muted">({{ t.partial }} partial coverage)</span>{% endif %}{% if review_due %} <span class="flag-danger">({{ review_due }} review due)</span>{% endif %}</td>
+            <td>Accepted, with a reason recorded. Partial coverage: rules or other coverage beside the known gaps; not counted as covered.</td></tr>
         <tr><td><span class="badge badge-red">No coverage</span></td><td>{{ t.none }}</td><td>Nothing catching this yet.</td></tr>
         <tr><td><span class="badge badge-grey">Not applicable</span></td><td>{{ t.na }}</td><td>Considered and left out of the score.</td></tr>
     </tbody>
@@ -466,7 +473,7 @@ a { color:inherit; text-decoration:none; }
 
 <table>
     <thead>
-        <tr><th>Baseline</th><th>Techniques</th><th>Covered</th><th>No coverage</th><th>Known gaps</th><th>N/A</th><th style="width:22%">Coverage</th></tr>
+        <tr><th>Baseline</th><th>Techniques</th><th>Covered</th><th>No coverage</th><th>Known gaps</th><th>N/A</th><th style="width:18%">Coverage</th><th>Effective</th></tr>
     </thead>
     <tbody>
         {% for bl in report.baselines %}
@@ -486,6 +493,8 @@ a { color:inherit; text-decoration:none; }
                 <div class="coverage-bar"><div class="fill {% if p >= 80 %}good{% elif p >= 40 %}warn{% else %}bad{% endif %}" style="width:{{ p }}%"></div></div>
                 {% endif %}
             </td>
+            {%- set ep = bl.effective_pct %}
+            <td>{% if report.coverage_undefined %}<span class="muted">—</span>{% else %}<span class="badge {% if ep >= 80 %}badge-green{% elif ep >= 40 %}badge-amber{% else %}badge-red{% endif %}">{{ ep }}%</span>{% endif %}</td>
         </tr>
         {% endfor %}
     </tbody>
@@ -510,7 +519,7 @@ a { color:inherit; text-decoration:none; }
             <td>{% for a in g.attack %}<span class="mitre-pill">{{ a.id }}</span>{% else %}<span class="muted">—</span>{% endfor %}</td>
             <td style="font-size:6.5pt;">{{ g.baseline_name }}</td>
             <td>{{ status_pill(g) }}{% if g.review_due %} <span class="badge badge-amber">Review due</span>{% endif %}</td>
-            <td style="font-size:6.5pt;">{% if g.mark_reason %}<em>{{ g.mark_reason }}</em>{% elif g.uncounted_rule_names %}<span class="flag-danger">Mapped only outside SIEM coverage</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+            <td style="font-size:6.5pt;">{% if g.mark_reason %}<em>{{ g.mark_reason }}</em>{% elif g.uncounted_note %}<span class="flag-danger">{{ g.uncounted_note }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
         </tr>
         {% endfor %}
     </tbody>
@@ -548,14 +557,15 @@ a { color:inherit; text-decoration:none; }
 {% endif %}
 
 {% if report.uncounted_mappings %}
-<div class="sub-heading">Rules outside SIEM coverage</div>
-<div class="callout callout-danger avoid-break">These rules are mapped, but sit where this system is not measured, so they do not count as coverage. Add the destination to the system's SIEM coverage, or map the rule where the system is measured.</div>
+<div class="sub-heading">Rules that don't count</div>
+<div class="callout callout-danger avoid-break">These rules are mapped, but are disabled, or sit where this system is not measured, so they do not count as coverage. Enable the rule, add its destination to the system's SIEM coverage, or map the rule where the system is measured.</div>
 <table>
-    <thead><tr><th>Rule</th><th>Destination</th><th>Technique</th><th>Baseline</th><th>Added</th></tr></thead>
+    <thead><tr><th>Rule</th><th>Why</th><th>Destination</th><th>Technique</th><th>Baseline</th><th>Added</th></tr></thead>
     <tbody>
         {% for u in report.uncounted_mappings %}
         <tr>
             <td class="flag-danger">{{ u.rule }}</td>
+            <td>{{ u.why }}</td>
             <td>{{ u.destination }}</td>
             <td>{{ u.technique }}</td>
             <td style="font-size:6.5pt;">{{ u.baseline }}</td>
@@ -565,6 +575,8 @@ a { color:inherit; text-decoration:none; }
     </tbody>
 </table>
 {% endif %}
+
+{% if report.rule_health %}{{ rule_health_section(report.rule_health, report.rules_synced, technical) }}{% endif %}
 
 {% include "report/system_report_trend.html" %}
 {% endif %}{# show_baselines #}
@@ -581,12 +593,12 @@ a { color:inherit; text-decoration:none; }
 <div class="page-break"></div>
 <div class="section-banner avoid-break" id="sec-matrix">
     <div class="section-banner-title">Coverage Matrix</div>
-    <div class="section-banner-sub">Every technique by baseline and ATT&amp;CK tactic. Rules shown in red are mapped outside this system's SIEM coverage and do not count.</div>
+    <div class="section-banner-sub">Every technique by baseline and ATT&amp;CK tactic. Rules shown in red don't count: they are disabled, or mapped outside this system's SIEM coverage.</div>
 </div>
 
 {% for bl in report.baselines %}
 {%- set rows = report.techniques | selectattr('baseline_id', 'equalto', bl.id) | list -%}
-<div class="sub-heading">{{ bl.name }}{% if not report.coverage_undefined %} — {{ bl.coverage_pct }}% covered{% endif %}</div>
+<div class="sub-heading">{{ bl.name }}{% if not report.coverage_undefined %} — {{ bl.coverage_pct }}% covered, {{ bl.effective_pct }}% effective{% endif %}</div>
 {% if rows %}
 <table>
     <thead><tr><th style="width:4%">#</th><th style="width:27%">Technique</th><th style="width:13%">ATT&amp;CK</th><th style="width:9%">Priority</th><th style="width:12%">Status</th><th>Covered by</th></tr></thead>
@@ -601,11 +613,11 @@ a { color:inherit; text-decoration:none; }
             <td style="color:var(--text);font-weight:600;">{{ technique_link(tech) }}</td>
             <td>{% for a in tech.attack %}<span class="mitre-pill">{{ a.id }}</span>{% else %}<span class="muted">—</span>{% endfor %}</td>
             <td>{{ priority_pill(tech) }}</td>
-            <td>{{ status_pill(tech) }}{% if tech.non_alerting %}<div class="muted" style="font-size:6pt;">non-alerting</div>{% endif %}</td>
+            <td>{{ status_pill(tech) }}{% if tech.non_alerting %}<div class="muted" style="font-size:6pt;">non-alerting</div>{% endif %}{% if tech.not_effective %}<div class="flag-danger" style="font-size:6pt;">not effective</div>{% endif %}</td>
             <td style="font-size:6.5pt;">
                 {% if tech.status in ('amber', 'grey') and tech.mark_reason %}<div><em>{{ tech.mark_reason }}</em></div>{% endif %}
-                {% for n in tech.rule_names %}<div>{{ n }}</div>{% endfor %}
-                {% for n in tech.uncounted_rule_names %}<div class="flag-danger">{{ n }} — not in SIEM coverage</div>{% endfor %}
+                {% for n in tech.rule_names %}{% if n in tech.not_effective_rule_names %}<div class="flag-danger">{{ n }} — not effective</div>{% else %}<div>{{ n }}</div>{% endif %}{% endfor %}
+                {% for u in tech.uncounted_rules %}<div class="flag-danger">{{ u.name }} — {{ u.why }}</div>{% endfor %}
                 {% for c in tech.coverage if c.flag == 'Non-alerting' %}<div>{{ c.label }}: {{ c.name }}</div>{% endfor %}
                 {% if not tech.coverage %}<span class="muted">—</span>{% endif %}
             </td>
@@ -635,6 +647,7 @@ a { color:inherit; text-decoration:none; }
         <div class="tech-pills">
             {{ status_pill(tech) }}
             {% if tech.non_alerting %}<span class="badge badge-primary">Non-alerting</span>{% endif %}
+            {% if tech.not_effective %}<span class="badge badge-amber" title="{{ tech.not_effective_why | join('; ') }}">Not effective</span>{% endif %}
             {{ priority_pill(tech) }}
             {% if tech.review_due %}<span class="badge badge-amber">Review due</span>{% endif %}
             <span class="badge badge-outline">{{ tech.tactic or 'Unassigned' }}</span>

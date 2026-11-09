@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+{% from "report/rule_health_section.html" import rule_health_section %}<!DOCTYPE html>
 <!--
     TIDE Threat Report — PDF Template  (v4)
     ────────────────────────────────────────
@@ -249,7 +249,7 @@ html, body {
    ══════════════════════════════════════════════════════ */
 .summary-grid {
     display: grid;
-    grid-template-columns: repeat(6, 1fr);
+    grid-template-columns: repeat(7, 1fr);
     gap: 3mm;
     margin-bottom: 7mm;
 }
@@ -858,6 +858,11 @@ ul.rule-list li.rule-item::before { content: none; }
         <span class="stat-value {% if coverage_pct >= 80 %}success{% elif coverage_pct >= 50 %}warning{% else %}danger{% endif %}">{{ coverage_pct }}%</span>
         <span class="stat-label">Detection Coverage</span>
     </div>
+    {%- set epct = effective_pct | default(coverage_pct) %}
+    <div class="stat-card">
+        <span class="stat-value {% if epct >= 80 %}success{% elif epct >= 50 %}warning{% else %}danger{% endif %}">{{ epct }}%</span>
+        <span class="stat-label">Effective Coverage</span>
+    </div>
     <div class="stat-card">
         <span class="stat-value success">{{ covered_count }}</span>
         <span class="stat-label">Covered TTPs</span>
@@ -960,6 +965,14 @@ ul.rule-list li.rule-item::before { content: none; }
     </table>
 
 </div>
+{% endif %}
+
+<!-- ══════════════════════════════════════════════════════
+     SECTION 2a — RULE HEALTH  (both audiences, #80)
+     Open Rule Monitoring findings on the rules counted for these adversaries' techniques.
+     ══════════════════════════════════════════════════════ -->
+{% if rule_health %}
+<div style="margin-top:8mm;">{{ rule_health_section(rule_health, rules_synced, level == 'technical') }}</div>
 {% endif %}
 
 <!-- ══════════════════════════════════════════════════════

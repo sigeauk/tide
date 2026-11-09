@@ -48,6 +48,7 @@ _COLUMN_SORTS = {
     "state": lambda r, c: {"live": 0, "offline": 1, "deprecated": 2}[rule_state(r, c.get("offline") or {})],
     "severity": lambda r, c: _SEVERITY_RANK.get(str(getattr(getattr(r, "severity", None), "value", getattr(r, "severity", "")) or "").lower(), 0),
     "author": lambda r, c: str(getattr(r, "author", "") or "").lower(),
+    "alerts": lambda r, c: (c.get("alerts") or {}).get((r.rule_id, r.siem_id, r.space), 0),
     "language": lambda r, c: rule_language_name(r.query_language).lower(),
     "type": lambda r, c: rule_type_name(r.rule_type).lower(),
 }
@@ -1239,6 +1240,10 @@ def list_rules(
                 "offline": db.get_offline_scopes(),
                 "siem_label": lambda r: _labels_by_pair.get(f"{r.siem_id}|{r.space}") or _labels.get(r.space or "default", ""),
             }
+            if sort_col == "alerts":       # each rule's alerts in the last 7 days (#68)
+                from app.services import rule_alerts
+                with db.get_connection() as _conn:
+                    sort_ctx["alerts"] = rule_alerts.per_rule(_conn, [(r.rule_id, r.siem_id, r.space) for r in all_rules])
         all_rules = _resort_rules(all_rules, sort_score, sort_validated, sort_name, sort_by, sort_col, sort_dir, sort_ctx)
         if search and search.strip():
             # Search also matches author, rule id and MITRE ids, so a short term (e.g. "111") can hit
@@ -2124,6 +2129,94 @@ def _build_score_chart(score_history: list[dict], events: Optional[list[dict]] =
     }
 
 
+def _bar_chart(points: list, tick_label=None) -> Optional[dict]:
+    """Geometry for a bar chart in the rule window (server-rendered SVG, as the score chart): one bar
+    per point from the baseline, rounded at its end, a 2px gap between bars, and the axis to a round
+    number. ``points`` is ``[(when, value)]``, oldest first; ``tick_label(value, axis_top)`` writes an
+    axis value. None when there's none."""
+    if not points:
+        return None
+    width, height, pad_l, pad_r, pad_t, pad_b = 340, 130, 40, 8, 10, 22
+    plot_w, plot_h = width - pad_l - pad_r, height - pad_t - pad_b
+    top = max(n for _d, n in points)
+    nice = 1
+    while nice * 10 <= top:
+        nice *= 10
+    y_max = next(m * nice for m in (1, 2, 5, 10) if m * nice >= max(top, 1))
+    slot = plot_w / len(points)
+    w = max(1.0, slot - 2)
+    bars = []
+    for i, (when, n) in enumerate(points):
+        h = round(plot_h * n / y_max, 1)
+        x, y = round(pad_l + i * slot + 1, 1), round(pad_t + plot_h - h, 1)
+        r = min(4, w / 2, h)
+        bars.append({"at": when, "value": n, "x": x, "y": y, "w": round(w, 1), "h": h,
+                     # Up the left side, round the top corners, down the right: the end away from the baseline.
+                     "path": (f"M{x},{pad_t + plot_h} V{y + r} Q{x},{y} {x + r},{y} H{x + w - r} "
+                              f"Q{x + w},{y} {x + w},{y + r} V{pad_t + plot_h} Z") if h else ""})
+    label = tick_label or (lambda v, _top: f"{v:,}")
+    return {"width": width, "height": height, "pad_l": pad_l, "plot_right": width - pad_r, "plot_top": pad_t,
+            "plot_bottom": pad_t + plot_h, "bars": bars,
+            "ticks": [{"y": round(pad_t + plot_h * (1 - v / y_max), 1), "label": label(v, y_max)}
+                      for v in (0, y_max // 2, y_max)],
+            "first_label": points[0][0].strftime("%d %b"), "last_label": points[-1][0].strftime("%d %b")}
+
+
+def _build_alert_chart(per_day: list) -> Optional[dict]:
+    """The rule window's alerts-per-day chart (#68): ``per_day`` is ``[(day, alerts)]``, oldest first."""
+    chart = _bar_chart(per_day)
+    for b in (chart or {}).get("bars", []):
+        b["day"], b["alerts"] = b["at"], b["value"]
+    return chart
+
+
+def _exceptions_for(db, rule, siem_id: Optional[str], space: str) -> Optional[dict]:
+    """The rule window's Exceptions (#75): the items of the lists the rule uses, as the last sync read
+    them. None when it uses none. Never fatal."""
+    raw = rule.raw_data if isinstance(rule.raw_data, dict) else {}
+    if not raw.get("exceptions_list"):
+        return None
+    try:
+        from app.services import rule_exceptions
+        with db.get_connection() as conn:
+            return rule_exceptions.for_rule(conn, siem_id or rule.siem_id or "", space or "default", raw["exceptions_list"])
+    except Exception:
+        logger.warning("Could not read rule %s's exceptions", rule.rule_id, exc_info=True)
+        return None
+
+
+def _search_chart_for(db, rule, siem_id: Optional[str], space: str) -> Optional[dict]:
+    """The rule window's search-time chart for ``rule`` at its destination. Never fatal."""
+    try:
+        raw = rule.raw_data if isinstance(rule.raw_data, dict) else {}
+        samples = db.get_rule_search_samples(_search_time_rule_id(rule), siem_id or rule.siem_id or "", space or "default")
+        return _build_search_chart(samples, raw.get("interval"))
+    except Exception:
+        logger.warning("Could not chart rule %s's search times", rule.rule_id, exc_info=True)
+        return None
+
+
+def _build_search_chart(samples: list, interval: Optional[str]) -> Optional[dict]:
+    """The rule window's search times (#76): a bar per run TIDE recorded, oldest first, from
+    ``samples`` (``[(executed_at ISO in UTC, ms)]``), with the median of the last runs as the score and
+    Rule Monitoring take it, and the time between runs. None with no runs."""
+    import statistics
+    from app.services.rule_issues import SLOW_RUNS, _span
+    points = []
+    for at, ms in sorted(samples):
+        try:
+            points.append((datetime.fromisoformat(str(at).replace("Z", "+00:00")), int(ms)))
+        except ValueError:
+            continue
+    chart = _bar_chart(points, lambda v, top: "0" if not v else (f"{v / 1000:g} s" if top >= 1000 else f"{v:,} ms"))
+    if chart:
+        recent = [ms for _at, ms in points[-SLOW_RUNS:]]
+        every = _span(interval)
+        chart.update(runs=len(points), median=statistics.median(recent), median_runs=len(recent),
+                     share=round(statistics.median(recent) / every / 10) if every else None)
+    return chart
+
+
 def _kibana_rule_url(db, rule, client_id: str) -> str:
     """Deep link to the rule in its owning SIEM's Kibana ('' when unknown)."""
     base = (_resolve_kibana_url(db, rule, client_id) or "").rstrip("/")
@@ -2315,6 +2408,24 @@ def build_rule_card_context(db, client_id: str, rules) -> dict:
     # Whether the Elastic or Sigma rule each came from has a newer version (rule_origins).
     upstream = {f"{k[0]}|{k[1] or ''}|{k[2] or ''}": v
                 for k, v in db.upstream_statuses([(r.rule_id, r.siem_id, r.space) for r in rules]).items()}
+    # What Rule Monitoring found on each, as its card flags it (rule_issues.card_problems), and its
+    # alerts in the last 7 days, for the table's Alerts column (#68).
+    problems, alerts_7d = {}, {}
+    try:
+        from app.services import rule_alerts, rule_issues
+        keys = [(r.rule_id, r.siem_id, r.space) for r in rules if r.siem_id]
+        with db.get_connection() as conn:
+            found = rule_issues.rule_findings(conn, keys)
+            alerts = rule_alerts.per_rule(conn, keys)
+        for r in rules:
+            lifecycle_key = f"{r.rule_id}|{r.siem_id or ''}|{r.space or ''}"
+            flagged = rule_issues.card_problems(found.get((r.rule_id, r.siem_id, r.space), []), bool(r.enabled))
+            if flagged:
+                problems[lifecycle_key] = flagged
+            if alerts.get((r.rule_id, r.siem_id, r.space)):
+                alerts_7d[lifecycle_key] = alerts[(r.rule_id, r.siem_id, r.space)]
+    except Exception:
+        logger.warning("Could not read Rule Monitoring's findings for the rule cards", exc_info=True)
 
     return {
         "space_labels": _build_space_labels(db, client_id),
@@ -2323,6 +2434,8 @@ def build_rule_card_context(db, client_id: str, rules) -> dict:
         "lifecycle_states": states,
         "lifecycle_titles": titles,
         "upstream_states": upstream,
+        "rule_problems": problems,
+        "rule_alerts_7d": alerts_7d,
     }
 
 
@@ -2338,9 +2451,17 @@ def _lifecycle(rule, linked, offline_scopes) -> tuple[str, str]:
     return ("Linked" if linked else ""), ""
 
 
+def _ago(when: Optional[datetime], now: Optional[datetime] = None) -> str:
+    """How long before ``now`` ``when`` was: 'just now', '12 min ago', '5 h ago', '3 days ago'."""
+    if not when:
+        return ""
+    seconds = max(0, int(((now or datetime.now()) - when).total_seconds()))
+    return ("just now" if seconds < 90 else f"{seconds // 60} min ago" if seconds < 5400
+            else f"{round(seconds / 3600)} h ago" if seconds < 172800 else f"{seconds // 86400} days ago")
+
+
 def _mapping_info(db, siem_id: str, rule) -> dict:
     """How fresh the field-catalogue data behind a rule's mapping check is ('' label when unknown)."""
-    from datetime import datetime as _dt
     from app.services.mapping_catalogue import MappingCatalogue
 
     indices = sorted({str(row[0]) for row in (getattr(rule, "field_mappings", None) or []) if row})
@@ -2351,13 +2472,7 @@ def _mapping_info(db, siem_id: str, rule) -> dict:
     except Exception:
         logger.warning("Could not read the field catalogue for rule %s", getattr(rule, "rule_id", "?"), exc_info=True)
         return {}
-    oldest = info.get("oldest")
-    label = ""
-    if oldest:
-        seconds = max(0, int((_dt.now() - oldest).total_seconds()))
-        label = ("just now" if seconds < 90 else f"{seconds // 60} min ago" if seconds < 5400
-                 else f"{round(seconds / 3600)} h ago" if seconds < 172800 else f"{seconds // 86400} days ago")
-    return {"label": label, "known": info.get("known", 0), "patterns": info.get("patterns", 0)}
+    return {"label": _ago(info.get("oldest")), "known": info.get("known", 0), "patterns": info.get("patterns", 0)}
 
 
 def _index_patterns(db, siem_id: str, rule) -> list:
@@ -2458,6 +2573,18 @@ def _rule_covers(rule_id, siem_id, space, linked, client_id):
         return []
 
 
+def _covers_problems(rule_id, siem_id, space, client_id) -> List[str]:
+    """Why this rule isn't effective coverage (the Covers panel's note, #79): the open Rule
+    Monitoring findings that stop it working. Never fatal."""
+    from app.inventory_engine import rule_states
+    try:
+        key = (rule_id, siem_id or "", space or "default")
+        return (rule_states([key], client_id=client_id).get(key) or {}).get("problems", [])
+    except Exception:
+        logger.warning("Could not tell whether rule %s is effective coverage", rule_id, exc_info=True)
+        return []
+
+
 def _build_rule_modal_context(
     db, client_id: str, rule, space: str, siem_id: Optional[str], just_validated: bool = False,
     flash: str = "",
@@ -2528,6 +2655,10 @@ def _build_rule_modal_context(
         from app.services.rule_updates import unconfirmed_links
         link_unconfirmed = (unconfirmed_links(conn, [key]).get(key) or {}).get("sections", []) if can_unlink else []
         unlinked_from = rule_origins.unlinked_name(conn, origin)
+        # What Rule Monitoring found on this rule, for its section of that name, and its alerts (#68).
+        from app.services import rule_alerts, rule_issues
+        monitoring = rule_issues.rule_findings(conn, [key]).get(key, [])
+        alerts = rule_alerts.for_rule(conn, actual_siem, space, str((rule.raw_data or {}).get("id") or ""))
     # Custom rules Kibana held beside this one under the same rule id at the last sync (TIDE holds one).
     shared_copies = [c for c in db.shared_rule_id_copies(actual_siem, space, rule.rule_id)
                      if not c.get("prebuilt") and not any(e.get("copy_id") == c.get("id") for e in own_pending)]
@@ -2547,6 +2678,11 @@ def _build_rule_modal_context(
         "upstream_guess": re.sub(r"(\s*\[Duplicate\])+\s*$", "", rule.name or ""),
         "shared_copies": shared_copies,
         "pending_changes": [{**e, "text": pending_actions.describe(e)} for e in pending],
+        "monitoring": monitoring,
+        "alerts": alerts,
+        "alert_chart": _build_alert_chart(alerts["per_day"]) if alerts and alerts["total"] else None,
+        "search_chart": _search_chart_for(db, rule, actual_siem, space),
+        "exceptions": _exceptions_for(db, rule, actual_siem, space),
         "rule": rule,
         "space": space,
         "siem_id": actual_siem,
@@ -2554,6 +2690,7 @@ def _build_rule_modal_context(
         **dict(zip(("lifecycle_state", "lifecycle_title"), _lifecycle(rule, linked, db.get_offline_scopes()))),
         "linked_rules": linked,
         "covers": _rule_covers(rule.rule_id, actual_siem, space, linked, client_id),
+        "covers_problems": _covers_problems(rule.rule_id, actual_siem, space, client_id),
         "move_targets": move_targets,
         "link_targets": link_targets,
         "delete_source_default": bool((db.get_client(client_id) or {}).get("delete_source_after_promotion", True)),
@@ -2928,12 +3065,14 @@ def sync_single_rule(db, client_id: str, rule_id: str, siem_id: Optional[str], s
     # very next sync even right after recording one.
     history = {(rid, sp): samples for (rid, sid, sp), samples in db.get_search_time_history().items()
                if sid == siem_id and rid == elastic_id}
+    from app.services.data_freshness import DataFreshness, FieldData, IngestDelay
     try:
         frame = elastic_helper.fetch_single_rule(
             kibana_url=full["kibana_url"], api_key=full["api_token_enc"], space=space, rule_id=elastic_id,
             catalogue=MappingCatalogue(db, siem_id), elasticsearch_url=full.get("elasticsearch_url"),
             force_catalogue=True, search_time_history=history,
-            weights=db.get_client_scoring(client_id)["weights"],
+            weights=db.get_client_scoring(client_id)["weights"], freshness=DataFreshness(db, siem_id),
+            field_data=FieldData(db, siem_id), ingest_delay=IngestDelay(db, siem_id),
         )
     except Exception as exc:
         logger.exception("Targeted rule sync failed for %s", rule_id)
@@ -2962,6 +3101,18 @@ def sync_single_rule(db, client_id: str, rule_id: str, siem_id: Optional[str], s
         # session. The score-over-time chart is the accurate record; this message just confirms
         # the refresh happened.
         message = "Rule refreshed from Elastic and its field mappings re-checked."
+        # Its exception lists too, as a full sync reads them (#96), before Rule Monitoring looks at it.
+        # A shared list's changes go into the history of every rule using it, as at a full sync.
+        try:
+            from app.services import rule_exceptions
+            raw = rec.get("raw_data")
+            raw = json.loads(raw) if isinstance(raw, str) else (raw or {})
+            lists = rule_exceptions.lists_of(raw.get("exceptions_list"))
+            if lists:
+                rule_exceptions.read_lists(db, client_id, siem_id, space, lists, full["kibana_url"], full["api_token_enc"])
+        except Exception as exc:
+            logger.warning("Could not read the exception lists of rule %s", rule_id, exc_info=True)
+            message += f" Could not read its exception lists: {exc}."
     # What needs action on this rule now (Rule Monitoring); a deprecated rule's issues are resolved.
     from app.services import rule_issues
     rule_issues.refresh_tenant(db, client_id, rule_keys=[(rule_id, siem_id, space)])

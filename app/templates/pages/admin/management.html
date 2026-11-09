@@ -77,6 +77,17 @@
         {{ loading_state() }}
     </div>
 </details>
+
+<details class="mgmt-section" id="mgmt-maintenance-section">
+    <summary class="mgmt-section__summary">
+        {{ icon('clock', '18') }}
+        <span class="mgmt-section__title">Maintenance window</span>
+        <span class="mgmt-section__hint">Out of hours: sync every client, back up, reclaim disk space</span>
+    </summary>
+    <div class="mgmt-section__body" name="Open Maintenance Window" hx-get="/api/maintenance/panel" hx-trigger="load" hx-swap="innerHTML">
+        {{ loading_state() }}
+    </div>
+</details>
 {% endif %}
 
 {# Role Templates have been moved to the Client Detail page \u2014 they are now

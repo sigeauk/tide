@@ -54,6 +54,9 @@
         Server time. Saved on the host in <code>{{ host_folder }}/</code>{% if disk %} ({{ size(disk.free) }} free){% endif %}.
         Each backup holds every client's data and the key to the stored SIEM and connector credentials, so protect that folder as you would <code>data/</code>.
     </p>
+    {% if window %}
+    <div class="alert alert-info backups__alert">The maintenance window makes the backup, {{ window }}, in place of the daily backup here (Management → Maintenance window). How many to keep is still set here.</div>
+    {% endif %}
     {% if message %}
     <p class="backups__message {{ 'text-success' if ok else 'text-danger' }}">{{ message }}</p>
     {% endif %}

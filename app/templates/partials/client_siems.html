@@ -135,6 +135,68 @@
     </span>
 </form>
 
+{# Rule Monitoring's thresholds for this client (#71 data gone quiet, #68 noisy and #69 silent rules, #77 upstream and
+   validation drift); blank: TIDE's default. #}
+<hr class="divider-line divider-line--spaced">
+<form name="Submit Rule Monitoring Settings" hx-post="/api/management/clients/{{ client.id }}/rule-monitoring"
+      hx-target="#client-siems-section" hx-swap="innerHTML" class="flex gap-ms items-start flex-wrap py-0 px-xs">
+    {% set rm_fields = [
+        ('data_window_hours', 'Expect new data every (hours)', default_data_window, 1, 8784,
+         'Rule Monitoring lists an index pattern when no new event has reached it for longer than this'),
+        ('noisy_per_day', 'Noisy over (alerts a day)', monitoring_defaults.noisy_per_day, 1, 1000000,
+         'A rule averaging more alerts a day than this over the last 7 days is listed as having too many alerts'),
+        ('noisy_share_pct', 'Or over (% of its space)', monitoring_defaults.noisy_share_pct, 1, 100,
+         "A rule making more than this share of its space's alerts, while the space has more a day than the line before, is listed too"),
+        ('silent_days', 'Silent after (days without alerts)', monitoring_defaults.silent_days, 1, 90,
+         'An enabled rule with no alert for this many days (at most 90) is listed as having none for a long time'),
+        ('silent_enabled_days', 'Once enabled for (days)', monitoring_defaults.silent_enabled_days, 1, 3660,
+         'Only a rule enabled at least this long is listed as silent'),
+        ('upstream_pending_days', 'Upstream update pending after (days)', monitoring_defaults.upstream_pending_days, 1, 3660,
+         'A rule whose Elastic or Sigma original was updated longer ago than this, and not reviewed, is listed'),
+        ('exceptions_many', 'Many exceptions over (items)', monitoring_defaults.exceptions_many, 1, 10000,
+         'A rule with more exception items than this, across its own and shared lists, is listed as having many exceptions'),
+    ] %}
+    {% for name, label, default, lo, hi, tip in rm_fields %}
+    <div class="flex-none">
+        <label class="form-label" for="rm-setting-{{ name }}" title="{{ tip }}">{{ label }}</label>
+        <input type="number" id="rm-setting-{{ name }}" min="{{ lo }}" max="{{ hi }}" name="{{ name }}" class="form-input siem-num-input"
+               placeholder="{{ default }} (default)" value="{{ client[name] if client[name] is not none else '' }}">
+    </div>
+    {% endfor %}
+    <div class="flex-none">
+        <span class="form-label">Validation</span>
+        <label class="flex items-center gap-sm fs-xs mt-sm nowrap"
+               title="Lists, as Info, an enabled rule whose validation has expired under the client's validation policy (above), or that was edited since it was validated. Off by default.">
+            <input type="checkbox" name="validation_stale" value="1"{% if client.validation_stale %} checked{% endif %}>
+            List expired or changed validations
+        </label>
+    </div>
+    <button name="Save Rule Monitoring" type="submit" class="btn btn-primary btn-sm mt-lg">Save</button>
+    <span class="siem-mode-hint">Rule Monitoring's thresholds for this client. Leave blank for TIDE's default.</span>
+</form>
+
+{# Index patterns given their own window on Rule Monitoring (Expect new data every…), with the way back to the client's. #}
+{% if data_windows %}
+<p class="form-label mt-ms px-xs">Index patterns with their own window</p>
+<div class="client-list">
+    {% for w in data_windows %}
+    <div class="client-list-item">
+        <div class="client-list-item__body">
+            <span class="client-list-item__title cursor-default mono">{{ w.pattern }}</span>
+            <span class="badge badge-muted fs-xs">{{ w.siem }}</span>
+            <span class="client-list-item__meta">{{ w.expected }}</span>
+            <span class="client-list-item__meta" title="{{ w.note }}">Set by {{ w.by }} on {{ w.at.strftime('%Y-%m-%d') if w.at else '—' }}{% if w.note %}: {{ w.note | truncate(80, end='…') }}{% endif %}</span>
+        </div>
+        <button name="Use The Client's Window" type="button" class="btn btn-secondary btn-sm flex-none"
+                hx-post="/api/management/clients/{{ client.id }}/data-window/remove"
+                hx-vals='{{ {"siem_id": w.siem_id, "pattern": w.pattern} | tojson }}'
+                hx-target="#client-siems-section" hx-swap="innerHTML"
+                title="Expect new data in {{ w.pattern }} as for the rest of the client's index patterns">Use the client's</button>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
 {# Per-client rule scoring weights: loaded on demand so the section works wherever this partial is rendered. #}
 <hr class="divider-line divider-line--spaced">
 <div id="client-scoring" hx-get="/api/management/clients/{{ client.id }}/scoring" hx-trigger="load" hx-swap="outerHTML"></div>

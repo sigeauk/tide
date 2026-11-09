@@ -81,7 +81,7 @@ class MappingCatalogue:
                 "ON CONFLICT (siem_id, pattern) DO UPDATE SET status = EXCLUDED.status, "
                 "fields_json = EXCLUDED.fields_json, field_count = EXCLUDED.field_count, "
                 "fingerprint = EXCLUDED.fingerprint, fetched_at = EXCLUDED.fetched_at, last_error = NULL",
-                [self.siem_id, pattern, status, body, len(fields), hashlib.sha1(body.encode()).hexdigest(), now],
+                [self.siem_id, pattern, status, body, len(fields), hashlib.sha1(body.encode(), usedforsecurity=False).hexdigest(), now],  # nosemgrep: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1 # a change fingerprint, not for security
             )
 
     def _record_error(self, pattern: str, message: str) -> None:

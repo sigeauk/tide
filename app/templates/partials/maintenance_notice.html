@@ -1,0 +1,31 @@
+{#
+  The maintenance window's restart notice (#82, app.services.maintenance), at the top of every
+  signed-in page: when TIDE will restart to compact its databases, and Delay (30 minutes, up to 2
+  hours in all; then Postpone to the next window). While the window is on, the page asks again
+  every minute, so a page left open sees a restart announced after it loaded. Nothing, and no asking,
+  while the window is off. Context: message (after Delay).
+#}
+{% from "macros/icons.html" import icon %}
+{% if maintenance_on() %}
+{% set n = maintenance_notice() %}
+<div id="maintenance-notice" hx-get="/api/maintenance/notice" hx-trigger="every 60s" hx-swap="outerHTML" hx-include="unset">
+    {% if n %}
+    <div class="maint-banner" role="status">
+        {{ icon('refresh-cw', '16') }}
+        <span class="maint-banner__text">
+            <strong>TIDE will restart for scheduled maintenance at {{ n.restart_at.strftime('%H:%M') }}</strong>
+            ({{ 'in under a minute' if n.minutes < 1 else 'in ' ~ n.minutes ~ ' minute' ~ ('s' if n.minutes != 1 else '') }}),
+            to compact its databases; it is back in a few minutes. Save what you're working on.
+            {% if n.delays %}<span class="maint-banner__by">Delayed by {{ n.delays | map(attribute='by') | unique | join(', ') }}.</span>{% endif %}
+        </span>
+        <button name="Delay Restart" type="button" class="btn btn-secondary btn-sm" hx-post="/api/maintenance/delay"
+                hx-target="#maintenance-notice" hx-swap="outerHTML" hx-include="unset"
+                title="{{ 'Restart 30 minutes later' if n.can_delay else 'It has been delayed as long as it can be: compact at the next maintenance window instead' }}">
+            {{ 'Delay 30 minutes' if n.can_delay else 'Postpone to the next window' }}
+        </button>
+    </div>
+    {% elif message %}
+    <div class="maint-banner maint-banner--done" role="status">{{ icon('check', '16') }} <span class="maint-banner__text">{{ message }}</span></div>
+    {% endif %}
+</div>
+{% endif %}

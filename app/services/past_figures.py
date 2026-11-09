@@ -8,12 +8,13 @@ card whose earlier value can't be known shows no change.
 """
 import json
 import logging
+from collections import Counter
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Dict, List, Optional, Tuple
 
 from app.scoring import SCORING_VERSION
-from app.services.database import validation_key
+from app.services.database import DatabaseService, validation_key
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ FIGURES: Dict[str, Dict[str, Figure]] = {
 }
 # Rule Monitoring compares differently: its cards say how many began and how many were fixed in the
 # period (rule_issues.flows), not how far a figure moved.
-FLOWS: Dict[str, Tuple[str, ...]] = {"rule_monitoring": ("rules", "errors", "warnings", "causes")}
+FLOWS: Dict[str, Tuple[str, ...]] = {"rule_monitoring": ("rules", "errors", "warnings", "info", "causes")}
 # The filters a comparing section may have. Any other is a filter on something TIDE keeps no
 # history of, which would mix today's values with the earlier day's, so the section shows no change.
 COMPARE_FILTERS: Dict[str, Tuple[str, ...]] = {"rule_health": ("space",), "system": ("system_id",),
@@ -242,6 +243,26 @@ def _enabled_changes(conn) -> Dict[Tuple[str, str, str], List[Tuple[datetime, bo
     return out
 
 
+def _rule_states(db, keys) -> Tuple[Dict[Tuple[str, str, str], Tuple[bool, bool]],
+                                    Dict[Tuple[str, str, str], List[Tuple[datetime, bool, Optional[bool]]]]]:
+    """``keys``' ``(enabled, deprecated)`` now, by ``(rule_id, siem_id, space)`` (a rule TIDE doesn't
+    have left out), and their recorded on/off changes (``_enabled_changes``)."""
+    keys = sorted({k for k in keys if k[0] and k[1]})
+    if not keys:
+        return {}, {}
+    with db.get_connection() as conn:
+        states = {(r, s, sp): (bool(en), bool(dep)) for r, s, sp, en, dep in conn.execute(
+            f"WITH {DatabaseService._KEYS_CTE} SELECT d.rule_id, d.siem_id, d.space, COALESCE(d.enabled, 0) = 1, "
+            "COALESCE(d.deprecated, false) FROM detection_rules d "
+            "JOIN k ON d.rule_id = k.r AND d.siem_id = k.s AND d.space = k.sp", DatabaseService._key_arrays(keys)).fetchall()}
+        try:
+            changes = _enabled_changes(conn)
+        except Exception:      # noqa: BLE001 - no rule history yet: as they are now
+            logger.debug("No rule history to replay rules' on/off changes from", exc_info=True)
+            changes = {}
+    return states, changes
+
+
 def _flag(text) -> bool:
     """A recorded on/off value ("True", "1", "-" ...) as a bool."""
     return str(text).strip().lower() in ("true", "1", "yes", "on")
@@ -276,14 +297,18 @@ def history_start(db) -> Optional[datetime]:
         return None
 
 
-def _mark_before(event: str, detail: Optional[str]) -> set:
-    """A known gap / N/A mark as it was just before ``event`` changed it."""
+def _mark_change(event: str, detail: Optional[str]) -> Dict[str, int]:
+    """How a known gap / N/A event changed a technique's marks, by kind. A technique can have several
+    known gaps (#92), so they are counted: one more when added, one fewer when removed, and an edit
+    that changed its type ("Known gap → Not applicable") moves one from the other kind."""
     kind = "na" if event.startswith("na") else "gap"
     if event.endswith("_added"):
-        return set()
-    if event.endswith("_edited") and "→" in (detail or ""):      # its type changed: it was the other
-        return {"gap" if kind == "na" else "na"}
-    return {kind}
+        return {kind: 1}
+    if event.endswith("_removed"):
+        return {kind: -1}
+    if event.endswith("_edited") and "→" in (detail or ""):
+        return {kind: 1, ("gap" if kind == "na" else "na"): -1}
+    return {}
 
 
 def techniques_then(db, client_id: str, system_id: str, moments: List[datetime]) -> Dict[datetime, Optional[List[dict]]]:
@@ -297,7 +322,8 @@ def techniques_then(db, client_id: str, system_id: str, moments: List[datetime])
     each was made, as they are now (rule, destination, where applied); a removed one from its own
     events, while it existed. Known gaps and N/A, non-alerting coverage and the destinations the
     system counts are today's with each change since undone; a removed technique's are replayed
-    from its events. Rule links are today's.
+    from its events. Rule links are today's. A rule counts only while it was enabled (its on/off
+    changes undone from its state now) and isn't deprecated, as the page counts it (#79).
     """
     from app.inventory_engine import _technique_status
     start = history_start(db)
@@ -317,10 +343,10 @@ def techniques_then(db, client_id: str, system_id: str, moments: List[datetime])
         applied = {r[0] for r in q("SELECT DISTINCT detection_id FROM applied_detections "
                                    "WHERE (system_id = ? AND host_id IS NULL) "
                                    "   OR host_id IN (SELECT id FROM hosts WHERE system_id = ?)", system_id, system_id)}
-        marks: Dict[str, set] = {}
+        marks: Dict[str, Counter] = {}
         for step, kind in q("SELECT entity_id, COALESCE(override_type, 'gap') FROM blind_spots "
                             "WHERE entity_type = 'tactic' AND system_id = ?", system_id):
-            marks.setdefault(step, set()).add(kind)
+            marks.setdefault(step, Counter())[kind] += 1
         try:
             watched = dict(q("SELECT c.step_id, count(*) FROM step_coverage c JOIN playbook_steps s ON s.id = c.step_id "
                              "JOIN playbooks p ON p.id = s.playbook_id WHERE p.system_id = ? GROUP BY 1", system_id))
@@ -374,9 +400,13 @@ def techniques_then(db, client_id: str, system_id: str, moments: List[datetime])
         by_step_maps.setdefault(m[0], []).append(m)
 
     anchors = [(m[1], m[2], m[3]) for m in mappings if m[1] and m[2]]
-    links = {key: {(e.get("siem_id"), str(e.get("space") or "default")) for e in entries if not e.get("missing")}
+    links = {key: [(e.get("rule_id"), e.get("siem_id"), str(e.get("space") or "default"))
+                   for e in entries if not e.get("missing")]
              for key, entries in (db.get_rule_links_bulk(anchors) or {}).items()} if anchors else {}
     names = _destination_keys(db, client_id) if any(e[0] == "siem_coverage" for e in siem_events) else {}
+    # Whether each rule was enabled then: a disabled rule counts for nothing (#79). Its state now,
+    # each change since undone; deprecated as it is now.
+    states, on_changes = _rule_states(db, anchors + [c for copies in links.values() for c in copies])
 
     def counted_at(at: datetime) -> Optional[set]:
         counted = set(counted_now)
@@ -397,21 +427,28 @@ def techniques_then(db, client_id: str, system_id: str, moments: List[datetime])
                         (counted.discard if now_counts else counted.add)(names[name])
         return counted
 
-    def counts(m, counted: set) -> bool:
-        if not counted or m[4] == "manual" or not m[2]:
+    def on_at(rule: Tuple[str, str, str], at: datetime) -> bool:
+        if rule not in states:     # not in TIDE now: counts, as the page counts it (flagged for relinking)
             return True
-        return bool(({(m[2], m[3])} | links.get((m[1], m[2], m[3]), set())) & counted)
+        enabled, deprecated = states[rule]
+        return not deprecated and _was_on(on_changes.get(rule, []), at, enabled)
+
+    def counts(m, counted: set, at: datetime) -> bool:
+        if m[4] == "manual" or not m[2]:
+            return True
+        copies = [(m[1], m[2], m[3])] + links.get((m[1], m[2], m[3]), [])
+        return any(on_at(c, at) for c in copies if not counted or (c[1], c[2]) in counted)
 
     def marks_at(step: str, at: datetime) -> set:
+        """The kinds of mark a technique had at ``at``: today's with each change since undone, or,
+        for one removed since, its changes up to then."""
         changes = [(e, d, w) for e, d, w in by_step.get(step, ()) if e in _MARKS]
-        if step in live:
-            since = [(e, d) for e, d, w in changes if w > at]
-            return _mark_before(*since[0]) if since else marks.get(step, set())
-        state: set = set()
-        for event, _, when in changes:
-            if when <= at:
-                state = set() if event.endswith("_removed") else {"na" if event.startswith("na") else "gap"}
-        return state
+        n = Counter(marks.get(step, ())) if step in live else Counter()
+        for event, detail, when in changes:
+            if (when > at) == (step in live):
+                for kind, change in _mark_change(event, detail).items():
+                    n[kind] += -change if step in live else change
+        return {kind for kind, count in n.items() if count > 0}
 
     def watched_at(step: str, at: datetime) -> int:
         cov = [(e, w) for e, _, w in by_step.get(step, ()) if e in ("coverage_added", "coverage_removed")]
@@ -430,7 +467,7 @@ def techniques_then(db, client_id: str, system_id: str, moments: List[datetime])
             if (began is not None and began > at) or (gone is not None and gone <= at):
                 continue
             present = [m for m in by_step_maps.get(step, ()) if m[5] <= at and (m[6] is None or m[6] > at)]
-            counting = [m for m in present if counts(m, counted)]
+            counting = [m for m in present if counts(m, counted, at)]
             kinds = marks_at(step, at)
             status = _technique_status(any(m[7] for m in counting), "gap" in kinds, "na" in kinds,
                                        watched_at(step, at) > 0)

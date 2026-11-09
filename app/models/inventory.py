@@ -243,7 +243,8 @@ class SystemSummary(BaseModel):
     vuln_count: int
     software_count: int = 0
     baseline_count: int = 0
-    baseline_coverage_pct: int = 0
+    baseline_coverage_pct: int = 0      # covered of those scored, across its baselines
+    baseline_effective_pct: int = 0     # covered by rules that work (or watched), of those scored (#79)
     baselines: List[Dict] = Field(default_factory=list)
     worst_status: str = "green"         # 'green' | 'amber' | 'red' (worst-case RAG across all hosts)
 

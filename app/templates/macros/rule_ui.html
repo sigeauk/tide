@@ -12,6 +12,7 @@
   Only Migrated and Deprecated are BADGED — Production and Staging are already shown by the
   SIEM pill. Used by the rule card, the table row and the rule modal so they always agree.
 #}
+{% from "macros/icons.html" import icon %}
 {% macro state_badge(state, title='') -%}
 {#- state is 'Linked' (this rule has at least one entry in its Linked panel), 'Deprecated',
    'SIEM offline' (its SIEM failed the check before the last sync; title carries the reason), or ''
@@ -25,6 +26,18 @@
 } -%}
 {%- set css_state = {'Linked': 'migrated', 'Deprecated': 'deprecated', 'SIEM offline': 'offline'}[state] -%}
 <span class="tide-lifecycle tide-lifecycle-{{ css_state }}" title="{{ title or meta[state] }}">{{ state }}</span>
+{%- endif -%}
+{%- endmacro %}
+
+{% macro problems_badge(p) -%}
+{#- What Rule Monitoring found on a rule, as its card and table row flag it (rule_issues.card_problems):
+   one pill, red with an error, amber with a warning, else blue (information), saying how many; grey on a disabled rule, whose problems
+   would stop it working only if it were switched on (unless TIDE's own are among them); hovered,
+   each of them. The rule window's Rule Monitoring section has them in full. Nothing when there are
+   none. -#}
+{%- if p -%}
+<span class="status-pill status-{{ {'error': 'danger', 'warning': 'warning', 'info': 'info'}.get(p.severity, 'muted') }}"
+      title="Rule Monitoring{{ ' (the rule is disabled: these would stop it working if it were switched on)' if p.disabled }}: {{ p.lines | join('; ') }}. Open the rule for more.">{{ icon('triangle-alert', '11') }} <span class="status-pill__text">{{ p.count }} problem{{ 's' if p.count != 1 }}</span></span>
 {%- endif -%}
 {%- endmacro %}
 

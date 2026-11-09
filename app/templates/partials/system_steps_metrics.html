@@ -20,6 +20,17 @@
     {% if changes.covered %}<div class="metric-tip" role="tooltip">{{ metric_change_tip(changes.covered) }}</div>{% endif %}
 {% endcall %}
 
+{# Effective (#79): covered, less the techniques covered only by rules that can't work now. Today's
+   figure only: TIDE keeps no history of what Rule Monitoring found to compare it with. #}
+{% call metric_card('effective', keys, link, 'metric-card--tip', tip=true) %}
+    <p class="metric-value {% if coverage_undefined %}{% elif scored and (t.effective / scored) >= 0.8 %}success{% elif scored and (t.effective / scored) >= 0.4 %}warning{% else %}danger{% endif %}">
+        {% if coverage_undefined %}—{% else %}{{ ((t.effective / scored * 100) | round | int) if scored else 0 }}%{% endif %}
+    </p>
+    <p class="metric-label">Effective</p>
+    <p class="metric-sub">{% if coverage_undefined %}no counted destinations{% elif t.not_effective %}{{ t.not_effective }} not effective{% else %}{{ t.effective }} of {{ scored }} scored{% endif %}</p>
+    <div class="metric-tip" role="tooltip">Covered by rules that can work now. Left out: techniques covered only by rules with a Rule Monitoring error, or a field they match on missing or empty{% if t.not_effective %} ({{ t.not_effective }}, partly covered ones included){% endif %}</div>
+{% endcall %}
+
 {% call metric_card('techniques', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value">{{ t.total }}</p>
     <p class="metric-label">Techniques</p>
@@ -37,8 +48,9 @@
 {% call metric_card('known_gaps', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value warning">{{ t.gap }}</p>
     <p class="metric-label">Known gaps</p>
+    {% if t.partial %}<p class="metric-sub">{{ t.partial }} partly covered</p>{% endif %}
     {{ metric_change(changes.known_gaps) }}
-    <div class="metric-tip" role="tooltip">Accepted, with a reason{{ metric_change_tip(changes.known_gaps) }}</div>
+    <div class="metric-tip" role="tooltip">Accepted, with a reason{% if t.partial %}. {{ t.partial }} {{ 'has' if t.partial == 1 else 'have' }} coverage beside {{ 'its gaps' if t.partial == 1 else 'their gaps' }}: Partial coverage, not counted as covered{% endif %}{{ metric_change_tip(changes.known_gaps) }}</div>
 {% endcall %}
 
 {% call metric_card('unmapped', keys, link, 'metric-card--tip', tip=true) %}
@@ -52,5 +64,5 @@
     <p class="metric-value {% if t.uncounted %}warning{% endif %}">{{ t.uncounted }}</p>
     <p class="metric-label">Not counted</p>
     {{ metric_change(changes.not_counted) }}
-    <div class="metric-tip" role="tooltip">Rule is only where this system isn't measured{{ metric_change_tip(changes.not_counted) }}</div>
+    <div class="metric-tip" role="tooltip">Rule is disabled, or only where this system isn't measured{{ metric_change_tip(changes.not_counted) }}</div>
 {% endcall %}

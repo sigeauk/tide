@@ -1,0 +1,55 @@
+{#
+  Delete client (api/clients.py, app.services.client_deletion), a super admin's, from the client's page.
+    confirm  what goes with the client, and the box to type its name; ``message`` why nothing was deleted
+    done     what was deleted, and any file that couldn't be; Close goes to Management's Clients
+  Context: mode, p (preview: client, files, size) or done (client, removed, kept, size), message.
+#}
+{% from "macros/modal.html" import close_button %}
+{% from "macros/icons.html" import icon %}
+{% from "components/ui/loading_state.html" import loading_state %}
+{% set to_clients = 'data-click="clients.after" data-after="/settings/management?tab=clients"' %}
+<div class="modal-overlay" {% if mode == 'done' %}{{ to_clients | safe }}{% else %}data-click="backdrop.remove"{% endif %}>
+    <div class="modal-content modal-sm" data-stop-click role="dialog" aria-modal="true" aria-labelledby="client-delete-title">
+    {% if mode == 'done' %}
+        <div class="modal-header">
+            <h3 class="modal-title" id="client-delete-title">Client deleted</h3>
+            {{ close_button('name="Close" ' ~ to_clients) }}
+        </div>
+        <p class="mb-md"><strong>{{ done.client.name }}</strong> is deleted, with everything TIDE held for it
+            {%- if done.removed %}, including its {{ done.removed | length }} database file{{ 's' if done.removed | length != 1 }} ({{ done.size }}){% endif %}.</p>
+        {% for f in done.kept %}
+        <div class="alert alert-danger mb-md">Could not delete {{ f.file.rsplit('/', 1)[-1] }}: {{ f.error }}.
+            Settings → Diagnostics lists it under Database files with no client, to delete it there.</div>
+        {% endfor %}
+        <div class="modal-actions">
+            <button name="Close" type="button" class="btn btn-secondary" {{ to_clients | safe }}>Close</button>
+        </div>
+    {% else %}
+        <div class="modal-header">
+            <h3 class="modal-title" id="client-delete-title">Delete client</h3>
+            {{ close_button('data-click="modal.remove"', 'Cancel') }}
+        </div>
+        {% if message %}<div class="alert alert-danger mb-md" role="alert">{{ message }}</div>{% endif %}
+        <form name="Delete Client" hx-delete="/api/clients/{{ p.client.id }}" hx-target="#modal-container" hx-swap="innerHTML"
+              hx-disabled-elt="find button" hx-indicator="find .client-delete__busy">
+            <p class="mb-sm">This deletes <strong>{{ p.client.name }}</strong> and everything TIDE holds for it, for good:
+                its rules as TIDE has them, its systems, baselines and coverage, its history, Rule Monitoring, reports and
+                dashboards, and everyone's access to it.</p>
+            {% if p.files %}
+            <p class="mb-sm">Its database files go too ({{ p.size }}):</p>
+            <ul class="mb-sm">{% for f in p.files %}<li><code>{{ f }}</code></li>{% endfor %}</ul>
+            {% endif %}
+            <p class="text-secondary mb-md">Its rules stay in Kibana, and its GitLab project as it is. Backups made before
+                now still hold it: to keep a copy, make one first in
+                <a href="/settings/management#mgmt-backups-section">Settings → Management → Backups</a>.</p>
+            <label class="form-label" for="client-delete-confirm">Type <strong>{{ p.client.name }}</strong> to confirm</label>
+            <input id="client-delete-confirm" name="confirm" class="form-input" autocomplete="off" required>
+            <div class="client-delete__busy htmx-indicator mt-sm">{{ loading_state('Deleting…', inline=true) }}</div>
+            <div class="modal-actions">
+                <button name="Cancel" type="button" class="btn btn-secondary" data-click="modal.remove">Cancel</button>
+                <button name="Delete Client" type="submit" class="btn btn-danger">Delete client</button>
+            </div>
+        </form>
+    {% endif %}
+    </div>
+</div>

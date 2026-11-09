@@ -34,7 +34,7 @@ The **Heatmap** shows ATT&CK's tactics as columns, with the techniques one or mo
 3. Each cell is a technique: **Covered** (COV), **No Detection** (GAP), or **Defense in Depth** (DEF). Hover over a cell for detail; click its ID for the side panel.
 4. The search box above the matrix highlights the techniques matching an ID, a name or a tactic.
 
-The page's **⋮** menu has **Export report**, a threat report for the chosen actors: choose PDF or Markdown, the classification marking, and *Executive / CISO* or *Technical / Engineer*. **Create baseline**, beside it, makes a baseline from the chosen actors' techniques, as an actor's window does on Threat Landscape.
+The page's **⋮** menu has **Export report**, a threat report for the chosen actors: choose PDF or Markdown, the classification marking, and *Executive / CISO* or *Technical / Engineer*. Beside **Detection Coverage** the report shows **Effective Coverage**: the techniques carried by a rule that can work now, leaving out those only rules with a Rule Monitoring error, or a field they match on missing or empty, carry. Its **Rule Health** section lists the open Rule Monitoring findings on the rules it counts (your enabled rules carrying these actors' techniques), grouped by what is wrong with who fixes each, and when the rules were last synced; a technical report names each rule. **Create baseline**, beside it, makes a baseline from the chosen actors' techniques, as an actor's window does on Threat Landscape.
 
 ## The MITRE pages
 

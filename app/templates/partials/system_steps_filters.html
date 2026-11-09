@@ -50,7 +50,9 @@
     {% if not template %}
     {% call filter_dropdown('sys-coverage', 'Coverage', 'Coverage') %}
         <div class="tide-filter-section-label">Status</div>
-        {{ choice_rows('sys-status', 'status', [('', 'Any'), ('green', 'Covered'), ('red', 'No coverage'), ('amber', 'Known gap'), ('grey', 'Not applicable')], f.status) }}
+        {# Known gap is every technique with one; Partial coverage those of them with coverage beside it.
+           Not effective: covered, or partly, only by rules that can't work now (#79). #}
+        {{ choice_rows('sys-status', 'status', [('', 'Any'), ('green', 'Covered'), ('red', 'No coverage'), ('amber', 'Known gap'), ('partial', 'Partial coverage'), ('not_effective', 'Not effective'), ('grey', 'Not applicable')], f.status) }}
         <div class="tide-filter-section-label">Rules</div>
         {{ choice_rows('sys-mapping', 'mapping', [('', 'Any'), ('unmapped', 'No rules mapped'), ('mapped', 'Has rules'), ('uncounted', "Has rules that don't count")], f.mapping) }}
     {% endcall %}

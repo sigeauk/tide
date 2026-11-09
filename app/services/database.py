@@ -148,7 +148,7 @@ def in_validated_range(rule, lo: Optional[datetime], hi: Optional[datetime], sta
 
 
 # Schema version for migrations
-SCHEMA_VERSION = 97
+SCHEMA_VERSION = 103
 
 # The per-client role that opens Diagnostics for that client. Only a super admin can grant or
 # revoke it (set_user_roles(grant_support=...)).
@@ -4112,6 +4112,95 @@ class DatabaseService:
             self._set_schema_version(conn, 97)
             logger.info("Migration 97: baseline techniques can record their library rule in %d tenant DB(s).", migrated)
 
+        # ── Migration 98: the newest event in each index pattern (6.4.0, #71) ──
+        # Per SIEM, as siem_field_catalogue: the newest event of each index pattern by each timestamp
+        # field rules search it by, read at each sync (app.services.data_freshness), so Rule Monitoring
+        # can say a data source has gone quiet. clients.data_window_hours: how often the client expects
+        # new data (NULL: every 24 hours). Additive only.
+        if current_version < 98:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS siem_data_freshness (
+                    siem_id VARCHAR NOT NULL,
+                    pattern VARCHAR NOT NULL,
+                    field VARCHAR NOT NULL,
+                    status VARCHAR NOT NULL,
+                    newest_at TIMESTAMP,
+                    checked_at TIMESTAMP,
+                    last_error VARCHAR,
+                    PRIMARY KEY (siem_id, pattern, field)
+                )
+            """)
+            conn.execute("ALTER TABLE clients ADD COLUMN IF NOT EXISTS data_window_hours INTEGER")
+            self._set_schema_version(conn, 98)
+            logger.info("Migration 98: added the newest event per index pattern and the client's data window.")
+
+        # ── Migration 99: whether recent events fill the fields rules match on (6.4.0, #72) ──
+        # Per SIEM, as siem_data_freshness: for each index pattern, timestamp field and field enabled
+        # rules match on there, whether an event of the last 7 days has a value in it
+        # (app.services.data_freshness.FieldData), so Rule Monitoring can say a mapped field is never
+        # filled. Additive only.
+        if current_version < 99:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS siem_field_data (
+                    siem_id VARCHAR NOT NULL,
+                    pattern VARCHAR NOT NULL,
+                    ts_field VARCHAR NOT NULL,
+                    field VARCHAR NOT NULL,
+                    status VARCHAR NOT NULL,
+                    checked_at TIMESTAMP,
+                    last_error VARCHAR,
+                    PRIMARY KEY (siem_id, pattern, ts_field, field)
+                )
+            """)
+            self._set_schema_version(conn, 99)
+            logger.info("Migration 99: added whether recent events fill the fields rules match on.")
+
+        # ── Migration 100: how late events reach each index pattern (6.4.0, #73) ──
+        # Per SIEM, as siem_data_freshness: the 95th percentile of event.ingested minus @timestamp over
+        # the last hour's arrivals, and how many events it was measured on, for each index pattern
+        # enabled rules search by @timestamp (app.services.data_freshness.IngestDelay), so Rule
+        # Monitoring can say events arrive later than a rule looks back. Additive only.
+        if current_version < 100:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS siem_ingest_delay (
+                    siem_id VARCHAR NOT NULL,
+                    pattern VARCHAR NOT NULL,
+                    status VARCHAR NOT NULL,
+                    p95_ms BIGINT,
+                    sample INTEGER,
+                    checked_at TIMESTAMP,
+                    last_error VARCHAR,
+                    PRIMARY KEY (siem_id, pattern)
+                )
+            """)
+            self._set_schema_version(conn, 100)
+            logger.info("Migration 100: added how late events reach each index pattern.")
+
+        # ── Migration 101: the client's thresholds for noisy and silent rules (6.4.0, #68, #69) ──
+        # NULL: TIDE's default (app.services.rule_alerts.DEFAULTS). Additive only.
+        if current_version < 101:
+            for column in ("noisy_per_day", "noisy_share_pct", "silent_enabled_days", "silent_days"):
+                conn.execute(f"ALTER TABLE clients ADD COLUMN IF NOT EXISTS {column} INTEGER")
+            self._set_schema_version(conn, 101)
+            logger.info("Migration 101: clients can set when a rule is noisy or silent.")
+
+        # ── Migration 102: upstream and validation drift settings (6.4.0, #77) ──
+        # upstream_pending_days: NULL is TIDE's default (30). validation_stale: 1 lists rules whose
+        # validation has expired or that changed since; NULL / 0 off (the default). Additive only.
+        if current_version < 102:
+            for column in ("upstream_pending_days", "validation_stale"):
+                conn.execute(f"ALTER TABLE clients ADD COLUMN IF NOT EXISTS {column} INTEGER")
+            self._set_schema_version(conn, 102)
+            logger.info("Migration 102: clients can set upstream and validation drift.")
+
+        # ── Migration 103: how many exception items are too many (6.4.0, #75) ──
+        # NULL: TIDE's default (10). The items themselves live in each tenant DB
+        # (rule_exceptions.ITEMS_DDL), made at the first sync that reads them. Additive only.
+        if current_version < 103:
+            conn.execute("ALTER TABLE clients ADD COLUMN IF NOT EXISTS exceptions_many INTEGER")
+            self._set_schema_version(conn, 103)
+            logger.info("Migration 103: clients can set when a rule has too many exceptions.")
+
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
 
     @staticmethod
@@ -7761,6 +7850,17 @@ class DatabaseService:
                 [rule_id, siem_id, space, int(limit)],
             ).fetchall()
         return [int(r[0]) for r in rows]
+
+    def get_rule_search_samples(self, rule_id: str, siem_id: str, space: str) -> List[Tuple[str, int]]:
+        """Every search time kept for one rule (the last 30 days), ``[(executed_at, ms)]`` oldest first:
+        the rule window's chart (#76)."""
+        with self.get_connection() as conn:
+            self._ensure_search_time_table(conn)
+            rows = conn.execute(
+                "SELECT executed_at, search_ms FROM rule_search_time_samples WHERE rule_id = ? AND siem_id = ? "
+                "AND space = ? ORDER BY executed_at", [rule_id, siem_id, space],
+            ).fetchall()
+        return [(str(at), int(ms)) for at, ms in rows]
 
     def clear_search_time_samples(self, rule_id: str, siem_id: str, space: str) -> None:
         with self.get_connection() as conn:
@@ -11589,7 +11689,7 @@ class DatabaseService:
                 "rule_validation_medium_amber_weeks, rule_validation_medium_expired_weeks, "
                 "rule_validation_high_amber_weeks, rule_validation_high_expired_weeks, "
                 "rule_validation_critical_amber_weeks, rule_validation_critical_expired_weeks, "
-                "delete_source_after_promotion, "
+                "delete_source_after_promotion, data_window_hours, noisy_per_day, noisy_share_pct, silent_enabled_days, silent_days, "
                 "created_at, updated_at "
                 "FROM clients WHERE id = ?", [client_id]
             ).fetchone()
@@ -11603,7 +11703,8 @@ class DatabaseService:
                  "rule_validation_medium_amber_weeks", "rule_validation_medium_expired_weeks",
                  "rule_validation_high_amber_weeks", "rule_validation_high_expired_weeks",
                  "rule_validation_critical_amber_weeks", "rule_validation_critical_expired_weeks",
-                 "delete_source_after_promotion",
+                 "delete_source_after_promotion", "data_window_hours", "noisy_per_day", "noisy_share_pct",
+                 "silent_enabled_days", "silent_days",
                  "created_at", "updated_at"], row
             ))
 
@@ -11649,7 +11750,8 @@ class DatabaseService:
     def update_client(self, client_id: str, **fields) -> Optional[Dict]:
         """Update a client. Allowed fields: name, description,
         rule_validation_amber_weeks, rule_validation_expired_weeks,
-        rule_validation_mode and per-severity validation thresholds.
+        rule_validation_mode and per-severity validation thresholds, and
+        data_window_hours (how often Rule Monitoring expects new data).
 
         Pass an empty string / ``None`` for either threshold to clear
         the per-tenant override and fall back to the global default."""
@@ -11657,6 +11759,8 @@ class DatabaseService:
             "name", "description",
             "rule_validation_mode",
             "delete_source_after_promotion",
+            "data_window_hours", "noisy_per_day", "noisy_share_pct", "silent_enabled_days", "silent_days",
+            "upstream_pending_days", "validation_stale", "exceptions_many",
             "rule_validation_amber_weeks",
             "rule_validation_expired_weeks",
             "rule_validation_low_amber_weeks",
@@ -11676,7 +11780,8 @@ class DatabaseService:
                 mode = str(v or "master").strip().lower()
                 updates[k] = "criticality" if mode == "criticality" else "master"
                 continue
-            if k.startswith("rule_validation_"):
+            if k.startswith("rule_validation_") or k in ("data_window_hours", "noisy_per_day", "noisy_share_pct",
+                                                         "silent_enabled_days", "silent_days"):
                 # Empty string → NULL (clear override). Otherwise coerce
                 # to int and reject non-positive values.
                 if v in (None, "", "null"):
@@ -11752,27 +11857,38 @@ class DatabaseService:
                 pass
         return amber, expired
 
-    def delete_client(self, client_id: str) -> bool:
-        """Delete a client. Cannot delete the default client."""
+    # Every shared table with rows about one client (a client_id column). Deleting a client deletes
+    # them all (#64); test/cicd_client_delete.py fails when a table with a client_id column is missing.
+    CLIENT_TABLES = ("user_clients", "user_roles", "role_permissions", "client_siem_map", "client_siem_configs",
+                     "client_gitlab_projects", "client_gitlab_map", "client_scoring_weights", "app_settings",
+                     "api_keys", "sync_history", "diagnostic_runs", "rule_lifecycle_history",
+                     "sigma_asset_assignments", "cti_connector_clients", "threat_actors")
+
+    def delete_client(self, client_id: str) -> Optional[Dict[str, int]]:
+        """Delete a client and every shared row about it (``CLIENT_TABLES``), in one transaction.
+        Returns how many rows went from each table, or None when there is no such client. Cannot
+        delete the default client. Its database files are client_deletion's to delete."""
         with self.get_shared_connection() as conn:
-            is_default = conn.execute(
-                "SELECT is_default FROM clients WHERE id = ?", [client_id]
-            ).fetchone()
+            is_default = conn.execute("SELECT is_default FROM clients WHERE id = ?", [client_id]).fetchone()
             if not is_default:
-                return False
+                return None
             if is_default[0]:
                 raise ValueError("Cannot delete the default client")
-            # Everything keyed to this client only. Other clients, users, SIEM
-            # inventory and the tenant database file are left alone.
-            for table in ("user_clients", "user_roles", "role_permissions",
-                          "client_siem_map", "client_siem_configs",
-                          "client_gitlab_projects", "client_gitlab_map"):
-                try:
-                    conn.execute(f"DELETE FROM {table} WHERE client_id = ?", [client_id])
-                except Exception as exc:
-                    logger.warning(f"delete_client: cleanup of {table} skipped: {exc!r}")
-            conn.execute("DELETE FROM clients WHERE id = ? AND is_default = false", [client_id])
-        return True
+            present = {r[0] for r in conn.execute("SELECT table_name FROM duckdb_tables()").fetchall()}
+            gone: Dict[str, int] = {}
+            conn.execute("BEGIN TRANSACTION")
+            try:
+                for table in self.CLIENT_TABLES:
+                    if table in present:
+                        gone[table] = len(conn.execute(
+                            f"DELETE FROM {table} WHERE client_id = ? RETURNING 1", [client_id]).fetchall())  # nosec B608 # table names are this class's own constant
+                gone["clients"] = len(conn.execute(
+                    "DELETE FROM clients WHERE id = ? AND is_default = false RETURNING 1", [client_id]).fetchall())
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+        return gone
 
     def get_user_clients(self, user_id: str) -> List[Dict]:
         """Get all clients assigned to a user."""

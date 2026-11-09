@@ -83,19 +83,45 @@ def update_client(client_id: str, data: ClientUpdate, db: DbDep, user: RequireUs
     return client
 
 
-@router.delete("/{client_id}", response_class=JSONResponse)
-def delete_client(client_id: str, db: DbDep, user: RequireSuperadmin):
-    """Delete a client (super-admin only). Cannot delete the default client."""
-    existing = db.get_client(client_id)
-    if not existing:
+def _delete_dialog(request: Request, **ctx):
+    return request.app.state.templates.TemplateResponse(request, "components/client_delete.html", ctx)
+
+
+@router.get("/{client_id}/delete", response_class=HTMLResponse)
+def delete_client_form(request: Request, client_id: str, db: DbDep, user: RequireSuperadmin):
+    """The Delete client dialog: what goes with it, and the box to type its name (super admins)."""
+    from app.services import client_deletion
+    client = db.get_client(client_id)
+    if not client:
         raise HTTPException(status_code=404, detail="Client not found")
-    if existing.get("is_default"):
-        raise HTTPException(status_code=400, detail="Cannot delete the default client")
-    ok = db.delete_client(client_id)
-    if not ok:
-        raise HTTPException(status_code=500, detail="Delete failed")
-    logger.info(f"Client deleted: {client_id} by {user.username}")
-    return {"ok": True}
+    if client.get("is_default"):
+        raise HTTPException(status_code=400, detail="TIDE's default client can't be deleted.")
+    return _delete_dialog(request, mode="confirm", p=client_deletion.preview(db, client))
+
+
+@router.delete("/{client_id}")
+def delete_client(request: Request, client_id: str, db: DbDep, user: RequireSuperadmin, confirm: str = ""):
+    """Delete a client, its rows and its database files (super admins; app.services.client_deletion).
+    ``confirm`` is the client's name, typed. From the dialog (htmx) it answers with the dialog: what was
+    deleted, or why nothing was; otherwise JSON. The default client can't be deleted."""
+    from app.services import client_deletion
+    htmx = request.headers.get("HX-Request") == "true"
+    try:
+        done = client_deletion.delete_client(db, client_id, confirm, user)
+    except client_deletion.ClientNotFound:
+        raise HTTPException(status_code=404, detail="Client not found")
+    except client_deletion.DeleteRefused as exc:
+        if not htmx:
+            raise HTTPException(status_code=409, detail=str(exc))
+        client = db.get_client(client_id)
+        return _delete_dialog(request, mode="confirm", message=str(exc), p=client_deletion.preview(db, client))
+    response = (_delete_dialog(request, mode="done", done=done) if htmx else
+                JSONResponse({"ok": True, "rows": done["rows"], "size": done["size"],
+                              "removed": [f["file"].rsplit("/", 1)[-1] for f in done["removed"]],
+                              "not_deleted": [f["file"].rsplit("/", 1)[-1] for f in done["kept"]]}))
+    if request.cookies.get("active_client_id") == client_id:
+        response.delete_cookie("active_client_id")   # at once, rather than at the next request (main.py)
+    return response
 
 
 # ---------------------------------------------------------------------------

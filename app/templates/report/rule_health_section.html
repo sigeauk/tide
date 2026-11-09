@@ -1,0 +1,44 @@
+{#
+  A report's Rule Health section (#80), shared by the system and threat reports: the open Rule
+  Monitoring findings on the rules the report counts, grouped by what is wrong, worst first, with who
+  fixes each (rule_issues.report_rule_health), and when the rules were last synced. A technical report
+  names each rule, where it is and what the finding is about; an executive one says how many.
+  Its styles are its own (rhs-), as the two reports' are not the same.
+#}
+{% macro rule_health_section(health, synced, technical) -%}
+<style>
+.rhs-summary { font-size: 8pt; margin: 0 0 2mm; }
+.rhs-synced { font-size: 7pt; color: #6b7280; margin: 0 0 3mm; }
+table.rhs-table { width: 100%; border-collapse: collapse; font-size: 7pt; margin-bottom: 6mm; }
+table.rhs-table th, table.rhs-table td { text-align: left; padding: 1.5mm 2mm; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
+table.rhs-table th { font-size: 6.5pt; text-transform: uppercase; letter-spacing: 0.04em; color: #6b7280; }
+table.rhs-table tr { page-break-inside: avoid; }
+.rhs-sev { font-weight: 700; font-size: 6.5pt; text-transform: uppercase; letter-spacing: 0.03em; }
+.rhs-sev--error { color: #b91c1c; }
+.rhs-sev--warning { color: #b45309; }
+.rhs-sev--info { color: #1d4ed8; }
+.rhs-rule { display: block; }
+.rhs-rule__where { color: #6b7280; }
+</style>
+<div class="section-banner avoid-break" id="sec-rule-health">
+    <div class="section-banner-title">Rule Health</div>
+    <div class="section-banner-sub">Open Rule Monitoring findings on the rules this report counts, and who fixes each</div>
+</div>
+<p class="rhs-summary">{{ health.summary }}</p>
+{% if synced %}<p class="rhs-synced">Rules last synced: {{ synced }}</p>{% endif %}
+{% if health.groups %}
+<table class="rhs-table">
+    <thead><tr><th style="width:30%">What's wrong</th><th style="width:10%">Severity</th><th style="width:12%">Who fixes</th><th>{{ 'Rules' if technical else 'Rules affected' }}</th></tr></thead>
+    <tbody>
+        {% for g in health.groups %}
+        <tr>
+            <td><strong>{{ g.title }}</strong></td>
+            <td><span class="rhs-sev rhs-sev--{{ g.severity }}">{{ g.severity }}</span></td>
+            <td>{{ g.fixer_label }}</td>
+            <td>{% if technical %}{% for r in g.rules %}<span class="rhs-rule">{{ r.name }} <span class="rhs-rule__where">— {{ r.destination }}{% if r.cause %}, {{ r.cause }}{% endif %}</span></span>{% endfor %}{% else %}{{ g.count }}{% endif %}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+{%- endmacro %}

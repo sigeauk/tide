@@ -99,7 +99,7 @@ def ensure(conn) -> None:
 
 def blob_id(data: bytes) -> str:
     """Git's blob id of ``data``: what GitLab's file list says a file is."""
-    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+    return hashlib.sha1(b"blob %d\0" % len(data) + data, usedforsecurity=False).hexdigest()  # nosemgrep: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1 # Git's blob id, not for security
 
 
 def _dump(value: Any) -> str:

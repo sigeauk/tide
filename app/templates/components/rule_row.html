@@ -1,5 +1,5 @@
 {% from "macros/icons.html" import icon %}
-{% from "macros/rule_ui.html" import state_badge, upstream_badge %}
+{% from "macros/rule_ui.html" import state_badge, upstream_badge, problems_badge %}
 {% from "components/mitre_pill.html" import mitre_pill, mitre_pills_row %}
 {#
   Rule table row — the table-view twin of components/rule_card.html (same data,
@@ -46,7 +46,7 @@
             {{ icon('shield-check', '11') }} <span class="status-pill__text">{{ siem_label }}</span>
         </span>
     </td>
-    <td data-col="state">{{ state_badge(lifecycle_state, lifecycle_titles.get(lifecycle_key, "") if lifecycle_titles is defined else "") }}</td>
+    <td data-col="state">{{ problems_badge(rule_problems.get(lifecycle_key) if rule_problems is defined else none) }}{{ state_badge(lifecycle_state, lifecycle_titles.get(lifecycle_key, "") if lifecycle_titles is defined else "") }}</td>
     <td data-col="severity"><span class="sev-pill sev-{{ sev_value }}">{{ sev_value | upper }}</span></td>
     <td class="rt-validated text-{{ val_class }}" data-col="validated" title="Validation status: {{ val_status }}">
         {% if rule.validation_date %}{{ rule.validation_date.strftime('%Y-%m-%d') }}{% if rule.validated_by %}<span class="rt-sub"> · {{ rule.validated_by }}</span>{% endif %}{% else %}Never{% endif %}
@@ -56,5 +56,7 @@
     <td class="rt-mitre" data-col="mitre">{{ mitre_pills_row(rule.mitre_ids, clickable=true, size='sm', neutral=true, search_filter=(search | default('')), max_visible=3) }}</td>
     <td class="rt-type" data-col="type">{{ rule.rule_type | rule_type_name }}</td>
     <td class="rt-lang" data-col="lang">{% if rule.query_language %}{{ rule.query_language | rule_language_name }}{% else %}<span class="text-muted" title="A machine learning rule has no query language">—</span>{% endif %}</td>
+    {% set _alerts = (rule_alerts_7d.get(lifecycle_key) if rule_alerts_7d is defined else none) or 0 %}
+    <td class="rt-alerts" data-col="alerts">{% if _alerts %}{{ '{:,}'.format(_alerts) }}{% else %}<span class="text-muted" title="No alerts in the last 7 days, as of the last sync">—</span>{% endif %}</td>
     <td class="rt-cols" data-col="cols"></td>
 </tr>

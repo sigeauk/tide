@@ -50,11 +50,11 @@ SOURCES: Dict[str, Source] = {
         ("quality", "Avg Quality"), ("severity", "Severity"), ("last_synced", "Last Synced"),
     ), ("space", "enabled", "state", "min_score", "max_score", "validated_from", "validated_to", "search"), "/rules"),
     "rule_monitoring": Source("Rule Monitoring", "triangle-alert", (
-        ("rules", "Rules Needing Action"), ("errors", "Errors"), ("warnings", "Warnings"),
+        ("rules", "Rules Needing Action"), ("errors", "Errors"), ("warnings", "Warnings"), ("info", "Info"),
         ("causes", "Things to Fix"), ("resolved", "Resolved"), ("last_synced", "Last Synced"),
     ), ("scope", "severity", "fixer", "issue", "rules", "search"), "/rule-monitoring"),
     "system": Source("System", "server", (
-        ("covered", "Covered"), ("techniques", "Techniques"), ("no_coverage", "No coverage"),
+        ("covered", "Covered"), ("effective", "Effective"), ("techniques", "Techniques"), ("no_coverage", "No coverage"),
         ("known_gaps", "Known gaps"), ("unmapped", "Unmapped"), ("not_counted", "Not counted"),
     ), ("system_id",), "/systems"),
     "threat_landscape": Source("Threat Landscape", "target", (
@@ -64,6 +64,7 @@ SOURCES: Dict[str, Source] = {
     "baselines": Source("Baselines", "shield", (
         ("templates", "Templates"), ("techniques", "Techniques Defined"), ("system_baselines", "System Baselines"),
         ("rules_mapped", "Rules Mapped"), ("uncovered", "Uncovered"), ("fully_covered", "Fully Covered"),
+        ("not_effective", "Not Effective"),
     ), (), "/baselines"),
     "asset_inventory": Source("Asset Inventory", "server", (
         ("systems", "Systems"), ("devices", "Devices"), ("packages", "Packages"),
@@ -83,6 +84,13 @@ SOURCES: Dict[str, Source] = {
 # card it had then also shows the ones added since. Its old label, which 6.1.2 saved as its name,
 # gives way to the new one.
 _REPOSITORIES_BEFORE_6_1_3 = ("mitre_enterprise", "mitre_mobile", "mitre_ics", "mitre_pre", "sigma")
+# A System, Baselines or Rule Monitoring section saved showing every card it had before 6.4.0 also
+# shows the cards added then: Effective coverage's (#79), and Rule Monitoring's Info (#77).
+_BEFORE_6_4_0 = {
+    "system": ("covered", "techniques", "no_coverage", "known_gaps", "unmapped", "not_counted"),
+    "baselines": ("templates", "techniques", "system_baselines", "rules_mapped", "uncovered", "fully_covered"),
+    "rule_monitoring": ("rules", "errors", "warnings", "causes", "resolved", "last_synced"),
+}
 TEXT_CARDS = {"title": 120, "text": 2000}      # type -> most characters
 NAME_LIMIT = 80                                # a section's or a dashboard's name
 WIDTHS = (3, 4, 6, 8, 9, 12)
@@ -206,6 +214,8 @@ def clean(cards) -> List[dict]:
             keys = [k for k, _ in SOURCES[source].metrics]
             chosen = card.get("metrics") if isinstance(card.get("metrics"), list) else keys
             name = _one_line(card.get("name"), NAME_LIMIT, "A section's name")
+            if source in _BEFORE_6_4_0 and set(_BEFORE_6_4_0[source]) <= set(chosen):
+                chosen = keys      # saved showing every card before 6.4.0 added its new ones: show them too
             if source == "repositories":
                 if {"elastic", *_REPOSITORIES_BEFORE_6_1_3} <= set(chosen):
                     chosen = keys  # saved showing every card before 6.1.3 added three: show them too

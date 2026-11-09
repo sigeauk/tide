@@ -11,6 +11,10 @@ Found at each sync, from what the sync already read (no other calls to Kibana):
 - the field catalogue: index patterns matching no index, fields no index has or mapped with
   conflicting types, and the timestamp override field missing. For a rule whose last run Kibana
   already reported on those, Kibana's (more exact) report is used instead;
+- the newest event in each index pattern (``data_freshness``, a search a sync adds): a pattern with no
+  new events for longer than the client expects; whether recent events fill the fields rules match
+  on (``FieldData``, checked daily): a mapped field no event of the last 7 days has a value in; and how
+  late events arrive (``IngestDelay``): later than a rule looks back beyond its interval;
 - TIDE's record of each destination: rules sharing a rule id, custom rules under one of Elastic's
   rule ids, syncs that couldn't read every rule, SIEMs that didn't answer.
 
@@ -23,6 +27,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
@@ -55,7 +60,7 @@ class Issue:
     id: str
     title: str
     fixer: str          # a FIXERS key
-    severity: str       # "error" (the rule doesn't do its job) or "warning" (it does, less well)
+    severity: str       # "error" (the rule doesn't do its job), "warning" (it does, less well) or "info" (worth knowing)
     level: str          # "rule": found per rule; "destination": one SIEM space as a whole
     meaning: str        # what it means, in plain words
     check: str          # what to check or do
@@ -69,6 +74,12 @@ KNOWN: Dict[str, Issue] = {i.id: i for i in (
     Issue("no_index", "No index matches the index pattern", "engineer", "error", "rule",
           "The rule searches an index pattern that matches no index on this SIEM, so it finds nothing there.",
           "Check that the integration or pipeline writing to this index pattern is installed and sending data."),
+    Issue("no_recent_data", "No recent events in the index pattern", "engineer", "error", "rule",
+          "The index pattern has indexes, but no new event has reached them for longer than new data is expected, "
+          "so the rule can't alert on that source. It is an error where none of the rule's index patterns has "
+          "recent events, as the rule can't raise alerts at all, and a warning where its other patterns still do.",
+          "Check the integration, agent or pipeline that sends this data. If the source sends only now and then, "
+          "or is retired, use Expect new data every… on the cause."),
     Issue("override_missing", "Indexes missing the timestamp override field", "engineer", "warning", "rule",
           "These indexes don't have the field the rule uses as its timestamp override, usually because the "
           "ingest pipeline that adds it doesn't run for them. Their events can be searched late or missed.",
@@ -82,6 +93,12 @@ KNOWN: Dict[str, Issue] = {i.id: i for i in (
           "The field has different types in different indexes the rule searches, so searches on it can fail "
           "or miss events in some of them.",
           "Map the field with one type in every index (index template or ingest pipeline)."),
+    Issue("field_empty", "Field mapped but has no data", "engineer", "warning", "rule",
+          "The indexes map the field the rule matches on, and have recent events, but none of the last 7 days' "
+          "events has a value in it, so the rule can't match on it. Index templates map many fields whether or not "
+          "the source sends them.",
+          "Check the data source sends the field, or that its ingest pipeline fills it; if the rule should match on "
+          "another field, correct its query."),
     Issue("unknown_field", "Query uses a field Elasticsearch can't find", "author", "error", "rule",
           "Elasticsearch refused the rule's query because a field it names doesn't exist in the indexes.",
           "Check the field name in the query. If it is right, the data doesn't have the field yet."),
@@ -104,6 +121,11 @@ KNOWN: Dict[str, Issue] = {i.id: i for i in (
     Issue("timeout", "Search timed out", "engineer", "warning", "rule",
           "The rule's search ran out of time, so its results may be incomplete.",
           "Check Elasticsearch load, or make the query cheaper."),
+    Issue("slow", "Searches getting slow", "author", "warning", "rule",
+          "The rule's searches take a large share of the time between its runs, or have more than doubled "
+          "in two weeks. Kibana misses runs once a search takes longer than that: this is the warning before.",
+          "Make the query cheaper: narrow its index patterns, avoid leading wildcards and regular expressions, "
+          "or filter on keyword fields first. Or run it less often."),
     Issue("overloaded", "Elasticsearch refused the search (overloaded)", "engineer", "warning", "rule",
           "Elasticsearch turned the search away because it was short of memory or busy.",
           "Check the cluster's memory and load (circuit breakers, search queue)."),
@@ -121,6 +143,31 @@ KNOWN: Dict[str, Issue] = {i.id: i for i in (
           "uses event.ingested as its timestamp override isn't listed: the next run finds a late event.",
           "Give the rule at least a minute of additional look-back time, more if its data arrives late, or use "
           "event.ingested as its timestamp override."),
+    Issue("ingest_late", "Events arrive later than the rule looks back", "engineer", "warning", "rule",
+          "Events reach this index pattern later than the rule looks back beyond its run interval, by when each "
+          "happened, so the late ones fall between runs and are never searched. Measured at each sync on the last "
+          "hour's events (event.ingested against @timestamp); rules that search by event.ingested aren't affected.",
+          "Find what holds events up between the source and Elasticsearch (agents, queues, pipelines). In the rules, "
+          "use event.ingested as the timestamp override, or give them more additional look-back time than the delay."),
+    Issue("noisy", "Too many alerts", "author", "warning", "rule",
+          "The rule raises more alerts than analysts can look at: on average more a day than the client allows, or "
+          "most of its space's alerts. Alerts like these are usually false positives that bury the true ones.",
+          "Tune the rule: add exceptions for known-good activity, narrow its query, or group its alerts (alert "
+          "suppression). The client's thresholds are on its page."),
+    Issue("silent", "No alerts for a long time", "author", "warning", "rule",
+          "The rule has been enabled a long while and raised no alert in the time the client allows. It may be "
+          "right (the attack hasn't happened), or quietly broken: a query that can't match, or data it never gets. "
+          "Where none of its data arrives any more, or a field it matches on is empty, that is listed instead.",
+          "Check it can still fire: Validate it, or Test it against recent data, or run an atomic test. A rule meant "
+          "to be rare can be muted."),
+    Issue("alert_spike", "Alerts spiked", "author", "warning", "rule",
+          "The rule raised far more alerts in a day than it usually does. A rise like this usually follows a change: "
+          "an edit, a new data source, or an exception removed. The change TIDE recorded just before it is named.",
+          "Look at the change named, and at the new alerts in Kibana: tune the rule if they are false positives."),
+    Issue("alerts_unreadable", "Alerts couldn't be read", "engineer", "warning", "destination",
+          "TIDE couldn't read this space's alerts at the last sync, so it can't tell which rules are noisy or silent here.",
+          "Give the SIEM's API key read access to the space's alerts index (.alerts-security.alerts-<space>), then "
+          "sync again."),
     Issue("never_run", "Enabled but never run", "engineer", "warning", "rule",
           "Kibana has no run recorded for this enabled rule.",
           "Check the rule in Kibana and Kibana's task manager."),
@@ -151,6 +198,48 @@ KNOWN: Dict[str, Issue] = {i.id: i for i in (
           "Elastic's rule at all; either way TIDE shows Elastic's updates for it.",
           "Use Compare with Elastic, on the rule's row or in its window, then keep the link (a copy you changed on "
           "purpose) or unlink it from Elastic (your own rule)."),
+    Issue("exceptions_many", "Many exceptions", "author", "warning", "rule",
+          "The rule has more exception items than the client allows (its own list and the shared lists it "
+          "uses). Each is reasonable on its own; together they can mute the rule without anyone noticing.",
+          "Review its Exceptions: remove those no longer needed, merge overlapping ones, or narrow the rule's "
+          "query so fewer are needed. The client sets how many are too many on its page."),
+    Issue("exception_broad", "Exception matches almost anything", "author", "warning", "rule",
+          "An exception item whose every condition is a wildcard-only value (such as process.name matches \"*\") "
+          "excepts every event that has those fields, so the rule raises almost nothing.",
+          "Narrow the exception to the activity it was meant for, or remove it."),
+    Issue("exception_recent", "Exception added recently", "author", "info", "rule",
+          "An exception item was added to a list the rule uses in the last 7 days. Worth a look: it may "
+          "except more than intended.",
+          "Check the exception in the rule's Exceptions section, and its history."),
+    Issue("duplicate_query", "Same detection deployed twice", "author", "warning", "rule",
+          "Two or more enabled rules in this space search the same index patterns with the same query (and, for "
+          "a threshold, new terms or indicator match rule, the same settings), under different names or rule "
+          "ids: a re-import, or one copy from Sigma and one from Elastic. Every event alerts once per copy, and "
+          "tuning one leaves the other as it was.",
+          "Keep one: disable or delete the others, or change one so it finds something different. A copy kept "
+          "on purpose can be linked to the other (Add link in its window), and isn't listed then."),
+    Issue("upstream_update_pending", "Upstream update not reviewed", "author", "warning", "rule",
+          "Elastic or SigmaHQ updated the rule this one came from a while ago, and the update hasn't been reviewed. "
+          "Upstream fixes (fewer false positives, new fields, broader matching) don't reach your copy until then.",
+          "Open the rule and use Review update in its Upstream section: take the sections you want, or keep it as "
+          "it is. The client sets how long an update may wait on its page."),
+    Issue("prebuilt_updates", "Elastic's prebuilt rules have updates", "engineer", "info", "destination",
+          "Elastic has newer versions of prebuilt rules installed in this space, and has had them longer than the "
+          "client allows. Kibana installs them itself, all at once, so they are one finding here rather than one "
+          "for each rule.",
+          "In Kibana, open Rules → Rule updates and update them (an air-gapped Kibana needs Elastic's newer prebuilt "
+          "rules package first). Rule Health's Upstream filter, Elastic update available, lists them; Review update "
+          "in a rule's window takes only the sections you choose into it."),
+    Issue("upstream_deprecated", "Retired upstream", "author", "warning", "rule",
+          "Elastic or SigmaHQ has deprecated the rule this one came from: they no longer maintain it, usually "
+          "because a better rule replaces it or it caught too little.",
+          "Find what replaces it in the Elastic or Sigma rules, deploy that, and retire this rule once it is "
+          "covered; or keep it, knowing no more updates will come."),
+    Issue("validation_stale", "Validation expired or out of date", "author", "info", "rule",
+          "The rule's validation has expired under the client's validation policy, or the rule was edited since "
+          "it was last validated, so no one has confirmed it still catches what it should. Listed only when "
+          "the client turns it on.",
+          "Validate the rule: run it against test data or an atomic test, then mark it validated in its window."),
     Issue("change_pending", "Change not finished in TIDE", "tide", "warning", "rule",
           "Kibana made a change TIDE asked for (giving the rule its own rule id, moving or copying it, or restoring "
           "it), but TIDE couldn't record it, so TIDE still shows the rule as it was before.",
@@ -321,6 +410,328 @@ def catalogue_findings(rule: Dict[str, Any], entries: Dict[str, Any],
     return out
 
 
+def freshness_findings(rule: Dict[str, Any], entries: Dict[Tuple[str, str], Any],
+                       hours_for: Callable[[str], int]) -> List[Tuple[str, str, str, str]]:
+    """The index patterns a rule searches that have gone quiet (#71): ``entries`` are the newest events
+    of its SIEM's patterns (``DataFreshness.entries``), ``hours_for`` how often new data is expected in a
+    pattern. An error when none of the patterns it can be judged on has recent events (the rule can't
+    raise alerts), a warning when some still do. A pattern never checked, matching no index (that is
+    ``no_index``) or with no new data expected isn't judged."""
+    from app.services import data_freshness as df
+    rows = [r for r in rule.get("results") or [] if isinstance(r, (list, tuple)) and r]
+    patterns = [str(p) for p in rule.get("index") or [] if p] or sorted({str(r[0]) for r in rows})
+    field, fallback = df.searched_by(rule)
+    judged = []
+    for p in dict.fromkeys(p for p in patterns if not p.startswith(("-", "_"))):
+        entry, hours = df.entry_for(entries, p, field, fallback), hours_for(p)
+        state = df.quiet(entry, hours)
+        if state is not None:
+            judged.append((p, state, entry, hours))
+    quiet = [j for j in judged if j[1]]
+    if not quiet:
+        return []
+    blind = len(quiet) == len(judged)
+    then = ("None of the rule's index patterns has recent events, so it can't raise alerts." if blind
+            else "The rule's other index patterns still have recent events.")
+    out = []
+    for p, _q, entry, hours in quiet:
+        by = f" by {field}" if field != "@timestamp" and entries.get((p, field)) is entry else ""
+        if entry.status == df.NO_EVENTS:
+            seen = f"No event{by} in its indexes when TIDE looked, on {entry.checked_at:%Y-%m-%d %H:%M}."
+        else:
+            seen = (f"Newest event{by} {entry.newest_at:%Y-%m-%d %H:%M}, "
+                    f"{_duration((entry.checked_at - entry.newest_at).total_seconds())} before TIDE looked, "
+                    f"where new data is expected every {df.hours_text(hours)}.")
+        out.append(("no_recent_data", p, "error" if blind else "warning", f"{seen} {then}"))
+    return out
+
+
+def alert_findings(counts: Dict[Any, int], space_counts: Dict[Any, int], limits: Dict[str, int],
+                   until: Any) -> List[Tuple[str, str, str, str]]:
+    """What an enabled rule's alerts say (#68): ``counts`` are its alerts per day (``rule_alerts.daily``),
+    ``space_counts`` its space's, ``limits`` the client's thresholds (``rule_alerts.thresholds``),
+    ``until`` the last day counted. Noisy when it averages more alerts a day over the last 7 days than
+    the client allows, or makes more than its share of a space that has that many."""
+    from app.services import rule_alerts
+    week, space_week = rule_alerts.recent(counts, 7, until), rule_alerts.recent(space_counts, 7, until)
+    per_day, space_per_day = week / 7, space_week / 7
+    share = week / space_week * 100 if space_week else 0
+    if per_day > limits["noisy_per_day"] or (space_per_day > limits["noisy_per_day"] and share > limits["noisy_share_pct"]):
+        return [("noisy", "", KNOWN["noisy"].severity,
+                 f"Averaged {per_day:,.0f} alerts a day over the last 7 days ({week:,} in all), {share:.0f}% of its "
+                 f"space's alerts.")]
+    return []
+
+
+def silent_findings(counts: Dict[Any, int], enabled_since: Optional[datetime], limits: Dict[str, int],
+                    until: Any, now: datetime) -> List[Tuple[str, str, str, str]]:
+    """An enabled rule that has raised no alert for a long while (#69): enabled since ``enabled_since``
+    at least ``silent_enabled_days``, and no alert in the last ``silent_days`` (at most what TIDE
+    counts back). Only where its space's alerts were read, and none of its data problems is known
+    (the caller leaves those out)."""
+    from app.elastic_helper import ALERT_DAYS
+    from app.services import rule_alerts
+    days = min(limits["silent_days"], ALERT_DAYS)
+    if not enabled_since or now - enabled_since < timedelta(days=limits["silent_enabled_days"]):
+        return []
+    if rule_alerts.recent(counts, days, until):
+        return []
+    last = max(counts) if counts else None
+    return [("silent", "", KNOWN["silent"].severity,
+             f"No alerts in the last {days} days{f' (the last on {last:%d %b %Y})' if last else ''}, though enabled "
+             f"since {enabled_since:%d %b %Y}. Check it can still fire: Validate it, or Test it against recent data.")]
+
+
+SPIKE_TIMES, SPIKE_MIN, SPIKE_BASE_DAYS = 3, 50, 14     # a spike: over 3x its median day of the 14 before, and 50+
+
+
+def _change_text(action: str, detail: Dict[str, Any]) -> str:
+    """A history entry as the cause of a spike: what was done to the rule."""
+    fields = ", ".join(f.strip() for f in str(detail.get("changed_fields") or "").split(",") if f.strip())
+    exception = f'the exception "{detail["exception"]}"' if detail.get("exception") else "an exception"
+    return {"edited": f"edited its {fields}" if fields else "edited it", "enabled": "enabled it",
+            "created": "created it", "restored": "restored it", "upstream_update": "merged an update into it",
+            "moved": "moved it here", "new_rule_id": "gave it a rule id of its own",
+            "exception_added": f"added {exception}", "exception_removed": f"removed {exception}",
+            "exception_changed": f"changed {exception}"}.get(action, action.replace("_", " "))
+
+
+def spike_findings(counts: Dict[Any, int], changes: List[Tuple[datetime, str, str, Dict[str, Any]]],
+                   until: Any) -> List[Tuple[str, str, str, str]]:
+    """A day (today or yesterday, UTC) with over ``SPIKE_TIMES`` the rule's median day of the
+    ``SPIKE_BASE_DAYS`` before it, and at least ``SPIKE_MIN`` alerts (#70). ``changes`` are its history
+    entries, ``(when, action, actor, detail)``: the latest before the end of that day, within the days
+    looked back on, is named."""
+    import statistics
+    best = None
+    for day in (until, until - timedelta(days=1)):
+        n = counts.get(day, 0)
+        base = statistics.median(counts.get(day - timedelta(days=i), 0) for i in range(1, SPIKE_BASE_DAYS + 1))
+        if n >= SPIKE_MIN and n > SPIKE_TIMES * base and (best is None or n > best[1]):
+            best = (day, n, base)
+    if not best:
+        return []
+    from app.services.database import utc_to_local
+    day, n, base = best
+    # The days are UTC; history keeps local time.
+    end = utc_to_local(datetime.combine(day + timedelta(days=1), datetime.min.time()))
+    start = utc_to_local(datetime.combine(day - timedelta(days=SPIKE_BASE_DAYS), datetime.min.time()))
+    before = [c for c in changes if start <= c[0] < end]
+    rose = f"Alerts rose from about {base:,.0f} a day to {n:,} on {day:%d %b}"
+    if before:
+        when, action, actor, detail = max(before, key=lambda c: c[0])
+        why = f", after {actor or 'someone'} {_change_text(action, detail)} on {when:%d %b}."
+    else:
+        why = ", with no change to the rule recorded in the two weeks before: its data may have changed."
+    return [("alert_spike", "", KNOWN["alert_spike"].severity, rose + why)]
+
+
+# Slow searches (#76): the median of the last SLOW_RUNS (as the score's search-time check takes it) at
+# SLOW_SHARE of the interval or more; or, at SLOW_FLOOR_MS or more, over SLOW_TIMES the median of the
+# runs before SLOW_DAYS ago. Each needs SLOW_MIN runs.
+SLOW_RUNS, SLOW_SHARE, SLOW_TIMES, SLOW_DAYS, SLOW_FLOOR_MS, SLOW_MIN = 10, 0.5, 2, 14, 1000, 3
+
+
+def _ms(ms: float) -> str:
+    return f"{ms / 1000:.1f} s" if ms >= 1000 else f"{ms:.0f} ms"
+
+
+def slow_findings(samples: List[Tuple[str, int]], interval, now: datetime) -> List[Tuple[str, str, str, str]]:
+    """A rule whose searches are getting slow (#76), from its recorded search times (``samples``:
+    ``(executed_at ISO in UTC, ms)``, any order): their recent median a large share of its run
+    ``interval``, or more than doubled over two weeks."""
+    import statistics
+    runs = sorted(samples, reverse=True)
+    recent = [ms for _at, ms in runs[:SLOW_RUNS]]
+    if len(recent) < SLOW_MIN:
+        return []
+    med = statistics.median(recent)
+    every = _span(interval)
+    n = len(recent)
+    if every and med >= SLOW_SHARE * every * 1000:
+        return [("slow", "", KNOWN["slow"].severity,
+                 f"Its searches take {_ms(med)} (the median of its last {n} runs), {med / every / 10:.0f}% of the "
+                 f"{_duration(every)} between runs. Kibana misses runs once a search takes longer than that.")]
+    cutoff = (now - timedelta(days=SLOW_DAYS)).strftime("%Y-%m-%dT%H:%M:%S")
+    newer = [ms for at, ms in runs if at >= cutoff][:SLOW_RUNS]
+    older = [ms for at, ms in runs if at < cutoff][:SLOW_RUNS]
+    if len(newer) >= SLOW_MIN and len(older) >= SLOW_MIN:
+        now_med, then_med = statistics.median(newer), statistics.median(older)
+        if now_med >= SLOW_FLOOR_MS and now_med > SLOW_TIMES * then_med:
+            return [("slow", "", KNOWN["slow"].severity,
+                     f"Its searches have slowed from {_ms(then_med)} to {_ms(now_med)} (medians) in the last "
+                     f"{SLOW_DAYS} days{f', {now_med / every / 10:.0f}% of the {_duration(every)} between runs' if every else ''}.")]
+    return []
+
+
+EXCEPTION_RECENT_DAYS = 7      # an exception item added in this many days is listed for information (#75)
+
+
+def exception_findings(items: List[Dict[str, Any]], lists: int, limits: Dict[str, int],
+                       now_utc: datetime) -> List[Tuple[str, str, str, str]]:
+    """A rule's exceptions (#75), from the items that apply to it (``rule_exceptions.iter_rule_items``)
+    across ``lists`` lists: more than the client's ``exceptions_many``; each broad item; each added
+    in the last ``EXCEPTION_RECENT_DAYS`` (times UTC, as Kibana gives them). The cause of a broad or
+    recent item is its name, so a shared list's item is one thing to fix on every rule using it."""
+    from app.services import rule_exceptions
+    out: List[Tuple[str, str, str, str]] = []
+    n, limit = len(items), limits["exceptions_many"]
+    if n > limit:
+        across = f" across {lists} lists" if lists > 1 else ""
+        out.append(("exceptions_many", "", KNOWN["exceptions_many"].severity,
+                    f"Has {n} exception items{across}, more than the client's {limit}. Each is reasonable on its "
+                    "own; together they can mute the rule."))
+    for item in items:
+        name = item.get("name") or item.get("item_id") or "unnamed"
+        text = rule_exceptions.item_text(item)
+        if rule_exceptions.broad(item):
+            out.append(("exception_broad", name, KNOWN["exception_broad"].severity,
+                        f'Exception "{name}" excepts every event where {text}.'))
+        added, by = item.get("created_at"), item.get("created_by")
+        if added and now_utc - added <= timedelta(days=EXCEPTION_RECENT_DAYS):
+            who = f"by {by} " if by else ""
+            out.append(("exception_recent", name, KNOWN["exception_recent"].severity,
+                        f"Added {who}on {added:%d %b %Y}: {text}."))
+    return out
+
+
+def _as_day(value) -> Optional[Any]:
+    """A date from a date, a datetime or ISO text; None for anything else."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if hasattr(value, "year") and hasattr(value, "month"):
+        return value
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")[:19]).date()
+    except ValueError:
+        try:
+            return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
+        except ValueError:
+            return None
+
+
+def upstream_findings(status: Dict[str, Any], limits: Dict[str, int], today) -> List[Tuple[str, str, str, str]]:
+    """Upstream drift (#77) from a rule's upstream status (``rule_origins.statuses``): the rule it came
+    from retired by Elastic or SigmaHQ, or updated and not reviewed for the client's
+    ``upstream_pending_days``. A rule linked by hand, still to be compared, isn't a known update."""
+    if status.get("state") == "retired":
+        return [("upstream_deprecated", "", KNOWN["upstream_deprecated"].severity, status["title"])]
+    if status.get("state") != "update" or status.get("recorded_how") == "linked":
+        return []
+    since = _as_day(status.get("to_date"))
+    if since and (today - since).days < limits["upstream_pending_days"]:
+        return []
+    if status.get("prebuilt"):
+        # One of Elastic's prebuilt rules: Kibana updates them together, so detect counts them once per
+        # destination (#95) rather than listing each.
+        return [("prebuilt_updates", "", KNOWN["prebuilt_updates"].severity, status["title"])]
+    return [("upstream_update_pending", "", KNOWN["upstream_update_pending"].severity,
+             status["title"] + (f" Updated {since:%d %b %Y}, not reviewed since." if since else ""))]
+
+
+def prebuilt_text(rules: List[Tuple[bool, str]], days: int, shown: int = 5) -> str:
+    """What a destination's prebuilt updates finding says (#95), from its rules (``(enabled, name)``): how
+    many, how many are enabled, and the first few by name, enabled ones first."""
+    n, on = len(rules), sum(1 for enabled, _name in rules if enabled)
+    names = [name for _on, name in sorted(rules, key=lambda r: (not r[0], r[1].lower()))]
+    listed = ", ".join(f'"{name}"' for name in names[:shown]) + (f" and {n - shown} more" if n > shown else "")
+    return (f"{n} prebuilt rule{'s' if n != 1 else ''} installed here ({on} enabled) {'has' if n == 1 else 'have'} had "
+            f"a newer version from Elastic for {days} days or more: {listed}.")
+
+
+# Recorded changes that leave what a rule does as it was: switching it on or off, and Kibana's own
+# bookkeeping of who changed it when.
+_NOT_EDITS = {"enabled", "updated_at", "updated_by", "revision"}
+
+
+def _real_edit(detail: Dict[str, Any]) -> bool:
+    """A recorded edit that changed the rule itself, not only switched it on or off or Kibana's
+    record of when it was changed."""
+    fields = {f.strip() for f in str(detail.get("changed_fields") or "").split(",") if f.strip()}
+    return not fields or bool(fields - _NOT_EDITS)
+
+
+def validation_findings(checked: Optional[datetime], expired_weeks: int, severity: str,
+                        changes: List[Tuple[datetime, str, str, Dict[str, Any]]], now: datetime) -> List[Tuple[str, str, str, str]]:
+    """A rule's validation gone stale (#77, when the client turns it on): never validated, expired under
+    the client's validation policy (``expired_weeks`` for its ``severity``), or edited since
+    (``changes``, its history: an edit or a merged upstream update after ``checked``)."""
+    sev = KNOWN["validation_stale"].severity
+    if not checked:
+        return [("validation_stale", "", sev, "Never validated.")]
+    weeks = (now - checked).days / 7
+    if weeks > expired_weeks:
+        return [("validation_stale", "", sev,
+                 f"Last validated {checked:%d %b %Y}, {int(weeks)} weeks ago: the client's policy expires a "
+                 f"{severity} rule's validation after {expired_weeks} weeks.")]
+    later = [c for c in changes if c[0] > checked and c[1] in ("edited", "upstream_update") and _real_edit(c[3])]
+    if later:
+        when, action, actor, detail = max(later, key=lambda c: c[0])
+        return [("validation_stale", "", sev,
+                 f"Edited since it was last validated on {checked:%d %b %Y}: {actor or 'someone'} "
+                 f"{_change_text(action, detail)} on {when:%d %b %Y}.")]
+    return []
+
+
+def ingest_findings(rule: Dict[str, Any], delays: Dict[str, Any]) -> List[Tuple[str, str, str, str]]:
+    """The index patterns a rule searches whose events arrive later than it looks back beyond its run
+    interval (#73): ``delays`` are ``IngestDelay.entries`` of its SIEM, judged where at least
+    ``INGEST_MIN_SAMPLE`` events were measured. Only a rule searching by @timestamp: one searching by
+    event.ingested finds a late event at its next run, and one by another field can't be measured.
+    ``rule`` has its ``interval`` and ``from``."""
+    from app.services import data_freshness as df
+    override = str(rule.get("timestamp_override") or "").strip()
+    every = _span(rule.get("interval"))
+    m = re.fullmatch(r"now-(\d+[smhd])", str(rule.get("from") or "").replace(" ", ""))
+    back = _span(m.group(1)) if m else None
+    if (override and override not in ("-", "@timestamp")) or not every or back is None:
+        return []
+    extra = max(0, back - every)
+    rows = [r for r in rule.get("results") or [] if isinstance(r, (list, tuple)) and r]
+    patterns = [str(p) for p in rule.get("index") or [] if p] or sorted({str(r[0]) for r in rows})
+    out = []
+    for p in dict.fromkeys(p for p in patterns if not p.startswith(("-", "_"))):
+        e = delays.get(p)
+        if e and e.status == df.OK and e.sample >= df.INGEST_MIN_SAMPLE and e.p95_ms / 1000 > extra:
+            looks = f"looks back {_duration(extra)} beyond" if extra else "doesn't look back beyond"
+            out.append(("ingest_late", p, KNOWN["ingest_late"].severity,
+                        f"95% of the last hour's events reached {p} within {_duration(e.p95_ms / 1000)}. The rule {looks} "
+                        f"its {_duration(every)} run interval, so events arriving later than that are never searched."))
+    return out
+
+
+def field_data_findings(rule: Dict[str, Any], newest: Dict[Tuple[str, str], Any],
+                        fields: Dict[Tuple[str, str, str], Any]) -> List[Tuple[str, str, str, str]]:
+    """Fields a rule matches on that its index patterns map but no recent event fills (#72). A field is
+    judged in each of the rule's own patterns that had events by the field the rule searches by in the
+    last FIELD_DATA_DAYS (a quiet one is ``no_recent_data``'s), and reported, per pattern, only where
+    none of those has a value in it, as ``field_missing`` is only where no index maps it. ``newest``
+    and ``fields`` are ``DataFreshness.entries`` and ``FieldData.entries`` of its SIEM."""
+    from app.elastic_helper import FIELD_DATA_DAYS
+    from app.services import data_freshness as df
+    own = {str(p) for p in rule.get("index") or [] if p}
+    rows = [r for r in rule.get("results") or [] if isinstance(r, (list, tuple)) and len(r) >= 3]
+    override = str(rule.get("timestamp_override") or "").strip()
+    ts = override if override and override not in ("-", "@timestamp") else "@timestamp"
+    by_field: Dict[str, List[str]] = {}
+    for idx, field, has, *_x in rows:
+        if has == "Yes" and (not own or str(idx) in own):
+            by_field.setdefault(str(field), []).append(str(idx))
+    out = []
+    for field, patterns in sorted(by_field.items()):
+        judged = [(p, fields[(p, ts, field)].status) for p in dict.fromkeys(patterns)
+                  if df.recent_events(newest.get((p, ts)), FIELD_DATA_DAYS) and (p, ts, field) in fields
+                  and fields[(p, ts, field)].status in (df.HAS_DATA, df.EMPTY)]
+        if judged and all(status == df.EMPTY for _p, status in judged):
+            for p, _s in judged:
+                out.append(("field_empty", f"{field} in {p}", KNOWN["field_empty"].severity,
+                            f"None of the events in {p} from the last {FIELD_DATA_DAYS} days has a value in {field}, "
+                            f"though {p} has recent events."))
+    return out
+
+
 # ── finding everything ───────────────────────────────────────────────────
 
 Key = Tuple[str, str, str, str, str]          # (issue, cause, siem_id, space, rule_id)
@@ -334,9 +745,183 @@ _RULES_SQL = """
            json_extract_string(raw_data, '$.timestamp_override') AS timestamp_override,
            json_extract_string(raw_data, '$.updated_at') AS updated_at, last_updated,
            json_extract_string(raw_data, '$.interval') AS run_interval,
-           json_extract_string(raw_data, '$.from') AS lookback_from
+           json_extract_string(raw_data, '$.from') AS lookback_from,
+           COALESCE(TRY_CAST(json_extract(raw_data, '$.timestamp_override_fallback_disabled') AS BOOLEAN), false)
+               AS fallback_disabled,
+           json_extract_string(raw_data, '$.id') AS kibana_id,
+           json_extract_string(raw_data, '$.created_at') AS kibana_created,
+           lower(COALESCE(json_extract_string(raw_data, '$.severity'), 'low')) AS rule_severity,
+           COALESCE(json_extract_string(raw_data, '$.rule_id'), rule_id) AS validation_key,
+           COALESCE(json_extract_string(raw_data, '$.name'), '') AS rule_name,
+           json_extract(raw_data, '$.exceptions_list')::VARCHAR AS exceptions_list
     FROM detection_rules WHERE NOT COALESCE(deprecated, false)
 """
+
+# Changes to a rule a spike can follow, and those that switch it on (#69, #70).
+_CHANGE_ACTIONS = ("created", "edited", "enabled", "restored", "upstream_update", "moved", "new_rule_id",
+                   "exception_added", "exception_removed", "exception_changed")
+_SWITCHED_ON = ("enabled", "restored", "new_rule_id")
+# Problems that already explain a rule raising no alerts: its data, its query, its job, its runs.
+# No recent events only as an error (none of its patterns has any): with some still sending, it can fire.
+_EXPLAINS_SILENCE = {"no_index", "no_recent_data", "field_missing", "field_empty", "query_syntax", "query_invalid",
+                     "unknown_field", "ml_job", "never_run"}
+_EXPLAINS_ONLY_AS_ERROR = {"no_recent_data"}
+
+
+def _explains_silence(issues: Dict[str, Set[str]]) -> bool:
+    """Whether one of a rule's issues found so far (``{issue: {severity}}``) explains it raising no alerts."""
+    return any(i in _EXPLAINS_SILENCE and (i not in _EXPLAINS_ONLY_AS_ERROR or "error" in severities)
+               for i, severities in issues.items())
+
+
+def _rule_history(conn, siem_id: str, days: int = 120) -> Dict[Tuple[str, str], List[Tuple[datetime, str, str, Dict[str, Any]]]]:
+    """Each of a SIEM's rules' recent changes, ``{(rule_id, space): [(when, action, actor, detail)]}``."""
+    if not conn.execute("SELECT 1 FROM duckdb_tables() WHERE table_name = 'rule_lifecycle_history' "
+                        "AND database_name = current_database()").fetchone():
+        return {}
+    out: Dict[Tuple[str, str], List[Tuple[datetime, str, str, Dict[str, Any]]]] = {}
+    for rule_id, space, action, actor, detail, when in conn.execute(
+            f"SELECT rule_id, space, action, actor_name, detail::VARCHAR, created_at FROM rule_lifecycle_history "
+            f"WHERE siem_id = ? AND created_at >= now() - INTERVAL {int(days)} DAY "
+            f"AND action IN ({', '.join('?' * len(_CHANGE_ACTIONS))})", [siem_id, *_CHANGE_ACTIONS]).fetchall():
+        out.setdefault((rule_id, space), []).append((when, action, actor or "", _json(detail, {}) or {}))
+    return out
+
+
+# Duplicate detections (#78): what decides which events a rule matches, beside its type, language,
+# query and index patterns. Exceptions, schedule, severity and name don't.
+_MATCH_FIELDS = ("data_view_id", "filters", "saved_id", "threshold", "new_terms_fields", "history_window_start",
+                 "threat_index", "threat_query", "threat_mapping", "threat_language", "machine_learning_job_id",
+                 "anomaly_threshold", "event_category_override", "tiebreaker_field", "timestamp_field")
+_DUPLICATE_SQL = (
+    "SELECT rule_id, space, name, json_extract_string(raw_data, '$.type'), json_extract_string(raw_data, '$.language'), "
+    "json_extract_string(raw_data, '$.query'), json_extract(raw_data, '$.index')::VARCHAR, "
+    + ", ".join(f"json_extract(raw_data, '$.{f}')::VARCHAR" for f in _MATCH_FIELDS)
+    + " FROM detection_rules WHERE siem_id = ? AND COALESCE(enabled, 0) = 1 AND NOT COALESCE(deprecated, false)")
+
+
+def _norm_json(text) -> Any:
+    """A JSON value as compared: parsed, with objects' keys sorted; text as it is."""
+    try:
+        return json.dumps(json.loads(text), sort_keys=True) if text not in (None, "", "null") else None
+    except (TypeError, ValueError):
+        return str(text)
+
+
+def duplicate_findings(rows: List[tuple], links: Set[frozenset]) -> Dict[Tuple[str, str], Tuple[str, str]]:
+    """Enabled rules in one space that match the same events (#78): the same type, language, query
+    (whitespace aside), index patterns (in any order) and the settings that decide what matches
+    (``_MATCH_FIELDS``). ``rows`` are ``_DUPLICATE_SQL``'s; ``links`` the rule links, as frozensets of two
+    ``(rule_id, space)``. A group whose rules are all linked to each other is kept on purpose (a copy
+    linked when it was made, or given its own rule id), and isn't listed. ``{(rule_id, space): (cause,
+    detail)}``: the cause is the query, so the copies are one thing to fix."""
+    groups: Dict[Tuple[Any, ...], List[Tuple[str, str, str]]] = {}
+    for rule_id, space, name, rtype, language, query, index, *match in rows:
+        q = re.sub(r"\s+", " ", str(query or "")).strip()
+        idx = tuple(sorted(str(i) for i in (_json(index, []) or []) if i))
+        settings = tuple(_norm_json(m) for m in match)
+        if not q and not any(settings):
+            continue                      # nothing to say what it matches: not compared
+        groups.setdefault((space, rtype or "", language or "", q, idx, settings), []).append((rule_id, space, name or rule_id))
+    out: Dict[Tuple[str, str], Tuple[str, str]] = {}
+    causes: Dict[Tuple[str, str], int] = {}
+    for (space, rtype, language, q, idx, _s), members in groups.items():
+        if len(members) < 2 or _all_linked([(r, s) for r, s, _n in members], links):
+            continue
+        shown = q if len(q) <= 100 else q[:99] + "…"
+        cause = f"{language or rtype}: {shown}" + (f" on {', '.join(idx)}" if idx else "")
+        n = causes[(space, cause)] = causes.get((space, cause), 0) + 1
+        cause += f" ({n})" if n > 1 else ""         # two queries that read the same when shortened
+        for rule_id, _sp, name in members:
+            others = [f'"{o}"' for r, _x, o in members if r != rule_id]
+            listed = ", ".join(others[:3]) + (f" and {len(others) - 3} more" if len(others) > 3 else "")
+            out[(rule_id, space)] = (cause, f"Matches the same events as {listed}: each event alerts "
+                                            f"{len(members)} times, once per copy.")
+    return out
+
+
+def _all_linked(members: List[Tuple[str, str]], links: Set[frozenset]) -> bool:
+    """Whether rule links join every one of ``members`` to the others (one linked group)."""
+    seen, todo = {members[0]}, [members[0]]
+    while todo:
+        a = todo.pop()
+        for b in members:
+            if b not in seen and frozenset((a, b)) in links:
+                seen.add(b)
+                todo.append(b)
+    return len(seen) == len(members)
+
+
+def _space_links(conn, siem_id: str) -> Set[frozenset]:
+    """The rule links between two rules in one space of a SIEM, as frozensets of ``(rule_id, space)``."""
+    try:
+        rows = conn.execute("SELECT rule_a_id, space_a, rule_b_id, space_b FROM rule_links "
+                            "WHERE siem_a_id = ? AND siem_b_id = ? AND space_a = space_b", [siem_id, siem_id]).fetchall()
+    except Exception:            # no links table in this tenant yet
+        return set()
+    return {frozenset(((a, sa), (b, sb))) for a, sa, b, sb in rows}
+
+
+def _search_samples(conn, siem_id: str) -> Dict[Tuple[str, str], List[Tuple[str, int]]]:
+    """Each of a SIEM's rules' recorded search times (#76), ``{(Kibana id, space): [(executed_at, ms)]}``:
+    the sync keeps them under the rule's Kibana saved-object id."""
+    if not conn.execute("SELECT 1 FROM duckdb_tables() WHERE table_name = 'rule_search_time_samples' "
+                        "AND database_name = current_database()").fetchone():
+        return {}
+    out: Dict[Tuple[str, str], List[Tuple[str, int]]] = {}
+    for kibana_id, space, at, ms in conn.execute(
+            "SELECT rule_id, space, executed_at, search_ms FROM rule_search_time_samples WHERE siem_id = ?",
+            [siem_id]).fetchall():
+        out.setdefault((kibana_id, space), []).append((str(at), int(ms)))
+    return out
+
+
+def _validations(conn) -> Dict[str, datetime]:
+    """When each rule was last validated (#77), by its validation key, or by name for a record not
+    bound to one yet (``database.validation_for``)."""
+    try:
+        rows = conn.execute("SELECT rule_id, rule_name, last_checked_on FROM checkedRule "
+                            "WHERE last_checked_on IS NOT NULL").fetchall()
+    except Exception:            # nothing validated in this tenant yet
+        return {}
+    out: Dict[str, datetime] = {}
+    for rule_id, name, when in rows:
+        when = when if isinstance(when, datetime) else _as_datetime(when)
+        if when:
+            out[str(rule_id or name)] = when
+    return out
+
+
+def _as_datetime(value) -> Optional[datetime]:
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "")[:19])
+    except ValueError:
+        return None
+
+
+def _expired_weeks(db, client_id: Optional[str]) -> Callable[[str], int]:
+    """The weeks after which the client's validation policy expires a rule of a severity (master
+    cadence, or by criticality), as Rule Health shows it; TIDE's default without a client."""
+    from app.config import get_settings
+    cache: Dict[str, int] = {}
+
+    def weeks(severity: str) -> int:
+        if severity not in cache:
+            try:
+                cache[severity] = int(db.get_client_validation_thresholds(client_id, severity=severity)[1]) \
+                    if db is not None and client_id else int(get_settings().rule_validation_expired_weeks)
+            except Exception:
+                cache[severity] = int(get_settings().rule_validation_expired_weeks)
+        return cache[severity]
+    return weeks
+
+
+def _enabled_since(created: Optional[str], changes: List[Tuple[datetime, str, str, Dict[str, Any]]]) -> Optional[datetime]:
+    """When a rule was last switched on, from its history (enabled, restored, re-created, or an edit
+    of ``enabled``), else when Kibana created it."""
+    on = [when for when, action, _a, detail in changes if action in _SWITCHED_ON
+          or (action == "edited" and "enabled" in str(detail.get("changed_fields") or ""))]
+    return max(on) if on else _when(created)
 
 
 def _json(text, default):
@@ -371,16 +956,33 @@ def rule_patterns(conn, keys: Iterable[Tuple[str, str, str]]) -> Dict[Tuple[str,
 
 def detect(db, conn, scopes: Optional[Set[Tuple[str, str]]] = None,
            rule_keys: Optional[Set[Tuple[str, str, str]]] = None,
-           catalogue_for: Optional[Callable[[str], Any]] = None) -> Dict[Key, Tuple[str, str]]:
+           catalogue_for: Optional[Callable[[str], Any]] = None,
+           freshness_for: Optional[Callable[[str], Any]] = None,
+           client_id: Optional[str] = None,
+           field_data_for: Optional[Callable[[str], Any]] = None,
+           delay_for: Optional[Callable[[str], Any]] = None) -> Dict[Key, Tuple[str, str]]:
     """Every current finding, ``{key: (severity, detail)}``: for the rules and destinations in
-    ``scopes`` (all when None), or only the rules ``rule_keys`` (no destination findings then)."""
+    ``scopes`` (all when None), or only the rules ``rule_keys`` (no destination findings then).
+    ``client_id`` says how often the client expects new data (``data_freshness.default_hours``)."""
+    from app.services import data_freshness
     from app.services.mapping_catalogue import MappingCatalogue
     from app.services.rule_origins import PREBUILT_SQL
     catalogue_for = catalogue_for or (lambda siem_id: MappingCatalogue(db, siem_id))
+    freshness_for = freshness_for or (lambda siem_id: data_freshness.DataFreshness(db, siem_id))
+    field_data_for = field_data_for or (lambda siem_id: data_freshness.FieldData(db, siem_id))
+    delay_for = delay_for or (lambda siem_id: data_freshness.IngestDelay(db, siem_id))
+    default_hours = data_freshness.default_hours(db, client_id)
+    windows = data_freshness.windows(conn)
+    from app.services import rule_alerts
+    limits, until, alert_reads = rule_alerts.thresholds(db, client_id), rule_alerts.today(), rule_alerts.reads(conn)
+    validations = _validations(conn) if limits.get("validation_stale") else {}
+    expired_weeks = _expired_weeks(db, client_id)
     found: Dict[Key, Tuple[str, str]] = {}
+    rule_found: Dict[Tuple[str, str, str], Dict[str, Set[str]]] = {}     # each rule's issues so far, by severity
 
     def add(issue, cause, siem_id, space, rule_id, severity, detail):
         found.setdefault((issue, cause, siem_id, space, rule_id), (severity, detail))
+        rule_found.setdefault((siem_id, space, rule_id), {}).setdefault(issue, set()).add(severity)
 
     def wanted(siem_id, space, rule_id=None):
         if rule_keys is not None:
@@ -405,8 +1007,13 @@ def detect(db, conn, scopes: Optional[Set[Tuple[str, str]]] = None,
     for siem_id, siem_rules in by_siem.items():
         parsed = []
         for (rule_id, _s, space, enabled, last, idx, results, override, updated_at, last_updated,
-             run_interval, lookback_from) in siem_rules:
-            rule = {"index": _json(idx, []), "results": _json(results, []), "timestamp_override": override}
+             run_interval, lookback_from, fallback_disabled, kibana_id, kibana_created, rule_severity, validation_key,
+             rule_name, exceptions_list) in siem_rules:
+            rule = {"index": _json(idx, []), "results": _json(results, []), "timestamp_override": override,
+                    "timestamp_override_fallback_disabled": bool(fallback_disabled),
+                    "interval": run_interval, "from": lookback_from, "kibana_id": kibana_id or "",
+                    "created": kibana_created, "severity": rule_severity, "validation_key": validation_key,
+                    "name": rule_name, "exceptions": exceptions_list}
             parsed.append((rule_id, space, enabled, _json(last, {}), rule, updated_at, last_updated))
             for issue, cause, severity, detail in schedule_findings(run_interval, lookback_from, override):
                 add(issue, cause, siem_id, space, rule_id, severity, detail)
@@ -418,17 +1025,92 @@ def detect(db, conn, scopes: Optional[Set[Tuple[str, str]]] = None,
         except Exception:
             logger.warning("Could not read the field catalogue of SIEM %s", siem_id, exc_info=True)
             entries = {}
+        try:
+            newest = freshness_for(siem_id).entries([str(p) for p in patterns if p])
+        except Exception:
+            logger.warning("Could not read the newest events of SIEM %s", siem_id, exc_info=True)
+            newest = {}
+        try:
+            filled = field_data_for(siem_id).entries([str(p) for p in patterns if p])
+        except Exception:
+            logger.warning("Could not read which fields have data on SIEM %s", siem_id, exc_info=True)
+            filled = {}
+        try:
+            delays = delay_for(siem_id).entries([str(p) for p in patterns if p])
+        except Exception:
+            logger.warning("Could not read how late events arrive on SIEM %s", siem_id, exc_info=True)
+            delays = {}
+        # Each rule's alerts per day, and each space's (#68); its recent changes (#69, #70).
+        alerts = rule_alerts.daily(conn, {(siem_id, sp) for _r, sp, *_x in parsed})
+        history = _rule_history(conn, siem_id)
+        searches = _search_samples(conn, siem_id)      # each rule's search times (#76)
+        utc_now = datetime.now(timezone.utc).replace(tzinfo=None)
+        from app.services import rule_exceptions
+        exception_items = rule_exceptions.items_by_list(conn, siem_id)    # the exception lists' items (#75)
+        # The same detection deployed twice in one space (#78), over every enabled rule in it.
+        try:
+            spaces = {sp for _r, sp, *_x in parsed}
+            copies = duplicate_findings([r for r in conn.execute(_DUPLICATE_SQL, [siem_id]).fetchall() if r[1] in spaces],
+                                        _space_links(conn, siem_id))
+            for (rule_id, space), (cause, detail) in copies.items():
+                if wanted(siem_id, space, rule_id):
+                    add("duplicate_query", cause, siem_id, space, rule_id, KNOWN["duplicate_query"].severity, detail)
+        except Exception:
+            logger.warning("Could not look for duplicate rules on SIEM %s", siem_id, exc_info=True)
+        space_alerts: Dict[str, Dict[Any, int]] = {}
+        for (_s, sp, _u), days in alerts.items():
+            total = space_alerts.setdefault(sp, {})
+            for day, n in days.items():
+                total[day] = total.get(day, 0) + n
+
+        def hours_for(pattern: str, siem_id: str = siem_id) -> int:
+            own = windows.get((siem_id, pattern))
+            return own["hours"] if own else default_hours
+
         for rule_id, space, enabled, last, rule, updated_at, last_updated in parsed:
             kibana = kibana_findings(last) if enabled else []
             for issue, cause, severity, detail in kibana:
                 add(issue, cause, siem_id, space, rule_id, severity, detail)
             for issue, cause, severity, detail in catalogue_findings(rule, entries, {f[0] for f in kibana}):
                 add(issue, cause, siem_id, space, rule_id, severity, detail)
+            for issue, cause, severity, detail in freshness_findings(rule, newest, hours_for):
+                add(issue, cause, siem_id, space, rule_id, severity, detail)
+            for issue, cause, severity, detail in field_data_findings(rule, newest, filled):
+                add(issue, cause, siem_id, space, rule_id, severity, detail)
+            for issue, cause, severity, detail in ingest_findings(rule, delays):
+                add(issue, cause, siem_id, space, rule_id, severity, detail)
+            if enabled:
+                for issue, cause, severity, detail in slow_findings(searches.get((rule["kibana_id"], space), []),
+                                                                    rule["interval"], utc_now):
+                    add(issue, cause, siem_id, space, rule_id, severity, detail)
+            lists = rule_exceptions.lists_of(rule["exceptions"])
+            if lists:
+                for issue, cause, severity, detail in exception_findings(
+                        rule_exceptions.iter_rule_items(lists, exception_items, space, utc_now), len(lists), limits, utc_now):
+                    add(issue, cause, siem_id, space, rule_id, severity, detail)
+            if enabled and limits.get("validation_stale"):     # #77, when the client turns it on
+                checked = validations.get(str(rule["validation_key"])) or validations.get(rule["name"])
+                for issue, cause, severity, detail in validation_findings(
+                        checked, expired_weeks(rule["severity"]), rule["severity"],
+                        history.get((rule_id, space), []), datetime.now()):
+                    add(issue, cause, siem_id, space, rule_id, severity, detail)
             if enabled and not last:
                 changed = _when(updated_at)
                 if changed and last_updated and last_updated - changed > NEVER_RUN_AFTER:
                     add("never_run", "", siem_id, space, rule_id, KNOWN["never_run"].severity,
                         f"No run recorded since it was last changed, {changed:%Y-%m-%d %H:%M}.")
+            # Its alerts (#68, #69, #70), where its space's were read: noisy, a spike, or silent unless a
+            # problem found above already explains it.
+            if enabled and (alert_reads.get((siem_id, space)) or {}).get("ok"):
+                counts = alerts.get((siem_id, space, rule["kibana_id"]), {})
+                changes = history.get((rule_id, space), [])
+                explained = _explains_silence(rule_found.get((siem_id, space, rule_id), {}))
+                for issue, cause, severity, detail in (
+                        alert_findings(counts, space_alerts.get(space, {}), limits, until)
+                        + spike_findings(counts, changes, until)
+                        + ([] if explained else silent_findings(counts, _enabled_since(rule["created"], changes),
+                                                                 limits, until, datetime.now()))):
+                    add(issue, cause, siem_id, space, rule_id, severity, detail)
 
     tables = {r[0] for r in conn.execute("SELECT table_name FROM duckdb_tables()").fetchall()}
     # Custom rules under the rule id of one of Elastic's rules (rule_origins.elastic_id_held, in SQL).
@@ -454,6 +1136,29 @@ def detect(db, conn, scopes: Optional[Set[Tuple[str, str]]] = None,
                     f"Its {what} {'differs' if len(link['sections']) == 1 else 'differ'} from Elastic's \"{link['name']}\".")
     except Exception:
         logger.warning("Could not check custom rules against the Elastic rules they are linked to", exc_info=True)
+    # Upstream drift (#77): the Elastic or Sigma rule a rule came from retired, or updated and not
+    # reviewed for the client's days. Elastic's prebuilt rules with updates are one finding per destination
+    # (#95), found by a look at the whole destination: a refresh of a few rules leaves it as it was.
+    try:
+        from app.services import rule_origins
+        keys = [(r[0], r[1], r[2]) for r in rules]
+        about = {(r[0], r[1], r[2]): (bool(r[3]), r[17] or r[0]) for r in rules}     # enabled, name
+        today = datetime.now().date()
+        prebuilt: Dict[Tuple[str, str], List[Tuple[bool, str]]] = {}
+        for (rule_id, siem_id, space), status in (rule_origins.statuses(conn, keys) if keys else {}).items():
+            if wanted(siem_id, space, rule_id):
+                for issue, cause, severity, detail in upstream_findings(status, limits, today):
+                    if issue == "prebuilt_updates":
+                        prebuilt.setdefault((siem_id, space), []).append(
+                            about.get((rule_id, siem_id, space), (False, rule_id)))
+                    else:
+                        add(issue, cause, siem_id, space, rule_id, severity, detail)
+        if rule_keys is None:
+            for (siem_id, space), them in prebuilt.items():
+                add("prebuilt_updates", "", siem_id, space, "", KNOWN["prebuilt_updates"].severity,
+                    prebuilt_text(them, limits["upstream_pending_days"]))
+    except Exception:
+        logger.warning("Could not check rules against the Elastic and Sigma rules they came from", exc_info=True)
     if "space_fetch_results" in tables:
         for siem_id, space, duplicates in conn.execute(
                 "SELECT siem_id, space, arg_max(duplicates, synced_at) FROM space_fetch_results GROUP BY 1, 2").fetchall():
@@ -488,6 +1193,12 @@ def detect(db, conn, scopes: Optional[Set[Tuple[str, str]]] = None,
                 "SELECT siem_id, space, reason FROM siem_space_status WHERE NOT reachable").fetchall():
             if wanted(siem_id, space):
                 add("siem_offline", "", siem_id, space, "", KNOWN["siem_offline"].severity, reason or "")
+    # A space whose alerts the SIEM's key couldn't read at the last sync (#68).
+    if rule_keys is None:
+        for (siem_id, space), read in rule_alerts.reads(conn).items():
+            if not read["ok"] and wanted(siem_id, space):
+                add("alerts_unreadable", "", siem_id, space, "", KNOWN["alerts_unreadable"].severity,
+                    f"Kibana didn't give its alerts at the last sync: {read['error'] or 'no answer'}.")
     return found
 
 
@@ -559,9 +1270,62 @@ def _ensure_history(conn, now: datetime) -> None:
                  [kept_from, kept_from])
 
 
+# One client's refreshes run one at a time (#93). A sync's refresh of every destination and a rule
+# action's refresh of one rule (a save, Sync this rule, Expect new data every…) can otherwise run at
+# once on two pooled connections: both find the same new finding, the second insert fails on the
+# primary key, and the sync's whole refresh is lost until the next sync. Keyed by the database file,
+# so every connection to one client's database shares a lock and other clients never wait.
+_REFRESH_LOCKS: Dict[str, threading.Lock] = {}
+_REFRESH_LOCKS_GUARD = threading.Lock()
+REFRESH_WAIT_S = 120.0       # how long a refresh waits for another of the same client's to finish
+
+
+def _database_of(conn) -> str:
+    """The database ``conn`` is on: its file; an in-memory one is its own."""
+    try:
+        row = conn.execute("SELECT path FROM duckdb_databases() WHERE database_name = current_database()").fetchone()
+    except Exception:            # noqa: BLE001 - only the lock's key; an own lock is safe
+        row = None
+    return row[0] if row and row[0] else f"memory:{id(conn)}"
+
+
+def _refresh_lock(database: str) -> threading.Lock:
+    with _REFRESH_LOCKS_GUARD:
+        return _REFRESH_LOCKS.setdefault(database, threading.Lock())
+
+
 def refresh(db, conn, scopes: Optional[Set[Tuple[str, str]]] = None,
             rule_keys: Optional[Set[Tuple[str, str, str]]] = None,
-            catalogue_for: Optional[Callable[[str], Any]] = None, now: Optional[datetime] = None) -> Dict[str, int]:
+            catalogue_for: Optional[Callable[[str], Any]] = None, now: Optional[datetime] = None,
+            freshness_for: Optional[Callable[[str], Any]] = None, client_id: Optional[str] = None,
+            field_data_for: Optional[Callable[[str], Any]] = None,
+            delay_for: Optional[Callable[[str], Any]] = None) -> Dict[str, int]:
+    """Record what ``detect`` finds now for ``scopes`` / ``rule_keys`` (``_refresh``), once any other
+    refresh of the same client's database has finished (``REFRESH_WAIT_S`` at most; longer raises).
+    A refresh that still meets a conflict in DuckDB is tried once more: what it records is worked out
+    again from what is stored. Returns ``{"open", "new", "resolved"}``."""
+    import duckdb
+    lock = _refresh_lock(_database_of(conn))
+    if not lock.acquire(timeout=REFRESH_WAIT_S):
+        raise RuntimeError(f"Another Rule Monitoring refresh of this client took over {REFRESH_WAIT_S:.0f} s")
+    try:
+        args = (db, conn, scopes, rule_keys, catalogue_for, now or datetime.now(), freshness_for, client_id, field_data_for,
+                delay_for)
+        try:
+            return _refresh(*args)
+        except (duckdb.ConstraintException, duckdb.TransactionException) as exc:
+            logger.warning("Rule Monitoring refresh met a conflict, trying once more: %s", exc)
+            return _refresh(*args)
+    finally:
+        lock.release()
+
+
+def _refresh(db, conn, scopes: Optional[Set[Tuple[str, str]]] = None,
+             rule_keys: Optional[Set[Tuple[str, str, str]]] = None,
+             catalogue_for: Optional[Callable[[str], Any]] = None, now: Optional[datetime] = None,
+             freshness_for: Optional[Callable[[str], Any]] = None, client_id: Optional[str] = None,
+             field_data_for: Optional[Callable[[str], Any]] = None,
+             delay_for: Optional[Callable[[str], Any]] = None) -> Dict[str, int]:
     """Record what ``detect`` finds now for ``scopes`` / ``rule_keys``: a new finding is first seen
     now (again, if it had been resolved), one still there is seen now, and an open one in the same
     scope that is gone is resolved now. Resolved ones older than RESOLVED_DAYS are dropped. Each
@@ -571,7 +1335,7 @@ def refresh(db, conn, scopes: Optional[Set[Tuple[str, str]]] = None,
     now = now or datetime.now()
     conn.execute(DDL)
     _ensure_history(conn, now)
-    found = detect(db, conn, scopes, rule_keys, catalogue_for)
+    found = detect(db, conn, scopes, rule_keys, catalogue_for, freshness_for, client_id, field_data_for, delay_for)
     cols = ["issue", "cause", "siem_id", "space", "rule_id", "severity", "detail"]
     frame = pd.DataFrame([[*k, *v] for k, v in found.items()], columns=cols).astype(object)
     if rule_keys is not None:
@@ -635,7 +1399,7 @@ def refresh_tenant(db, client_id: str, scopes: Optional[Iterable[Tuple[str, str]
     try:
         with tenant_context_for(client_id), db.get_connection() as conn:
             counts = refresh(db, conn, set(scopes) if scopes is not None else None,
-                             set(rule_keys) if rule_keys is not None else None)
+                             set(rule_keys) if rule_keys is not None else None, client_id=client_id)
         logger.info("Rule issues for client %s: %s", client_id, counts)
         return counts
     except Exception as exc:
@@ -709,6 +1473,92 @@ def report_synced(db, client_id: Optional[str], now: Optional[datetime] = None) 
     return text
 
 
+def report_rule_health(conn, rules: Dict[Tuple[str, str, str], str], dest_names: Dict[Tuple[str, str], str],
+                       now: Optional[datetime] = None) -> Dict[str, Any]:
+    """A report's Rule health section (#80): the open Rule Monitoring findings on the rules the report
+    counts (``rules``: ``{(rule_id, siem_id, space): name}``), grouped by what is wrong, worst first,
+    with who fixes each. Muted ones are held back, as on the page, and counted. ``{rules, flagged,
+    errors, warnings, muted, groups: [{issue, title, severity, fixer_label, count, rules: [{name,
+    destination, cause, severity}]}]}``: ``errors`` the rules with an error, ``warnings`` those with
+    warnings at worst, ``info`` those with only information. Never raises: a report mustn't fail for it."""
+    out: Dict[str, Any] = {"rules": len(rules), "flagged": 0, "errors": 0, "warnings": 0, "info": 0, "muted": 0,
+                           "groups": []}
+    try:
+        found = rule_findings(conn, rules.keys(), now) if rules else {}
+    except Exception:
+        logger.warning("Could not read Rule Monitoring's findings for a report", exc_info=True)
+        found, out["unavailable"] = {}, True
+    rank = lambda s: _SEVERITY_ORDER.get(s, 3)  # noqa: E731
+    groups: Dict[str, Dict[str, Any]] = {}
+    worst: Dict[Tuple[str, str, str], str] = {}
+    for key, findings in found.items():
+        for f in findings:
+            if f["muted"]:
+                out["muted"] += 1
+                continue
+            g = groups.setdefault(f["issue"], {"issue": f["issue"], "title": f["title"], "severity": f["severity"],
+                                               "fixer_label": f["fixer_label"], "rules": []})
+            g["severity"] = min(g["severity"], f["severity"], key=rank)
+            g["rules"].append({"name": rules[key], "destination": dest_names.get((key[1], key[2])) or key[2],
+                               "cause": f["cause"], "severity": f["severity"]})
+            worst[key] = min(worst.get(key, f["severity"]), f["severity"], key=rank)
+    for g in groups.values():
+        g["rules"].sort(key=lambda r: (rank(r["severity"]), r["name"].lower(), r["destination"], r["cause"]))
+        g["count"] = len({(r["name"], r["destination"]) for r in g["rules"]})
+    out.update(flagged=len(worst), errors=sum(1 for s in worst.values() if s == "error"),
+               warnings=sum(1 for s in worst.values() if s == "warning"),
+               info=sum(1 for s in worst.values() if s == "info"),
+               groups=sorted(groups.values(), key=lambda g: (rank(g["severity"]), -g["count"], g["title"])))
+    out["summary"] = report_rule_health_summary(out)
+    return out
+
+
+def report_rule_health_summary(health: Dict[str, Any]) -> str:
+    """The Rule health section's one line: how many of the rules counted have open findings."""
+    n = health["rules"]
+    if health.get("unavailable"):
+        return "Rule Monitoring's findings couldn't be read, so they aren't shown."
+    if not n:
+        return "This report counts no rules."
+    rules = f"{n} rule{'' if n == 1 else 's'} this report counts"
+    if not health["flagged"]:
+        text = f"None of the {rules} has an open Rule Monitoring finding." if n > 1 else \
+            "The rule this report counts has no open Rule Monitoring finding."
+    elif n == 1:
+        text = "The rule this report counts has open Rule Monitoring findings, " + \
+            ("with an error." if health["errors"] else "warnings only." if health["warnings"] else "information only.")
+    else:
+        parts = [f"{health['errors']} with an error" if health["errors"] else "",
+                 f"{health['warnings']} with warnings only" if health["warnings"] else "",
+                 f"{health.get('info', 0)} with information only" if health.get("info") else ""]
+        who = f"All {rules}" if health["flagged"] == n else \
+            f"{health['flagged']} of the {rules}"
+        text = f"{who} {'has' if health['flagged'] == 1 else 'have'} open Rule Monitoring findings: " \
+               f"{', '.join(p for p in parts if p)}."
+    if health["muted"]:
+        text += f" {health['muted']} muted finding{'' if health['muted'] == 1 else 's'} not shown."
+    return text
+
+
+def report_rule_health_markdown(health: Dict[str, Any], synced: str, technical: bool) -> List[str]:
+    """The Rule health section as Markdown lines, for the system and threat reports' Markdown export."""
+    lines = ["## Rule Health", "", health["summary"]]
+    if synced:
+        lines += ["", f"**Rules last synced:** {synced}"]
+    lines.append("")
+    if health["groups"]:
+        lines += ["| What's wrong | Severity | Who fixes | Rules |", "|---|---|---|---|"]
+        for g in health["groups"]:
+            if technical:
+                names = "; ".join(f"{r['name']} ({r['destination']}{', ' + r['cause'] if r['cause'] else ''})"
+                                  for r in g["rules"]).replace("|", "\\|")
+            else:
+                names = str(g["count"])
+            lines.append(f"| {g['title']} | {g['severity'].title()} | {g['fixer_label']} | {names} |")
+        lines.append("")
+    return lines
+
+
 # ── failed sync steps, worked out when asked (#85) ───────────────────────
 
 def failed_steps(client_id: Optional[str], destinations: Iterable[Tuple[str, str]]) -> List[Dict[str, Any]]:
@@ -758,11 +1608,11 @@ def pending_changes(client_id: Optional[str]) -> List[Dict[str, Any]]:
 
 # ── the Rule Monitoring page ─────────────────────────────────────────────
 
-SEVERITIES = (("error", "Error"), ("warning", "Warning"))
+SEVERITIES = (("error", "Error"), ("warning", "Warning"), ("info", "Info"))
 GROUPS = (("issue", "Issue"), ("fixer", "Who fixes"), ("destination", "SIEM / destination"), ("rule", "Rule"))
 SHOW = (("open", "Open"), ("resolved", "Resolved recently"))
 RULES = (("enabled", "Enabled"), ("all", "Include disabled"))
-_SEVERITY_ORDER = {"error": 0, "warning": 1}
+_SEVERITY_ORDER = {"error": 0, "warning": 1, "info": 2}
 
 
 def _age(since: Optional[datetime], now: datetime) -> str:
@@ -889,7 +1739,60 @@ def view(conn, destinations: List[Dict[str, Any]], filters: Dict[str, Any],
     return {"rows": found, "groups": groups, "metrics": metrics, "counts": counts, "now": now}
 
 
-FLOW_CARDS = ("rules", "errors", "warnings", "causes")
+def rule_findings(conn, keys: Iterable[Tuple[str, str, str]],
+                  now: Optional[datetime] = None) -> Dict[Tuple[str, str, str], List[Dict[str, Any]]]:
+    """Each rule's open findings as Rule Monitoring lists them, for Rule Health's cards and the rule
+    window: ``{(rule_id, siem_id, space): [{issue, title, fixer, fixer_label, severity, cause, detail,
+    first_seen, age, muted}]}``, unmuted first, errors first. ``muted`` is what holds one back, as on the
+    page: the rule muted (``what`` "rule"), or its cause, while that affects no more rules than when it
+    was muted (``what`` "cause"); else None. Findings about a whole destination (data not synced, a SIEM
+    that didn't answer) aren't a rule's own, and aren't listed."""
+    keys = sorted(set(keys))
+    now = now or datetime.now()
+    rows = []
+    try:
+        for at in range(0, len(keys), _BATCH):
+            where, params = _among(keys[at:at + _BATCH])
+            rows += conn.execute("SELECT issue, cause, siem_id, space, rule_id, severity, detail, first_seen "
+                                 "FROM rule_issues WHERE resolved_at IS NULL AND rule_id <> ''" + where, params).fetchall()
+    except Exception:            # no sync since Rule Monitoring came in: nothing recorded yet
+        return {}
+    acks = _acks(conn)
+    mutes, counts = _mutes(conn), _open_counts(conn) if acks else {}
+    out: Dict[Tuple[str, str, str], List[Dict[str, Any]]] = {}
+    for issue, cause, siem_id, space, rule_id, severity, detail, first_seen in rows:
+        f = {"issue": issue, "cause": cause, "siem_id": siem_id, "space": space, "rule_id": rule_id,
+             "severity": severity, "detail": detail, "first_seen": first_seen}
+        known = KNOWN.get(issue, KNOWN["other"])
+        ack = acks.get(_cause_key(f))
+        if ack and counts.get(_cause_key(f), 0) > ack["rules"]:
+            ack = None                   # the cause affects more rules than when it was muted: it's back
+        mute = _muted(mutes, f)
+        f.update(title=known.title, fixer=known.fixer, fixer_label=FIXERS[known.fixer], age=_age(first_seen, now),
+                 muted={**mute, "what": "rule"} if mute else {**ack, "what": "cause"} if ack else None)
+        out.setdefault((rule_id, siem_id, space), []).append(f)
+    for found in out.values():
+        found.sort(key=lambda f: (f["muted"] is not None, _SEVERITY_ORDER.get(f["severity"], 2), f["title"], f["cause"]))
+    return out
+
+
+def card_problems(found: List[Dict[str, Any]], enabled: bool) -> Optional[Dict[str, Any]]:
+    """What a rule's card flags of its findings (``rule_findings``): every one not muted.
+    ``{severity, count, disabled, lines}``, or None. ``severity`` is the worst of those the page lists
+    by default -- on an enabled rule, or TIDE's own (its rule id) on any rule, which matter either way
+    -- or "muted" when a disabled rule has only others: they would stop it working only if it were
+    switched on, so its card shows them in grey."""
+    shown = [f for f in found if not f["muted"]]
+    if not shown:
+        return None
+    live = [f for f in shown if enabled or f["fixer"] == "tide"]
+    severity = min((f["severity"] for f in live), key=lambda s: _SEVERITY_ORDER.get(s, 3)) if live else "muted"
+    return {"severity": severity, "count": len(shown), "disabled": not enabled,
+            "lines": [f"{f['severity'].title()}: {f['title']}" + (f" ({f['cause']})" if f["cause"] else "") for f in shown]}
+
+
+FLOW_CARDS = ("rules", "errors", "warnings", "info", "causes")
+_FLOW_OF = {"error": "errors", "warning": "warnings", "info": "info"}     # a severity's Compare with card
 
 
 def flows(conn, destinations: List[Dict[str, Any]], filters: Dict[str, Any], start: datetime,
@@ -941,8 +1844,8 @@ def flows(conn, destinations: List[Dict[str, Any]], filters: Dict[str, Any], sta
         span = (opened, resolved, watched[(s, sp)][0])
         if rule_id:
             spans["rules"].setdefault(_item(f), []).append(span)
-        if severity in ("error", "warning"):
-            spans[f"{severity}s"].setdefault(_item(f), []).append(span)
+        if severity in _FLOW_OF:
+            spans[_FLOW_OF[severity]].setdefault(_item(f), []).append(span)
         spans["causes"].setdefault(_fix_key(f), []).append(span)
     out: Dict[str, Any] = {card: _moves(by_unit, start, now) for card, by_unit in spans.items()}
     out["since"] = since
@@ -1171,9 +2074,14 @@ def _md(text: Any) -> str:
 # fix itself: each index, the field it lacks, on which SIEM, with how many rules it holds back. Where
 # the rule may be the one at fault instead (``_EITHER_SIDE``), it can be for the author: the rules, with
 # the fields each uses. Every other issue is a table of its rules (or destinations), with what was found.
-_FIELD_ISSUES = {"field_missing", "field_conflict", "override_missing", "unknown_field"}   # cause: a field
+_FIELD_ISSUES = {"field_missing", "field_conflict", "override_missing", "unknown_field", "field_empty"}   # cause: a field
+_PATTERN_ISSUES = {"no_index", "no_recent_data", "ingest_late"}                                       # cause: an index pattern
 # issue: (who else may fix it, when, what each of them does)
 _EITHER_SIDE = {
+    "field_empty": ("author", "if the rule should match on another field", {
+        "engineer": "Check the data source sends each field to its index, or that the index's ingest pipeline fills it: "
+                    "the indexes map it, but no recent event has a value in it.",
+        "author": "Check each rule matches on the field its data really fills, and correct its query if not."}),
     "field_missing": ("author", "if a field name is wrong", {
         "engineer": "Check the data source sends each field to its index, or that the index's ingest pipeline creates it.",
         "author": "Check each rule's query for a field name that is wrong, and correct it. If the names are right, "
@@ -1249,6 +2157,13 @@ def _merged(rows: List[List[str]], at: int) -> List[List[str]]:
     return list(out.values())
 
 
+def _first_sentence(text: Any) -> str:
+    """What a finding says of its cause, without what it says of the rule (``freshness_findings``)."""
+    text = str(text or "").strip()
+    end = text.find(". ")
+    return text[:end + 1] if end >= 0 else text
+
+
 def _field_index(cause: str) -> Tuple[str, str]:
     """A field issue's cause, "<field> in <index>", as (field, index); the index is "" when it names none."""
     field, _, index = cause.partition(" in ")
@@ -1281,22 +2196,32 @@ def _fixes(issue: str, nodes: List[Dict[str, Any]], labels: Dict[str, str],
     for node in nodes:
         siem = ", ".join(sorted(labels.get(s, s) for s in node["siem_ids"]))
         for f in node["rows"]:
-            if issue == "no_index":
+            if issue in _PATTERN_ISSUES:
                 places = [("", node["cause"])]
             elif issue == "unknown_field":           # Kibana names the field; the rule names where it searched
                 places = [(node["cause"], p) for p in patterns.get(_item(f)) or [""]]
             else:
                 places = [_field_index(node["cause"])]
             for field, index in places:
-                slot = slots.setdefault((field, index, siem), {"rules": {}, "since": None})
+                slot = slots.setdefault((field, index, siem), {"rules": {}, "since": None, "seen": ""})
                 if f["rule_id"]:
                     slot["rules"][_item(f)] = f
                 if f["first_seen"] and (slot["since"] is None or f["first_seen"] < slot["since"]):
                     slot["since"] = f["first_seen"]
+                slot["seen"] = slot["seen"] or _first_sentence(f["detail"])
     ordered = sorted(slots.items(), key=lambda kv: (kv[0][1].lower(), kv[0][0].lower(), kv[0][2].lower()))
     if issue == "no_index":
         return ["Index pattern", "SIEM", "Rules", "Since"], [
             [_code(index), _md(siem), _rules_count(s["rules"]), _since(s["since"])]
+            for (_field, index, siem), s in ordered]
+    if issue == "no_recent_data":           # how many of its rules see no recent data at all
+        return ["Index pattern", "SIEM", "Rules", "Can't alert", "Since", "What was found"], [
+            [_code(index), _md(siem), _rules_count(s["rules"]),
+             str(sum(1 for f in s["rules"].values() if f["severity"] == "error")), _since(s["since"]), _cut(s["seen"])]
+            for (_field, index, siem), s in ordered]
+    if issue == "ingest_late":              # how late its events arrive
+        return ["Index pattern", "SIEM", "Rules", "Since", "What was found"], [
+            [_code(index), _md(siem), _rules_count(s["rules"]), _since(s["since"]), _cut(s["seen"])]
             for (_field, index, siem), s in ordered]
     return (["Index pattern" if issue == "unknown_field" else "Index",
              "Timestamp override" if issue == "override_missing" else "Field", "SIEM", "Rules", "Since"], [
@@ -1357,7 +2282,7 @@ def _issue_markdown(issue: str, nodes: List[Dict[str, Any]], labels: Dict[str, s
                else f"- **Affects:** {len(places)} destinations, as a whole")
     if either and role == "author":
         head, cells = _rules_using(issue, nodes)
-    elif issue == "no_index" or issue in _FIELD_ISSUES:
+    elif issue in _PATTERN_ISSUES or issue in _FIELD_ISSUES:
         head, cells = _fixes(issue, nodes, labels, patterns)
     else:
         head, cells = _found(nodes)
@@ -1430,8 +2355,10 @@ def _metrics(conn, open_rows, resolved_rows, names, scope: str, all_rules: bool,
         "rules_total": rules_total,
         "errors": sum(1 for s in worst.values() if s == "error"),
         "warnings": sum(1 for s in worst.values() if s == "warning"),
+        "info": sum(1 for s in worst.values() if s == "info"),
         "new_errors": sum(1 for i, s in worst.items() if s == "error" and since.get(i, now) >= week),
         "new_warnings": sum(1 for i, s in worst.items() if s == "warning" and since.get(i, now) >= week),
+        "new_info": sum(1 for i, s in worst.items() if s == "info" and since.get(i, now) >= week),
         "tracked_since": tracked_since,
         "new_known": tracked_since is None or tracked_since <= week,
         "causes": len({_fix_key(f) for f in open_rows}),

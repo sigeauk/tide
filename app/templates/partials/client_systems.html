@@ -35,7 +35,7 @@
             <span class="client-list-item__meta">{{ icon('server', '12') }} {{ summary.host_count }} device{{ 's' if summary.host_count != 1 }}</span>
             <span class="client-list-item__meta">{{ icon('bug', '12') }} {{ summary.vuln_count }} vuln{{ 's' if summary.vuln_count != 1 }}</span>
             <span class="client-list-item__meta">{{ icon('package', '12') }} {{ summary.software_count }} pkg</span>
-            <span class="client-list-item__meta">{{ icon('clipboard-list', '12') }} {{ summary.baseline_count }} baseline{{ 's' if summary.baseline_count != 1 }}{% if summary.baseline_count > 0 %} ({{ summary.baseline_coverage_pct }}%){% endif %}</span>
+            <span class="client-list-item__meta">{{ icon('clipboard-list', '12') }} {{ summary.baseline_count }} baseline{{ 's' if summary.baseline_count != 1 }}{% if summary.baseline_count > 0 %} ({{ summary.baseline_coverage_pct }}%{% if summary.baseline_effective_pct != summary.baseline_coverage_pct %}, {{ summary.baseline_effective_pct }}% effective{% endif %}){% endif %}</span>
         </div>
     </div>
     {% endfor %}

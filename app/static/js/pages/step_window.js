@@ -1,7 +1,7 @@
 /*
  * The baseline technique windows (components/step_modal.html; template_step_modal.html shares
  * Risks): Risks view / form, Add coverage (a rule, a gap or N/A, a dashboard / report / log),
- * relinking a mapping to another rule, a watch item's Update, and the rule picker's results
+ * relinking a mapping to another rule, a watch item's or mark's Update, and the rule picker's results
  * (partials/siem_rule_options.html).
  */
 (function () {
@@ -46,12 +46,13 @@
         panel.scrollIntoView({ block: 'nearest' });
     }
 
-    // A dashboard, report or log's Update: its card shows its form in place of its body.
+    // A dashboard, report or log's Update, or a known gap's or N/A's: its card shows its form in
+    // place of its body.
     function editWatch(el, editing) {
         var item = el.closest('[data-watch-item]');
         item.querySelector('[data-watch-view]').hidden = editing;
         item.querySelector('[data-watch-form]').hidden = !editing;
-        if (editing) item.querySelector('[data-watch-form] input[name="title"]').focus();
+        if (editing) item.querySelector('[data-watch-form] input[name="title"], [data-watch-form] textarea[name="reason"]').focus();
     }
 
     // A refused dashboard / report / log comes back with its form open.

@@ -182,6 +182,7 @@
     var COLUMNS = [
         ['score', 'Score'], ['name', 'Rule'], ['siem', 'SIEM'], ['state', 'State'], ['severity', 'Severity'],
         ['validated', 'Validated'], ['upstream', 'Upstream'], ['author', 'Author'], ['mitre', 'MITRE'], ['type', 'Type'], ['lang', 'Lang'],
+        ['alerts', 'Alerts (7 days)'],
     ];
     var TITLES = {};
     COLUMNS.forEach(function (c) { TITLES[c[0]] = c[1]; });

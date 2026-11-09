@@ -88,6 +88,13 @@
                 {% endif %}
             </div>
             {% endif %}
+            {% if c.action and not p.client_id %}
+            <div class="diag-part__fix" id="action-{{ c.id }}">
+                <button name="{{ c.action[0] }}" type="button" class="btn btn-secondary btn-sm"
+                        hx-get="{{ c.action[1] }}" hx-target="#action-{{ c.id }}" hx-swap="innerHTML" hx-disabled-elt="this">
+                    {{ icon('trash-2', '13') }} {{ c.action[0] }}…</button>
+            </div>
+            {% endif %}
         </div>
         {% endif %}
         {% endfor %}

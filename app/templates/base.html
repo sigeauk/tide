@@ -53,6 +53,7 @@
                their own breadcrumb inline should migrate to use the
                component (see components/ui/breadcrumb.html). #}
             {% if user %}
+                {% include "partials/maintenance_notice.html" %}
                 {% from "components/ui/breadcrumb.html" import breadcrumb %}
                 {{ breadcrumb(request) }}
             {% endif %}

@@ -16,22 +16,23 @@
     left   : History -- rules mapped / removed, known gap or N/A added / edited / removed with the
              reason, the technique added or edited, coverage added / edited / removed, SIEM coverage changes.
     centre : Description (title and the user's own text; Update edits them in place) · Coverage
-             (any known gap or N/A with its reason; a dashboard, report or log watching it, labelled
-             non-alerting, each with Update and Delete; each mapped rule as one card with its score
+             (each known gap -- any number -- or N/A with its reason; a dashboard, report or log watching
+             it, labelled non-alerting; each with Update and Delete; each mapped rule as one card with its score
              ring, state, field check and validation) · Sigma rules (suggested from its ATT&CK ids,
              or searched; convert each) · Risks (priority and category; Update edits them), and,
              opened from Coverage's "…", Add coverage (rule, gap, N/A, dashboard, report, log).
     right  : MITRE ATT&CK (Update edits the technique's ATT&CK ids in place).
   The header ring is the strongest counted rule's own score (app/scoring.py), as on its card
   (window_ui.technique_ring); a technique no rule covers shows an empty ring in its status's
-  colour, since its status is decided by the mark, not a rule.
+  colour. Rules beside known gaps are Partial coverage (#92): the ring shows that score in the
+  share the rules make up, and the header's status says Partial coverage.
   The technique is this system's own (its copy of the template), so everything here -- the
   technique itself included -- belongs to this system alone.
 #}
 {% from "macros/icons.html" import icon, tactic_icon %}
 {% from "components/mitre_pill.html" import mitre_pill %}
 {% from "components/mitre_ui.html" import technique_list %}
-{% from "components/window_ui.html" import collapse_ctl, drag_ctl, remove_btn, rule_card, section_menu, sections_item, tag, technique_ring, window_menu %}
+{% from "components/window_ui.html" import collapse_ctl, drag_ctl, not_effective_pill, remove_btn, rule_card, section_menu, sections_item, tag, technique_ring, window_menu %}
 {% from "macros/modal.html" import close_button %}
 {% from "macros/menu.html" import more_button %}
 {% from "components/ui/loading_state.html" import loading_state %}
@@ -40,7 +41,7 @@
 {% set status = detail.status %}
 {% set rl = detail.risk_labels %}
 {% set status_class = {'green': 'success', 'amber': 'warning', 'grey': 'muted', 'red': 'danger'}.get(status, 'danger') %}
-{% set status_label = {'green': 'Covered', 'amber': 'Known gap', 'grey': 'Not applicable', 'red': 'No coverage'}.get(status, 'No coverage') %}
+{% set status_label = 'Partial coverage' if detail.partial else {'green': 'Covered', 'amber': 'Known gap', 'grey': 'Not applicable', 'red': 'No coverage'}.get(status, 'No coverage') %}
 {% set event_labels = {
     'rule_mapped': 'Rule mapped', 'rule_unmapped': 'Rule removed', 'rule_relinked': 'Rule relinked', 'coverage_added': 'Coverage added', 'coverage_edited': 'Coverage edited', 'coverage_removed': 'Coverage removed',
     'gap_added': 'Known gap', 'gap_removed': 'Gap removed', 'gap_edited': 'Gap edited',
@@ -50,8 +51,9 @@
     'siem_coverage': 'SIEM coverage', 'siem_counted': 'SIEM coverage', 'siem_uncounted': 'SIEM coverage',
 } %}
 {% set step_url = '/api/systems/' ~ system_id ~ '/steps/' ~ step.id %}
-{% set mark = detail.blind_spots[0] if detail.blind_spots else none %}
-{% set mark_label = ('Not applicable' if mark.override_type == 'na' else 'Known gap') if mark else '' %}
+{# Any number of known gaps, one N/A (#92). Each mark is updated or deleted from its own card. #}
+{% set na_mark = detail.blind_spots | selectattr('override_type', 'equalto', 'na') | first %}
+{% set due_mark = detail.blind_spots | selectattr('review_due') | first %}
 {% set ev = detail.evidence_score %}
 
 <div name="Dismiss Technique Window" class="modal-overlay" data-step-modal data-history-modal data-rm-overlay>
@@ -60,7 +62,7 @@
 
     <header class="rm-header">
       {% if not new %}
-      {{ technique_ring(status, ev, detail.evidence_rule, 'score-ring--sm') }}
+      {{ technique_ring(status, ev, detail.evidence_rule, 'score-ring--sm', how=detail.evidence_how) }}
       {% endif %}
       <div class="rm-header__main">
         <h2 class="rm-title" id="sm-title">{{ 'New technique' if new else step.title }}</h2>
@@ -72,9 +74,10 @@
           {% if detail.non_alerting %}
           <span class="status-pill status-info" title="Covered by a dashboard, report or log: it is watched, but nothing alerts">{{ icon('eye', '12') }} Non-alerting</span>
           {% endif %}
+          {% if detail.not_effective %}{{ not_effective_pill(detail.not_effective_why, '12') }}{% endif %}
           {% if step.priority %}<span class="status-pill sm-priority sm-priority--{{ step.priority }}" title="Priority">{{ rl.priority[step.priority] }}</span>{% endif %}
-          {% if detail.review_due %}
-          <span class="status-pill status-warning" title="The {{ mark_label | lower }} mark was due for review on {{ mark.review_by.isoformat() }}">
+          {% if detail.review_due and due_mark %}
+          <span class="status-pill status-warning" title="{{ 'The not applicable mark' if due_mark.override_type == 'na' else 'A known gap' }} was due for review on {{ due_mark.review_by.isoformat() }}">
             {{ icon('calendar', '12') }} Review due
           </span>
           {% endif %}
@@ -200,10 +203,11 @@
       <section class="rm-col rm-col--technique" data-col="centre" aria-label="Centre column">
 
         {# Add coverage: the one place to add anything that covers -- or decides -- this technique on
-           this system: a rule (picked from the SIEM), a known gap or N/A (one mark per technique;
-           choosing either when there is one edits it), or a dashboard, report or log (non-alerting,
-           each with a title, an optional link and a rationale). Not a movable section: it opens at
-           the top of this column from Coverage's "…" menu. A refused dashboard / report / log comes
+           this system: a rule (picked from the SIEM), a known gap (any number, each a part not
+           covered, #92) or N/A (one, offered while there is none: it decides the technique), or a
+           dashboard, report or log (non-alerting, each with a title, an optional link and a
+           rationale). A mark is updated from its own card. Not a movable section: it opens at the
+           top of this column from Coverage's "…" menu. A refused dashboard / report / log comes
            back in coverage_error: with an id it was an update (its card reopens), else an add. #}
         {% set ce = coverage_error or {} %}
         {% set ae = {} if ce.id else ce %}
@@ -215,8 +219,8 @@
           <label class="rm-label" for="sm-cov-kind">Type</label>
           <select id="sm-cov-kind" class="form-input form-select" data-change="step.coverageKind">
             <option value="rule">Rule (alerting)</option>
-            <option value="gap"{% if mark and mark.override_type != 'na' %} data-edit{% endif %}>{{ 'Known gap (edit)' if mark and mark.override_type != 'na' else 'Known gap' }}</option>
-            <option value="na"{% if mark and mark.override_type == 'na' %} data-edit{% endif %}>{{ 'Not applicable (edit)' if mark and mark.override_type == 'na' else 'Not applicable' }}</option>
+            <option value="gap">Known gap</option>
+            {% if not na_mark %}<option value="na">Not applicable</option>{% endif %}
             {% for k, v in rl.coverage_kind.items() %}<option value="{{ k }}"{% if ae.kind == k %} selected{% endif %}>{{ v }} (non-alerting)</option>{% endfor %}
           </select>
 
@@ -240,20 +244,19 @@
             </form>
           </div>
 
-          {# Adds the mark, or edits the one this system has in place (the history keeps the old one). #}
+          {# Adds a known gap or N/A. #}
           <form id="sm-cov-mark" data-cov-form class="sm-gapform" hx-target="#modal-container" hx-swap="innerHTML" hidden
-                {% if mark %}hx-put="/api/blind-spots/{{ mark.id }}"{% else %}hx-post="/api/blind-spots"{% endif %}>
+                hx-post="/api/blind-spots">
             <input type="hidden" name="entity_type" value="tactic">
             <input type="hidden" name="entity_id" value="{{ step.id }}">
             <input type="hidden" name="system_id" value="{{ system_id }}">
             <input type="hidden" id="sm-gap-type" name="override_type" value="gap">
             <label class="rm-label" for="sm-gap-reason">Reason</label>
             <textarea id="sm-gap-reason" name="reason" class="form-input" rows="3" required
-                      placeholder="Why, so the next person knows">{{ mark.reason if mark else '' }}</textarea>
+                      placeholder="Why, so the next person knows: for a known gap, the part that isn't covered"></textarea>
             <label class="rm-label" for="sm-gap-review">Review by</label>
-            <input type="date" id="sm-gap-review" name="review_by" class="form-input"
-                   value="{{ mark.review_by.isoformat() if mark and mark.review_by else '' }}">
-            <p class="text-muted tf-form__note">{{ icon('info', '12') }} Optional. From this date the technique shows <strong>Review due</strong> here and on the system page.{% if mark %} This technique has one mark on this system: saving changes it.{% endif %}</p>
+            <input type="date" id="sm-gap-review" name="review_by" class="form-input" value="">
+            <p class="text-muted tf-form__note">{{ icon('info', '12') }} Optional. From this date the technique shows <strong>Review due</strong> here and on the system page.</p>
             <div><button name="Save Gap" type="submit" class="btn btn-primary btn-sm">Save</button></div>
           </form>
 
@@ -349,10 +352,11 @@
           {% endif %}
           {% if detail.blind_spots or detail.detections or detail.watched %}
           <div class="rm-items">
+            {# Each known gap or N/A, as a dashboard / report / log is: Update in place, Delete. #}
             {% for gap in detail.blind_spots %}
             {% set gap_label = 'Not applicable' if gap.override_type == 'na' else 'Known gap' %}
-            <div class="rm-item rm-item--{{ 'na' if gap.override_type == 'na' else 'gap' }}">
-              <div class="rm-item__main">
+            <div class="rm-item rm-item--{{ 'na' if gap.override_type == 'na' else 'gap' }}" data-watch-item>
+              <div class="rm-item__main" data-watch-view>
                 <div class="rm-item__name">{{ icon('minus-circle' if gap.override_type == 'na' else 'triangle-alert', '13') }} {{ gap_label }}</div>
                 <p class="rm-item__text">{{ gap.reason }}</p>
                 <div class="rm-item__meta">
@@ -366,10 +370,37 @@
                   {% endif %}
                 </div>
               </div>
-              {{ remove_btn('/api/blind-spots/' ~ gap.id ~ '?entity_type=tactic&entity_id=' ~ step.id ~ '&system_id=' ~ system_id,
-                            'Remove this ' ~ gap_label | lower ~ ' mark',
-                            'Remove this ' ~ gap_label | lower ~ ' mark? The technique is scored on its rules again on this system.',
-                            name='Remove Gap') }}
+              <form class="rm-item__main sm-gapform" data-watch-form hx-put="/api/blind-spots/{{ gap.id }}"
+                    hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset" hidden>
+                <input type="hidden" name="entity_id" value="{{ step.id }}">
+                <input type="hidden" name="system_id" value="{{ system_id }}">
+                <label class="rm-label" for="sm-mark-type-{{ gap.id }}">Type</label>
+                <select id="sm-mark-type-{{ gap.id }}" name="override_type" class="form-input form-select">
+                  <option value="gap"{% if gap.override_type != 'na' %} selected{% endif %}>Known gap</option>
+                  {% if not na_mark or na_mark.id == gap.id %}<option value="na"{% if gap.override_type == 'na' %} selected{% endif %}>Not applicable</option>{% endif %}
+                </select>
+                <label class="rm-label" for="sm-mark-reason-{{ gap.id }}">Reason</label>
+                <textarea id="sm-mark-reason-{{ gap.id }}" name="reason" class="form-input" rows="3" required>{{ gap.reason }}</textarea>
+                <label class="rm-label" for="sm-mark-review-{{ gap.id }}">Review by</label>
+                <input type="date" id="sm-mark-review-{{ gap.id }}" name="review_by" class="form-input"
+                       value="{{ gap.review_by.isoformat() if gap.review_by else '' }}">
+                <div class="sm-risks__actions">
+                  <button name="Cancel Mark" type="button" class="btn btn-secondary btn-sm" data-click="step.watchCancel">Cancel</button>
+                  <button name="Save Mark" type="submit" class="btn btn-primary btn-sm">Save</button>
+                </div>
+              </form>
+              <div class="rh-more" data-more>
+                {{ more_button('Actions for this ' ~ gap_label | lower, title=gap_label ~ ' actions', attrs='name="Mark Actions"') }}
+                <div class="rh-more__menu" role="menu" hidden>
+                  <button name="Update Mark" type="button" role="menuitem" class="rh-more__item" data-click="step.watchEdit"
+                          title="Change its type, reason or review date">{{ icon('pencil', '14') }}<span>Update</span></button>
+                  <button name="Remove Gap" type="button" role="menuitem" class="rh-more__item rh-more__item--danger"
+                          title="Remove this {{ gap_label | lower }} from the technique"
+                          hx-delete="/api/blind-spots/{{ gap.id }}?entity_type=tactic&amp;entity_id={{ step.id }}&amp;system_id={{ system_id }}"
+                          hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+                          hx-confirm="Remove this {{ gap_label | lower }} from the technique on this system? Its reason stays in the technique's history.">{{ icon('trash-2', '14') }}<span>Delete</span></button>
+                </div>
+              </div>
             </div>
             {% endfor %}
             {% for w in detail.watched %}
@@ -385,7 +416,7 @@
                   <span class="text-info" title="Watched by a {{ w.kind_label | lower }}: someone has to look, nothing alerts">Non-alerting</span>
                   {% if w.created_by %}{{ tag(w.created_by, title='Added by') }}{% endif %}
                   {% if w.created_at %}<span class="text-muted">{{ w.created_at.strftime('%Y-%m-%d') }}</span>{% endif %}
-                  {% if status in ('amber', 'grey') %}<span class="text-muted" title="A known gap or N/A mark decides this technique's status">not counted while the {{ mark_label | lower }} stands</span>{% endif %}
+                  {% if status == 'grey' %}<span class="text-muted" title="Not applicable decides this technique's status">not counted while it is marked not applicable</span>{% endif %}
                 </div>
               </div>
               {# Update: this card's own form, in place of its body (the history keeps the change). #}
@@ -423,10 +454,11 @@
             {% for d in detail.detections %}
             {% set e = d.evidence %}
             {% set t = d.telemetry %}
-            <div class="rm-item{% if d.unresolved or not d.counts or (t and t.missing) %} rm-item--warn{% endif %}">
+            <div class="rm-item{% if d.unresolved or not d.counts or not d.effective or (t and t.missing) %} rm-item--warn{% endif %}">
               {% call rule_card(d, e) %}
                 {% if d.unresolved %}<span class="text-warning" title="{{ d.unresolved_reason }} Use Relink in this card's menu to point it at the rule.">{{ icon('triangle-alert', '10') }} Needs relinking</span>{% endif %}
-                {% if not d.counts %}<span class="text-warning" title="Its destination is not one this system counts toward coverage">Not counted</span>{% endif %}
+                {% if not d.counts %}<span class="text-warning" title="{{ {'disabled': 'The rule is disabled: a disabled rule covers nothing. Enable it to count it.', 'deprecated': 'The rule is deprecated, so it covers nothing.'}.get(d.why_not, 'Its destination is not one this system counts toward coverage') }}">Not counted</span>
+                {% elif not d.effective %}<span class="text-warning" title="It counts, but can't work now: {{ d.problems | join('; ') }}. Rule Monitoring lists what to fix.">{{ icon('triangle-alert', '10') }} Not effective</span>{% endif %}
               {% endcall %}
               {% set unmap_url = '/api/baselines/tactics/detections/' ~ d.id ~ '?step_id=' ~ step.id ~ '&system_id=' ~ system_id %}
               {% set unmap_confirm = 'Remove this rule from this technique on this system? The rule itself is not deleted.' %}

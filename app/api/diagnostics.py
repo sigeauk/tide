@@ -202,6 +202,47 @@ def undo_fix(request: Request, run_id: str, db: DbDep, user: RequireUser, client
     return _fix_panel(request, mode="undone", done=done)
 
 
+def _orphans_panel(request: Request, db, **ctx):
+    """Database files with no client's Delete these files (app.services.client_deletion): the files as
+    they are now and the box to confirm, or what was deleted."""
+    from app.services import client_deletion
+    if ctx.get("mode") != "done":
+        with db.get_shared_connection() as conn:
+            found = client_deletion.orphans(conn)
+        ctx.update(rows=[(f["file"], client_deletion.size_text(f["size"]), f["modified"].strftime("%d %b %Y %H:%M"))
+                         for f in found],
+                   size=client_deletion.size_text(sum(f["size"] for f in found)))
+    return request.app.state.templates.TemplateResponse(request, "partials/diagnostics_orphans.html", {
+        "confirm_word": client_deletion.CONFIRM_ORPHANS, **ctx})
+
+
+def _super_admin_scope(db, user, client_id) -> Scope:
+    scope = _required(db, user, client_id)
+    if not scope.full:
+        raise HTTPException(status_code=403, detail="Only a super admin can delete TIDE's database files.")
+    return scope
+
+
+@router.get("/api/diagnostics/orphans/preview", response_class=HTMLResponse)
+def preview_orphans(request: Request, db: DbDep, user: RequireUser, client_id: ActiveClient):
+    """The database files no client owns, and the box to confirm deleting them. Changes nothing."""
+    _super_admin_scope(db, user, client_id)
+    return _orphans_panel(request, db, mode="preview")
+
+
+@router.post("/api/diagnostics/orphans/delete", response_class=HTMLResponse)
+def delete_orphans(request: Request, db: DbDep, user: RequireUser, client_id: ActiveClient, confirm: str = Form("")):
+    """Delete the database files no client owns (super admins, typing delete_orphan_files). Audit-logged."""
+    from app.services import client_deletion
+    _super_admin_scope(db, user, client_id)
+    try:
+        with db.get_shared_connection() as conn:
+            done = client_deletion.delete_orphans(conn, confirm, user)
+    except client_deletion.DeleteRefused as exc:
+        return _orphans_panel(request, db, mode="refused", message=str(exc))
+    return _orphans_panel(request, db, mode="done", done=done)
+
+
 @router.post("/api/diagnostics/clients/{target_id}/fixes", response_class=HTMLResponse)
 def set_client_fixes(request: Request, target_id: str, db: DbDep, user: RequireUser, on: str = Form("")):
     """Turn a client's Allow diagnostic fixes switch on or off. Super admins only."""

@@ -40,7 +40,7 @@
                         <span>{{ summary.host_count }} device{{ 's' if summary.host_count != 1 else '' }}</span>
                         <span>{{ summary.vuln_count }} CVE{{ 's' if summary.vuln_count != 1 else '' }}</span>
                         <span>{{ summary.software_count }} package{{ 's' if summary.software_count != 1 else '' }}</span>
-                        <span>{{ summary.baseline_count }} baseline{{ 's' if summary.baseline_count != 1 else '' }}{% if summary.baseline_count > 0 %} ({{ summary.baseline_coverage_pct }}%){% endif %}</span>
+                        <span>{{ summary.baseline_count }} baseline{{ 's' if summary.baseline_count != 1 else '' }}{% if summary.baseline_count > 0 %} ({{ summary.baseline_coverage_pct }}%{% if summary.baseline_effective_pct != summary.baseline_coverage_pct %}, <span title="Covered by rules that can work now">{{ summary.baseline_effective_pct }}% effective</span>{% endif %}){% endif %}</span>
                     </div>
                 </div>
             </div>
@@ -57,7 +57,7 @@
                         <div class="cve-card-item__body">
                             <div class="cve-card-item__name"><a href="/systems/{{ s.id }}?baseline_id={{ baseline.playbook_id }}" data-stop-click title="Show {{ s.name }}'s {{ baseline.playbook_name }} techniques">{{ baseline.playbook_name }}</a></div>
                         </div>
-                        <div class="cve-card-item__right"><div class="cve-card-item__meta"><span>{{ baseline.covered_steps }}/{{ baseline.total_steps }}</span></div></div>
+                        <div class="cve-card-item__right"><div class="cve-card-item__meta"><span>{{ baseline.covered_steps }}/{{ baseline.total_steps }}</span>{% if baseline.effective_steps != baseline.covered_steps %}<span title="Covered by rules that can work now">{{ baseline.effective_pct }}% effective</span>{% endif %}</div></div>
                     </div>
                 </summary>
                 <div class="md-content mt-sm">{{ (baseline.playbook_description or 'No description available.') | md }}</div>

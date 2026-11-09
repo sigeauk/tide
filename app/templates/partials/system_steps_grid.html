@@ -14,12 +14,14 @@
 {% from "components/mitre_pill.html" import mitre_pill %}
 {% from "macros/modal.html" import empty_state %}
 {% from "macros/menu.html" import more_button %}
+{% from "components/window_ui.html" import not_effective_pill %}
 
 {% macro coverage(step) -%}
 {% set status = step.status | default('red') %}
 {% set cls = {'green': 'success', 'amber': 'warning', 'grey': 'muted', 'red': 'danger'}.get(status, 'danger') %}
-<span class="status-pill status-{{ cls }}">{{ {'green': 'Covered', 'amber': 'Known gap', 'grey': 'Not applicable', 'red': 'No coverage'}.get(status, 'No coverage') }}</span>
+<span class="status-pill status-{{ cls }}">{{ 'Partial coverage' if step.partial else {'green': 'Covered', 'amber': 'Known gap', 'grey': 'Not applicable', 'red': 'No coverage'}.get(status, 'No coverage') }}</span>
 {%- if step.non_alerting %} <span class="status-pill status-info" title="Covered by a dashboard, report or log: watched, but nothing alerts">Non-alerting</span>{% endif %}
+{%- if step.not_effective %} {{ not_effective_pill(step.not_effective_why) }}{% endif %}
 {%- if step.priority %} <span class="status-pill sm-priority sm-priority--{{ step.priority }}" title="Priority">{{ step.priority | capitalize }}</span>{% endif %}
 {%- endmacro %}
 
@@ -56,7 +58,7 @@
             <td>{% if step.priority %}<span class="status-pill sm-priority sm-priority--{{ step.priority }}">{{ step.priority | capitalize }}</span>{% else %}<span class="text-muted">Not set</span>{% endif %}</td>
             {% else %}
             <td>{{ coverage(step) }}{% if step.review_due %} <span class="text-warning" title="Due for review since {{ step.review_by.isoformat() }}">{{ icon('calendar', '11') }} Review due</span>{% endif %}</td>
-            <td>{% if step.mapped_count %}{{ step.mapped_count }}{% if step.uncounted_count %} <span class="text-warning" title="{{ step.uncounted_count }} not counted on this system">({{ step.uncounted_count }} not counted)</span>{% endif %}{% else %}<span class="text-muted">None</span>{% endif %}</td>
+            <td>{% if step.mapped_count %}{{ step.mapped_count }}{% if step.uncounted_count %} <span class="text-warning" title="{{ step.uncounted_count }} not counted on this system: {{ step.uncounted_why }}">({{ step.uncounted_count }} not counted)</span>{% endif %}{% else %}<span class="text-muted">None</span>{% endif %}</td>
             {% endif %}
         </tr>
     {% endfor %}
@@ -85,7 +87,7 @@
         <span class="sys-group__label">{% if g.kind == 'tactic' %}{{ tactic_icon(g.label, '14') }} {% endif %}{{ g.label }}</span>
         <span class="sys-group__meta">
             {{ g.total }} technique{{ 's' if g.total != 1 }}
-            {% if not coverage_undefined and g.scored %} · {{ g.covered }}/{{ g.scored }} covered ({{ g.pct }}%){% endif %}
+            {% if not coverage_undefined and g.scored %} · {{ g.covered }}/{{ g.scored }} covered ({{ g.pct }}%){% if g.effective is defined and g.effective != g.covered %}, <span title="Covered by rules that can work now">{{ g.effective }} effective</span>{% endif %}{% endif %}
         </span>
         {% if g.kind == 'baseline' %}
         {% if template %}
