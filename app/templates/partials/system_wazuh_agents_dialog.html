@@ -1,0 +1,43 @@
+{#
+  Wazuh agents…, from a system page's ⋮: which of the client's Wazuh destinations supply this system's
+  devices, each with an optional name pattern (a glob: "alpha-*"). Saving reads the agents at once, then
+  the page reloads; each sync refreshes them. Context: system_id, destinations ([{siem_id, space, name,
+  color, taken, pattern}]), problems (after a save).
+#}
+{% from "macros/icons.html" import icon, icon_text %}
+{% from "macros/modal.html" import close_button %}
+<div name="Wazuh Agents Dialog" class="modal-overlay" data-rm-overlay>
+    <div class="modal-content modal-md" role="dialog" aria-modal="true" aria-labelledby="sys-wz-title">
+        <div class="modal-header">
+            <h3 class="modal-title" id="sys-wz-title">{{ icon('server', '16') }} Wazuh agents</h3>
+            {{ close_button('name="Close" data-rm-close') }}
+        </div>
+        <p class="rule-help">
+            Tick each Wazuh destination whose agents are this system's devices. A <strong>name pattern</strong>
+            narrows it to the agents whose name fits (<span class="mono">alpha-*</span>); blank takes them all.
+            They are read now and at each sync, with Wazuh's vulnerability findings and their alerts; agents no
+            longer matching are removed. Your own and Nessus devices are untouched.
+        </p>
+        {% if problems %}
+        <div class="alert alert-danger">{% for p in problems %}<p>{{ p }}</p>{% endfor %}</div>
+        {% endif %}
+        <form hx-post="/api/systems/{{ system_id }}/wazuh-agents" hx-target="#modal-container" hx-swap="innerHTML"
+              hx-include="unset" class="sys-dialog__form">
+            {% for d in destinations %}
+            <div class="sys-dialog__row">
+                <label class="flex items-center gap-sm grow">
+                    <input type="checkbox" name="take" value="{{ d.siem_id }}|{{ d.space }}"{% if d.taken %} checked{% endif %}>
+                    <span class="status-pill{% if d.color %} dest-tinted{% endif %}"{% if d.color %} style="--dest: {{ d.color }}"{% endif %}>{{ d.name }}</span>
+                    <span class="text-muted">{{ 'all agents' if d.space == '*' else 'group ' ~ d.space }}</span>
+                </label>
+                <input type="text" name="pattern:{{ d.siem_id }}|{{ d.space }}" value="{{ d.pattern }}" class="form-input form-input--compact"
+                       placeholder="Name pattern" aria-label="Name pattern for {{ d.name }}">
+            </div>
+            {% endfor %}
+            <div class="modal-actions">
+                <button name="Cancel" type="button" class="btn btn-secondary" data-rm-close>Cancel</button>
+                <button name="Save Wazuh Agents" type="submit" class="btn btn-primary">{{ icon_text('save', 'Save', '13') }}</button>
+            </div>
+        </form>
+    </div>
+</div>

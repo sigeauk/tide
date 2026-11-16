@@ -27,9 +27,19 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
     pip install --no-cache-dir -r requirements.txt
 
+# Elastic's own rule validator (its detection-rules package, main), in a venv of its own: it pins
+# packages TIDE ships newer versions of. TIDE runs app/services/elastic_validator_runner.py in it.
+# The commit it came from is kept in .tide-commit.
+RUN git clone --depth 1 https://github.com/elastic/detection-rules.git /tmp/detection-rules && \
+    python -m venv /opt/elastic-venv && \
+    /opt/elastic-venv/bin/pip install --no-cache-dir /tmp/detection-rules && \
+    git -C /tmp/detection-rules log -1 --format='%H %cI' > /opt/elastic-venv/.tide-commit && \
+    rm -rf /tmp/detection-rules
+
 # Stage 3: Production
 FROM base AS production
 COPY --from=builder /opt/venv /opt/venv
+COPY --from=builder /opt/elastic-venv /opt/elastic-venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # System deps needed for runtime:
@@ -62,6 +72,7 @@ RUN sigma plugin list >/dev/null && \
 # goes from the runtime image, both the venv's and the base image's (with the old libraries it bundles),
 # and so do the venv's setuptools and wheel.
 RUN /opt/venv/bin/python -m pip uninstall -y -q pip setuptools wheel && \
+    /opt/elastic-venv/bin/python -m pip uninstall -y -q pip && \
     /usr/local/bin/python3 -m pip uninstall -y -q pip && \
     rm -rf /usr/local/lib/python3.13/ensurepip/_bundled
 
@@ -98,6 +109,10 @@ COPY README.md CHANGELOG.md /app/
 COPY docs/ /app/docs/
 
 ENV PYTHONPATH="/app"
+
+# Elastic's validator must tell a good query from a broken one: if a change in Elastic's code means it
+# can't, the build fails here rather than ship it broken.
+RUN /opt/elastic-venv/bin/python -I /app/app/services/elastic_validator_runner.py --self-test
 
 # 4.1.0 P4 — Build content-hashed CSS/JS bundles into app/static/{css,js}/dist/
 # and emit app/static/manifest.json. Done at image-build time so production

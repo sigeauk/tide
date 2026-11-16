@@ -34,7 +34,7 @@
 <tr class="rule-row{% if it.coverage %} cat-row--{{ it.coverage.level }}{% endif %}" id="{{ it.dom_id }}"
     data-rule-open role="button" tabindex="0" aria-label="Open {{ spec.singular | lower }}: {{ it.name }}"
     hx-get="{{ it.window_url }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
-    hx-trigger="click, keyup[key=='Enter']">
+    hx-trigger="tide-open" data-opens>
     {% for key, label, _sort in spec.columns %}
     {% if key == 'id' %}<td class="cat-cell-id">{{ it.id }}</td>
     {% elif key == 'name' %}<td class="rt-name"><span class="rt-title" title="{{ it.name }}">{% if it.tactic %}{{ tactic_icon(it.tactic, '12') }} {% endif %}{{ it.name }}</span></td>
@@ -80,7 +80,7 @@
     <div class="metric-card{{ ' metric-card--tip' if m.tip }}"{% if m.tip %} tabindex="0"{% endif %}>
         <p class="metric-value {{ m.tone | default('') }}">{{ m.value }}</p>
         <p class="metric-label">{{ m.label }}</p>
-        {% if m.sub %}<p class="metric-sub">{{ m.sub }}</p>{% endif %}
+        {% for sub in ([m.sub] if m.sub is string else m.sub or []) %}<p class="metric-sub">{{ sub }}</p>{% endfor %}
         {% if m.tip %}<div class="metric-tip" role="tooltip">{{ m.tip }}</div>{% endif %}
     </div>
     {% endfor %}
@@ -96,7 +96,7 @@
 {% endcall %}
 {% elif mode == 'groups' %}
     {% for g in groups %}
-    <details class="sys-group"{% if loop.first %} open{% endif %}>
+    <details class="sys-group" data-fold="{{ spec.key }}/{{ group }}:{{ g.key }}"{% if loop.first %} open{% endif %}>
         <summary class="sys-group__head">
             <span class="sys-group__chev">{{ icon('chevron-down', '14') }}</span>
             <span class="sys-group__label">{% if group == 'tactic' and g.key != 'none' %}{{ tactic_icon(g.label, '14') }} {% endif %}{{ g.label }}</span>

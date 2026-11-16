@@ -70,18 +70,23 @@ def _compute(db, client_id: str, card: dict) -> dict:
             return {"empty": "This system no longer exists." if f.get("system_id") else "No system chosen yet.",
                     "no_link": True}
         data = eng.get_system_steps(system.id, client_id=client_id)
-        view = {"default_name": system.name, "totals": data["totals"], "coverage_undefined": data.get("coverage_undefined")}
+        wazuh = eng.system_wazuh_figures(system.id, client_id=client_id)     # its Wazuh devices' cards, or None
+        view = {"default_name": system.name, "totals": data["totals"], "coverage_undefined": data.get("coverage_undefined"),
+                "wazuh": wazuh}
         if days:
             t, scored = data["totals"], data["totals"]["total"] - data["totals"]["na"]
             now = {"covered": None if view["coverage_undefined"] or not scored else int(round(t["covered"] / scored * 100)),
                    "techniques": t["total"], "no_coverage": t["none"], "known_gaps": t["gap"],
-                   "unmapped": t["unmapped"], "not_counted": t["uncounted"]}
+                   "unmapped": t["unmapped"], "not_counted": t["uncounted"],
+                   "vulnerabilities": wazuh["vulnerabilities"] if wazuh else None,
+                   "hardening": wazuh["hardening"] if wazuh else None}
             view["changes"] = _changes(source, days, now,
-                                       lambda at: past_figures.system_then(db, client_id, system.id, at, now))
+                                       lambda at: {**past_figures.system_then(db, client_id, system.id, at, now),
+                                                   **eng.system_wazuh_figures_at(system.id, at, client_id=client_id)})
         return view
     if source == "threat_landscape":
-        from app.main import get_last_sync_time
-        return {"metrics": db.get_threat_landscape_metrics(client_id=client_id), "last_sync_time": get_last_sync_time()}
+        from app.services import rule_issues
+        return {"metrics": db.get_threat_landscape_metrics(client_id=client_id), "last_sync": rule_issues.freshness(db, client_id)}
     if source == "baselines":
         view = {"overview": eng.get_baselines_overview(client_id=client_id),
                 "rollup": eng.get_system_baselines_rollup(client_id=client_id)}

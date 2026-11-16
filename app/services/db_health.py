@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import subprocess
+import subprocess  # nosec B404 # runs the health check's own module, a fixed command
 import sys
 import tempfile
 from pathlib import Path
@@ -39,7 +39,7 @@ def check_file(path: str) -> List[Tuple[str, int, str]]:
         root = str(Path(__file__).resolve().parents[2])
         while True:
             before = len(tested)
-            proc = subprocess.run([sys.executable, "-m", "app.services.db_health", copy, *tested],
+            proc = subprocess.run([sys.executable, "-m", "app.services.db_health", copy, *tested],  # nosec B603 # a fixed command, no shell; the arguments are file paths TIDE made
                                   capture_output=True, text=True, timeout=TIMEOUT, cwd=root,
                                   env={**os.environ, "PYTHONPATH": root})
             current, done = None, False

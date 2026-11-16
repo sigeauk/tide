@@ -1,0 +1,140 @@
+{# System report: the Wazuh devices' vulnerabilities and hardening (report.wazuh from
+   wazuh_assets.system_vulnerability_report, report.hardening from system_hardening). Included by
+   report/system_report.html when the report includes them and the system has Wazuh devices. #}
+{%- set w = report.wazuh -%}
+{%- set severity_badge = {'Critical': 'badge-red', 'High': 'badge-red', 'Medium': 'badge-amber', 'Low': 'badge-grey'} -%}
+<div class="section-banner avoid-break" id="sec-wazuh">
+    <div class="section-banner-title">Vulnerabilities</div>
+    <div class="section-banner-sub">Wazuh's findings on {{ report.system.name }}'s Wazuh devices, as of the last sync</div>
+</div>
+
+<div class="summary-grid avoid-break">
+    <div class="stat-card">
+        <span class="stat-value">{{ w.devices }}</span>
+        <span class="stat-label">Wazuh Devices</span>
+    </div>
+    <div class="stat-card">
+        <span class="stat-value {% if w.vulnerabilities %}danger{% else %}success{% endif %}">{{ w.vulnerabilities }}</span>
+        <span class="stat-label">Findings</span>
+    </div>
+    <div class="stat-card">
+        <span class="stat-value danger">{{ w.by_severity.Critical }}</span>
+        <span class="stat-label">Critical</span>
+    </div>
+    <div class="stat-card">
+        <span class="stat-value warning">{{ w.by_severity.High }}</span>
+        <span class="stat-label">High</span>
+    </div>
+    <div class="stat-card">
+        <span class="stat-value {% if w.kev %}danger{% else %}success{% endif %}">{{ w.kev }}</span>
+        <span class="stat-label">Known Exploited</span>
+    </div>
+    <div class="stat-card">
+        <span class="stat-value {% if w.affected %}warning{% else %}success{% endif %}">{{ w.affected }}</span>
+        <span class="stat-label">Devices Affected</span>
+    </div>
+</div>
+
+<div class="exec-narrative avoid-break">
+    Wazuh reports <strong>{{ w.vulnerabilities }} finding{{ 's' if w.vulnerabilities != 1 else '' }}</strong>
+    ({% for s, n in w.by_severity.items() %}{{ n }} {{ s | lower }}{{ ', ' if not loop.last }}{% endfor %})
+    on {{ w.affected }} of the system's {{ w.devices }} Wazuh device{{ 's' if w.devices != 1 else '' }}.
+    {% if w.kev %}<strong style="color:var(--danger)">{{ w.kev }}</strong> {{ 'is' if w.kev == 1 else 'are' }} in CISA's known exploited catalogue and {{ 'is' if w.kev == 1 else 'are' }} listed first.{% endif %}
+    A finding Wazuh no longer reports is left out.
+</div>
+
+{% if w.top %}
+<div class="section-banner avoid-break">
+    <div class="section-banner-title">CVEs on most devices</div>
+    <div class="section-banner-sub">{{ w.top | length }} of {{ w.distinct }}, known exploited first</div>
+</div>
+<table>
+    <thead>
+        <tr><th>CVE</th><th>Severity</th><th>CVSS</th><th>Devices</th><th>Known exploited</th><th>Packages</th></tr>
+    </thead>
+    <tbody>
+        {% for v in w.top %}
+        <tr>
+            <td style="font-weight:600;white-space:nowrap;">{{ v.cve_id }}</td>
+            <td><span class="badge {{ severity_badge.get(v.severity, 'badge-grey') }}">{{ v.severity or '—' }}</span></td>
+            <td>{{ v.cvss if v.cvss is not none else '—' }}</td>
+            <td>{{ v.devices }}</td>
+            <td>{% if v.kev %}<span class="badge badge-red">Yes</span>{% else %}No{% endif %}</td>
+            <td style="font-size:6.5pt;">{{ v.packages | join(', ') }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+
+<div class="section-banner avoid-break">
+    <div class="section-banner-title">By device</div>
+    <div class="section-banner-sub">Each Wazuh device's agent and its findings by severity</div>
+</div>
+<table>
+    <thead>
+        <tr><th>Device</th><th>IP Address</th><th>Agent</th><th>Critical</th><th>High</th><th>Medium</th><th>Low</th><th>Known exploited</th></tr>
+    </thead>
+    <tbody>
+        {% for d in w.devices_list %}
+        <tr>
+            <td style="font-weight:600;">{{ d.name }}</td>
+            <td style="font-family:var(--ff-mono);font-size:6.5pt;">{{ d.ip }}</td>
+            <td>{% if d.status == 'active' %}<span class="badge badge-green">Active</span>{% else %}<span class="badge badge-grey">{{ d.status | capitalize or 'Unknown' }}</span>{% endif %}</td>
+            <td>{{ d.by_severity.Critical }}</td>
+            <td>{{ d.by_severity.High }}</td>
+            <td>{{ d.by_severity.Medium }}</td>
+            <td>{{ d.by_severity.Low }}</td>
+            <td>{% if d.kev %}<span class="badge badge-red">{{ d.kev }}</span>{% else %}0{% endif %}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<div class="section-banner avoid-break" id="sec-hardening">
+    <div class="section-banner-title">Hardening</div>
+    <div class="section-banner-sub">CIS benchmark results from Wazuh, by policy, over {{ report.system.name }}'s Wazuh devices</div>
+</div>
+
+{% if report.hardening %}
+<table>
+    <thead>
+        <tr><th>Policy</th><th>Devices</th><th>Average score</th><th>Lowest</th><th>Failing checks</th></tr>
+    </thead>
+    <tbody>
+        {% for p in report.hardening %}
+        <tr>
+            <td style="font-weight:600;">{{ p.name or p.policy_id }}</td>
+            <td>{{ p.devices }}</td>
+            <td><span class="badge {% if p.avg_score >= 80 %}badge-green{% elif p.avg_score >= 40 %}badge-amber{% else %}badge-red{% endif %}">{{ p.avg_score }}%</span></td>
+            <td>{% if p.worst_score is not none %}{{ p.worst_score }}% ({{ p.worst }}){% else %}—{% endif %}</td>
+            <td>{{ p.total_failing }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+{% for p in report.hardening if p.failing %}
+<div class="exec-narrative avoid-break" style="margin-top:4mm;">
+    <strong>{{ p.name or p.policy_id }}</strong>: the checks most devices fail.
+</div>
+<table>
+    <thead>
+        <tr><th>CIS</th><th>Check</th><th>Devices failing</th></tr>
+    </thead>
+    <tbody>
+        {% for c in p.failing %}
+        <tr>
+            <td style="white-space:nowrap;">{{ c.cis_ids | join(', ') }}</td>
+            <td>{{ c.title }}</td>
+            <td>{{ c.failing }} of {{ c.devices }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endfor %}
+{% else %}
+<div class="exec-narrative avoid-break">
+    No CIS benchmark results yet: Wazuh hasn't run a policy on these devices.
+</div>
+{% endif %}

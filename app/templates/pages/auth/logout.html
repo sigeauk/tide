@@ -1,11 +1,11 @@
 {#
   Log out (GET /logout, /auth/logout): a link or bookmark to sign-out asks first, so a GET never signs
-  anyone out (#100). Log Out POSTs to /auth/logout, as the sidebar's Log Out does.
+  anyone out (#100). Log out POSTs to /auth/logout, as the sidebar's Log out does.
 #}
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon_text %}
 
-{% block title %}Log Out | TIDE{% endblock %}
+{% block title %}Log out | TIDE{% endblock %}
 
 {% block content %}
 <div class="login-container login-page">
@@ -17,7 +17,7 @@
         <p class="login-subtitle">You're signed in as {{ user.username }}. Logging out here logs you out of TIDE in your other browsers too.</p>
         <form name="Log Out" method="post" action="/auth/logout" hx-boost="false" class="stack gap-md">
             <button name="Log Out" type="submit" class="btn btn-primary btn-login w-full">
-                {{ icon_text('log-out', 'Log Out', '20') }}
+                {{ icon_text('log-out', 'Log out', '20') }}
             </button>
             <a name="Cancel" href="/" class="btn btn-secondary btn-login w-full text-center">Cancel</a>
         </form>

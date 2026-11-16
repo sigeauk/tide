@@ -1,5 +1,5 @@
 {# Partial: client_gitlab.html -- the client's GitLab projects (app.services.gitlab), laid out like
-   Linked SIEMs and Linked CTI Connectors above it.
+   Linked SIEMs and Linked CTI connectors above it.
    Context (management.client_gitlab_context): client, client_gitlab_projects (list_client_gitlab_projects
    rows + expiry_days), gitlab_instances, gitlab_purposes, gitlab_default_branch, gitlab_expiry_days,
    gitlab_destinations, has_backup_project.
@@ -12,7 +12,8 @@
    was) sits in full behind the ⚠ beside the ⋮, in the same popover as Edit. #}
 {% from "macros/icons.html" import icon %}
 {% from "macros/modal.html" import close_button, empty_state %}
-{% from "macros/menu.html" import more_button, manage_menu %}
+{% from "macros/menu.html" import more_button %}
+{% from "components/window_ui.html" import section_head %}
 {% set section = '#client-gitlab-section' %}
 
 {# What it's used for: Rule backup (only one project per client) and Issues. #}
@@ -56,15 +57,9 @@
 {% endif %}
 {% endmacro %}
 
-<div name="GitLab Projects Edit" class="client-section-toggle" data-click="section.toggle" data-body="gitlab-body" data-chev="gitlab-chev">
-    <span class="client-list-item__icon">{{ icon('gitlab', '14') }}</span>
-    <h2 class="client-section-toggle__title">GitLab Projects</h2>
-    <span class="badge badge-neutral badge--xs">{{ client_gitlab_projects | length }}</span>
-    {{ manage_menu('GitLab Projects', 'Manage projects', 'edit-gitlab-modal', 'Link GitLab projects, or remove them') }}
-    <span id="gitlab-chev" class="client-section-toggle__chevron" style="transform:rotate(90deg);">{{ icon('chevron-right', '16') }}</span>
-</div>
+{{ section_head('GitLab Projects', 'gitlab', client_gitlab_projects | length, 'Manage projects', 'edit-gitlab-modal', 'Link GitLab projects, or remove them') }}
 
-<div id="gitlab-body">
+<div class="sys-section__body">
 {% if client_gitlab_projects %}
 <div class="client-list">
     {% for p in client_gitlab_projects %}
@@ -204,7 +199,7 @@
                                 hx-delete="/api/management/clients/{{ client.id }}/gitlab-projects/{{ p.id }}"
                                 hx-target="{{ section }}" hx-swap="innerHTML"
                                 hx-confirm="Unlink {{ p.project }} ({{ p.used_for | lower }}) from this client? Nothing changes in GitLab."
-                                hx-on::before-request="document.getElementById('edit-gitlab-modal').style.display='none'">
+                                data-request-hides="edit-gitlab-modal">
                             {{ icon('x', '12') }} Remove
                         </button>
                     </div>
@@ -216,7 +211,7 @@
             <hr class="divider-line">
             <form name="Submit Gitlab Project" hx-post="/api/management/clients/{{ client.id }}/gitlab-projects"
                   hx-target="{{ section }}" hx-swap="innerHTML" class="stack gap-ms"
-                  hx-on::before-request="if(event.detail.elt===this) document.getElementById('edit-gitlab-modal').style.display='none'">
+                  data-request-hides="edit-gitlab-modal">
                 <label class="form-label">Link a project</label>
                 <div>
                     <label class="form-label" for="gitlab-add-instance">GitLab</label>

@@ -89,7 +89,7 @@
             var text = cb.nextElementSibling.textContent.trim();
             return cb.value === 'linked' && to && to.value ? text + ' to ' + to.selectedOptions[0].textContent.trim() : text;
         });
-        label.textContent = texts.length ? texts.join(', ') : 'All states';
+        label.textContent = texts.length ? texts.join(', ') : 'Any';
     }
     document.addEventListener('change', function (e) {
         var to = $('rh-linked-to'), linked = document.querySelector("#rh-state-dropdown input[name='state'][value='linked']");
@@ -261,12 +261,24 @@
         });
         return w;
     }
+    // With no column widths saved in this browser, the Rule column takes what the others leave: the
+    // table is never so narrow that it gets less than RULE_MIN_REM (it scrolls sideways instead).
+    var RULE_MIN_REM = 19;
+    function guardRule(t, vis) {
+        var rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16, sum = fixedWidth(t);
+        vis.forEach(function (c) {
+            var th = c !== 'name' && headOf(t, c);
+            if (th) sum += th.getBoundingClientRect().width;
+        });
+        t.style.minWidth = Math.ceil(sum + RULE_MIN_REM * rem) + 'px';
+    }
     function applyWidths(t, l) {
         var vis = visibleOrder(t, l), frac = l.frac;
         Array.prototype.forEach.call(t.querySelectorAll('thead th[data-col]'), function (th) {
             if (!FIXED[th.dataset.col]) th.style.width = '';
         });
-        if (!frac || !vis.every(function (c) { return frac[c] > 0; })) return;
+        t.style.minWidth = '';
+        if (!frac || !vis.every(function (c) { return frac[c] > 0; })) { guardRule(t, vis); return; }
         var avail = t.getBoundingClientRect().width - fixedWidth(t);
         if (avail <= 0) return;
         var total = 0;

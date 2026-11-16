@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<!--
+    TIDE System Report — Executive / CISO briefing  (Audience: Executive / CISO)
+    ───────────────────────────────────────────────────────────────────────────
+      • Two or three pages from the same figures as the technical report (system_report.html),
+        with its styles (system_report_style.html): risk posture and KPIs, a plain summary and the
+        coverage trend; then each baseline, coverage along the kill chain, the remediation roadmap
+        and the devices. The KPIs, kill chain, roadmap and summary are app/services/system_brief.py's
+        (report.brief).
+      • No cover page, contents, coverage matrix, technique detail or CVE breakdown.
+    Airgap-safe: NO external fonts, images or URLs.
+-->
+{%- set _clf_colors = {'Official':'#1a7f37','Confidential':'#9a6700','Secret':'#c0392b','Top Secret':'#c0392b'} -%}
+{%- set clf_color = _clf_colors.get(report.classification or 'Official', '#1a7f37') -%}
+{%- set show_baselines = report.include_baselines -%}
+{%- set show_devices = report.include_devices -%}
+{%- set b = report.brief -%}
+{%- set trend_table = false -%}
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>{{ report.system.name }} — Executive / CISO briefing</title>
+{% include "report/system_report_style.html" %}
+<style>
+.brief-head { border-top:4mm solid var(--primary); padding:5mm 0 4mm; margin-bottom:5mm; border-bottom:1px solid var(--border); }
+.brief-brand { font-size:7pt; font-weight:700; color:var(--primary); letter-spacing:0.18em; text-transform:uppercase; }
+.brief-title { font-size:18pt; font-weight:700; color:var(--text); line-height:1.2; margin-top:2mm; }
+.brief-system { font-size:12pt; font-weight:700; color:var(--text-2); string-set: sysname content(); }
+.brief-badges { margin-top:3mm; }
+.brief-badges > span { margin:0 2mm 0 0; vertical-align:middle; }
+.brief-pill {
+    display:inline-block; background:#1E293B; color:#F8FAFC; font-size:7pt; font-weight:600;
+    padding:1mm 4mm; border-radius:3mm; text-transform:uppercase; letter-spacing:0.08em;
+}
+.brief-clf {
+    display:inline-block; font-size:7pt; font-weight:700; color:{{ clf_color }}; border:1.5px solid {{ clf_color }};
+    padding:0.8mm 4mm; border-radius:2mm; text-transform:uppercase; letter-spacing:0.08em;
+}
+.brief-meta { font-size:7pt; color:var(--text-3); margin-top:3mm; }
+.kpi .stat-value { font-size:22pt; }
+.kpi .stat-label { font-size:6.5pt; }
+.kpi .stat-sub { font-size:6.5pt; }
+.brief-summary p { margin:0 0 2mm; }
+.brief-summary p:last-child { margin-bottom:0; }
+.effort-quick { background:var(--cov-bg); border-color:var(--cov-bd); color:var(--cov-tx); }
+.effort-engineering { background:var(--amb-bg); border-color:var(--amb-bd); color:var(--amb-tx); }
+.action-title { font-weight:700; color:var(--text); }
+.action-detail { font-size:7pt; color:var(--text-3); margin-top:0.5mm; }
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════════════════
+     PAGE 1 — RISK POSTURE AND KPIs
+     ══════════════════════════════════════════════════════ -->
+<div class="brief-head">
+    <div class="brief-brand">TIDE · Threat Informed Detection Engine</div>
+    <div class="brief-title">System Coverage Report</div>
+    <div class="brief-system">{{ report.system.name }}</div>
+    <div class="brief-badges">
+        <span class="brief-pill">Executive / CISO briefing</span>
+        <span class="brief-clf">{{ report.classification or 'Official' }}</span>
+        {% if report.system.classification %}<span class="cover-sys-clf"{% if report.system.classification_color %} style="color:{{ report.system.classification_color }};border-color:{{ report.system.classification_color }};"{% endif %}
+              title="System classification">{{ report.system.classification }}</span>{% endif %}
+    </div>
+    <div class="brief-meta">
+        {% if show_baselines %}{{ 'All baselines' if report.all_baselines else 'Selected baselines' }}: {{ report.baselines | map(attribute='name') | join(' · ') }}<br/>{% endif %}
+        Generated: {{ report.generated_at }}{% if report.rules_synced %} · Rules last synced: {{ report.rules_synced }}{% endif %}
+    </div>
+</div>
+
+<div class="section-banner avoid-break" id="sec-posture">
+    <div class="section-banner-title">Risk Posture</div>
+    <div class="section-banner-sub">Where {{ report.system.name }} stands today</div>
+</div>
+
+<div class="summary-grid summary-grid--4 avoid-break">
+    {% for k in b.kpis %}
+    <div class="stat-card kpi">
+        <span class="stat-value {{ k.tone }}">{{ k.value }}</span>
+        <span class="stat-label">{{ k.label }}</span>
+        <span class="stat-sub">{{ k.sub }}</span>
+    </div>
+    {% endfor %}
+</div>
+
+{% if report.coverage_undefined %}
+<div class="callout avoid-break">No SIEM coverage destinations are set for this system, so coverage is not scored. Set them on the system page (SIEM coverage) to measure it.</div>
+{% endif %}
+
+<div class="exec-narrative brief-summary">
+    {% for sentence in b.summary %}<p>{{ sentence }}</p>{% endfor %}
+</div>
+
+{% if show_baselines %}{% include "report/system_report_trend.html" %}{% endif %}
+
+{% if show_baselines %}
+<!-- ══════════════════════════════════════════════════════
+     PAGE 2 — THREAT EXPOSURE AND THE ROADMAP
+     ══════════════════════════════════════════════════════ -->
+<div class="page-break"></div>
+<div class="section-banner avoid-break" id="sec-exposure">
+    <div class="section-banner-title">Threat Exposure</div>
+    <div class="section-banner-sub">Each threat baseline, and coverage along the ATT&amp;CK kill chain</div>
+</div>
+
+{% include "report/system_report_baselines.html" %}
+
+{% if b.tactics %}
+{# One line per tactic, so the whole kill chain fits beside the baselines: Effective only (the
+   headline figure), its statuses on one line. #}
+<div class="sub-heading">Kill-chain coverage</div>
+<table class="cols">
+    <colgroup><col class="w-24"/><col class="w-16"/><col/><col class="w-16"/></colgroup>
+    <thead><tr><th>Tactic</th><th>Techniques</th><th>By status</th><th>Effective</th></tr></thead>
+    <tbody>
+        {% for r in b.tactics %}
+        {%- set ep = r.effective_pct -%}
+        <tr>
+            <td style="font-weight:600;color:var(--text);">{{ r.tactic }}</td>
+            <td>{{ r.total }}</td>
+            <td class="status-badges">
+                {% if r.covered %}<span class="badge badge-green">{{ r.covered }} covered</span>{% endif %}
+                {% if r.none %}<span class="badge badge-red">{{ r.none }} no coverage</span>{% endif %}
+                {% if r.gap %}<span class="badge badge-amber">{{ r.gap }} known gap{{ 's' if r.gap != 1 }}</span>{% endif %}
+                {% if r.na %}<span class="badge badge-grey">{{ r.na }} N/A</span>{% endif %}
+            </td>
+            <td>{% if report.coverage_undefined or ep is none %}<span class="muted">—</span>{% else %}<span class="badge {% if ep >= 80 %}badge-green{% elif ep >= 40 %}badge-amber{% else %}badge-red{% endif %}">{{ ep }}%</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+
+<div class="section-banner avoid-break" id="sec-roadmap">
+    <div class="section-banner-title">Remediation Roadmap</div>
+    <div class="section-banner-sub">Quick wins first (operational blockers, no new engineering), then the detections to build</div>
+</div>
+
+{% if b.roadmap %}
+<table class="cols avoid-break">
+    <colgroup><col class="w-6"/><col/><col class="w-16"/><col class="w-25"/></colgroup>
+    <thead><tr><th>#</th><th>Action</th><th>Effort</th><th>Impact</th></tr></thead>
+    <tbody>
+        {% for a in b.roadmap %}
+        <tr>
+            <td class="num">{{ loop.index }}</td>
+            <td><div class="action-title">{{ a.title }}</div><div class="action-detail">{{ a.detail }}</div></td>
+            <td><span class="badge effort-{{ a.kind }}">{{ 'Quick win' if a.kind == 'quick' else 'Engineering' }}</span></td>
+            <td>{{ a.impact }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<div class="status-line">Nothing to remediate: every technique is covered by rules that work, or accepted with a reason that isn't due for review.</div>
+{% endif %}
+{% endif %}{# show_baselines #}
+
+{% if show_devices %}
+<!-- ══════════════════════════════════════════════════════
+     DEVICE AND VULNERABILITY POSTURE
+     ══════════════════════════════════════════════════════ -->
+<div class="section-banner avoid-break" id="sec-devices">
+    <div class="section-banner-title">Device &amp; Vulnerability Posture</div>
+    <div class="section-banner-sub">Known exploited vulnerabilities on {{ report.system.name }}'s devices</div>
+</div>
+{% if report.total_hosts %}
+<div class="summary-grid summary-grid--5 avoid-break">
+    <div class="stat-card"><span class="stat-value plain">{{ report.total_hosts }}</span><span class="stat-label">Devices</span></div>
+    <div class="stat-card"><span class="stat-value success">{{ report.green_hosts }}</span><span class="stat-label">Clean</span></div>
+    <div class="stat-card"><span class="stat-value {{ 'danger' if report.red_hosts else 'plain' }}">{{ report.red_hosts }}</span><span class="stat-label">At risk</span></div>
+    <div class="stat-card"><span class="stat-value {{ 'warning' if report.amber_hosts else 'plain' }}">{{ report.amber_hosts }}</span><span class="stat-label">Monitored</span></div>
+    <div class="stat-card"><span class="stat-value {{ 'danger' if report.total_cves else 'success' }}">{{ report.total_cves }}</span><span class="stat-label">Unique CVEs</span></div>
+</div>
+{% endif %}
+{% if not report.total_cves %}
+<div class="status-line">{% if report.total_hosts %}No known exploited vulnerability matched on {{ report.system.name }}'s {{ report.total_hosts }} device{{ 's' if report.total_hosts != 1 }}: {{ 'all are' if report.total_hosts != 1 else 'it is' }} clean.{% else %}No devices are recorded on {{ report.system.name }}.{% endif %}</div>
+{% elif report.top5_cves %}
+<table class="cols">
+    <colgroup><col class="w-18"/><col/><col class="w-14"/><col class="w-14"/><col class="w-16"/></colgroup>
+    <thead><tr><th>CVE</th><th>Vulnerability</th><th>At risk</th><th>Monitored</th><th>Ransomware</th></tr></thead>
+    <tbody>
+        {% for cve in report.top5_cves %}
+        <tr>
+            <td style="font-weight:600;white-space:nowrap;">{{ cve.cve_id }}</td>
+            <td>{{ cve.vulnerability_name | truncate(70, end='…') }}</td>
+            <td><span class="badge badge-red">{{ cve.hosts_red | length }}</span></td>
+            <td><span class="badge badge-amber">{{ cve.hosts_amber | length }}</span></td>
+            <td>{% if cve.known_ransomware %}<span class="badge badge-red">Yes</span>{% else %}No{% endif %}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+{% endif %}
+
+{% if report.wazuh %}
+{%- set w = report.wazuh -%}
+<div class="{{ 'callout callout-danger' if w.kev else ('callout' if w.vulnerabilities else 'status-line') }}">
+    Wazuh reports {{ w.vulnerabilities }} finding{{ 's' if w.vulnerabilities != 1 }}{% if w.vulnerabilities %} ({% for s, n in w.by_severity.items() %}{{ n }} {{ s | lower }}{{ ', ' if not loop.last }}{% endfor %}){% endif %}
+    on {{ w.affected }} of the system's {{ w.devices }} Wazuh device{{ 's' if w.devices != 1 }}{% if w.kev %}, {{ w.kev }} of them known exploited{% endif %}.
+</div>
+{% endif %}
+
+<div class="report-footer">
+    Report generated by TIDE — Threat Informed Detection Engine · {{ report.generated_at }} · {{ report.classification or 'Official' }} — {{ report.system.name }}
+</div>
+
+</body>
+</html>

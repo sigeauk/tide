@@ -23,7 +23,7 @@
 {% macro open_attrs(f) -%}
 data-rule-open data-rule-dom-id="{{ rule_dom_id(f) }}" role="button" tabindex="0" aria-label="Open rule: {{ f.name }}"
 hx-get="/api/rules/{{ f.rule_id | urlencode }}/history-modal?space={{ f.space | urlencode }}&amp;siem_id={{ f.siem_id | urlencode }}"
-hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset" hx-trigger="click, keyup[key=='Enter']"
+hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset" hx-trigger="tide-open" data-opens
 {%- endmacro %}
 
 {# The rules (or whole destinations) one cause affects. #}
@@ -213,7 +213,7 @@ hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset" hx-trigger="
     <span class="rmon-actions__issues">
         {% for gi in node.gitlab_issues %}
         <a name="GitLab Issue" href="{{ gi.web_url }}" target="_blank" rel="noopener"
-           class="badge {{ 'badge-success' if gi.state == 'opened' else 'badge-grey' }} badge--xs"
+           class="badge {{ 'badge-gitlab' if gi.state == 'opened' else 'badge-grey' }} badge--xs"
            title="{{ gi.title }}: raised {{ gi.created_at.strftime('%Y-%m-%d') }} by {{ gi.created_by }}{% if gi.assignee %}, assigned to {{ gi.assignee_name or gi.assignee }}{% endif %}">{{ icon('gitlab', '11') }} {{ gi.project }}#{{ gi.iid }}{{ '' if gi.state == 'opened' else ' (closed)' if gi.state == 'closed' else ' (gone)' }}</a>
         {% endfor %}
     </span>

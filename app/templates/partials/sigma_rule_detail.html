@@ -131,25 +131,25 @@
     </div>
     {% endif %}
     {% if v.falsepositives %}
-    <details class="rm-fold lib-detail__fold">
+    <details data-fold="false-positives" class="rm-fold lib-detail__fold">
         <summary>False positives<span class="rm-fold__count">{{ v.falsepositives | length }}</span></summary>
         <ul class="rm-prose">{% for fp in v.falsepositives %}<li>{{ fp }}</li>{% endfor %}</ul>
     </details>
     {% endif %}
     {% if v.references %}
-    <details class="rm-fold lib-detail__fold">
+    <details data-fold="references" class="rm-fold lib-detail__fold">
         <summary>References<span class="rm-fold__count">{{ v.references | length }}</span></summary>
         <ul class="rm-links">{% for ref in v.references %}<li><a href="{{ ref }}" target="_blank" rel="noopener noreferrer">{{ icon('external-link', '12') }} {{ ref }}</a></li>{% endfor %}</ul>
     </details>
     {% endif %}
     {% if v.tags %}
-    <details class="rm-fold lib-detail__fold">
+    <details data-fold="tags" class="rm-fold lib-detail__fold">
         <summary>Tags<span class="rm-fold__count">{{ v.tags | length }}</span></summary>
         <div class="rm-chips lib-detail__fold-body">{% for tag in v.tags %}<span class="rm-chip">{{ tag }}</span>{% endfor %}</div>
     </details>
     {% endif %}
     {% if source %}
-    <details class="rm-fold lib-detail__fold">
+    <details data-fold="source" class="rm-fold lib-detail__fold">
         <summary>Source</summary>
         {% if file_path %}<p class="lib-detail__path" title="Where it is in the SigmaHQ repository">{{ file_path }}</p>{% endif %}
         <pre class="query-display rm-query lib-detail__source">{{ source | highlight_source('yaml') }}</pre>

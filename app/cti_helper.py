@@ -234,6 +234,8 @@ def process_mitre_knowledge(bundle_data, source_name="unknown"):
             "campaign_techniques": pd.DataFrame(),
             "campaign_software": pd.DataFrame(),
             "campaign_groups": pd.DataFrame(),
+            "technique_revisions": pd.DataFrame(),
+            **{key: pd.DataFrame() for key in DETECTION_KEYS},
         }
 
     domain = str(source_name or "unknown").strip().lower()
@@ -246,13 +248,25 @@ def process_mitre_knowledge(bundle_data, source_name="unknown"):
     mitigations_by_stix = {}
     software_by_stix = {}
     campaigns_by_stix = {}
+    strategies_by_stix = {}
+    analytics_by_stix = {}
+    components_by_stix = {}
     relationships = []
+    # Every technique id, revoked ones included, and which technique revoked each: ATT&CK renumbers
+    # techniques between releases (T1562.001 became T1685), and rules written for an older release
+    # still carry the old ids.
+    technique_id_by_stix = {}
+    revoked_by = []
 
     for obj in objects:
         obj_type = obj.get("type")
         obj_id = obj.get("id")
         if not obj_id:
             continue
+        if obj_type == "attack-pattern":
+            technique_id_by_stix[obj_id] = _mitre_external_id(obj, "T")
+        elif obj_type == "relationship" and (obj.get("relationship_type") or "").strip().lower() == "revoked-by":
+            revoked_by.append((obj.get("source_ref"), obj.get("target_ref")))
         if obj.get("revoked") is True or obj.get("x_mitre_deprecated") is True:
             continue
 
@@ -344,6 +358,25 @@ def process_mitre_knowledge(bundle_data, source_name="unknown"):
                     "domain": domain,
                     "url": f"/mitre/campaigns/{campaign_id}",
                 }
+
+        elif obj_type == "x-mitre-detection-strategy":
+            strategy_id = _mitre_external_id(obj, "DET")
+            if strategy_id:
+                strategies_by_stix[obj_id] = {"stix_id": obj_id, "strategy_id": strategy_id,
+                                              "name": obj.get("name") or strategy_id, "domain": domain,
+                                              "analytic_refs": obj.get("x_mitre_analytic_refs") or []}
+
+        elif obj_type == "x-mitre-analytic":
+            analytic_id = _mitre_external_id(obj, "AN")
+            if analytic_id:
+                analytics_by_stix[obj_id] = {"analytic_id": analytic_id, "obj": obj}
+
+        elif obj_type == "x-mitre-data-component":
+            component_id = _mitre_external_id(obj, "DC")
+            if component_id:
+                components_by_stix[obj_id] = {"stix_id": obj_id, "component_id": component_id,
+                                              "name": obj.get("name") or component_id,
+                                              "description": obj.get("description") or "", "domain": domain}
 
         elif obj_type == "relationship":
             relationships.append(obj)
@@ -463,6 +496,15 @@ def process_mitre_knowledge(bundle_data, source_name="unknown"):
                 "description": rel_desc,
             })
 
+    detection = _detection_rows(domain, strategies_by_stix, analytics_by_stix, components_by_stix,
+                                techniques_by_stix, relationships)
+
+    technique_revisions = []
+    for old_ref, new_ref in revoked_by:
+        old_id, new_id = technique_id_by_stix.get(old_ref), technique_id_by_stix.get(new_ref)
+        if old_id and new_id and old_id != new_id:
+            technique_revisions.append({"old_id": old_id.upper(), "new_id": new_id.upper(), "domain": domain})
+
     techniques_rows = []
     for technique in techniques_by_stix.values():
         tactics = technique.get("kill_chain_phases") or []
@@ -494,6 +536,59 @@ def process_mitre_knowledge(bundle_data, source_name="unknown"):
         "campaign_software": pd.DataFrame(campaign_software),
         "campaign_groups": pd.DataFrame(campaign_groups),
         "group_associations": pd.DataFrame(group_associations),
+        "technique_revisions": pd.DataFrame(technique_revisions),
+        **{key: pd.DataFrame(rows) for key, rows in detection.items()},
+    }
+
+
+# ATT&CK's detection data (spec 3.3): each technique has a detection strategy, made of analytics, one
+# per platform, each naming the log sources it reads (a data component's, and the channel: an event
+# code or what to look for) and what to tune. The keys are process_mitre_knowledge's.
+DETECTION_KEYS = ("detection_strategies", "strategy_techniques", "analytics", "analytic_log_sources",
+                  "analytic_tuning", "data_components")
+
+
+def _detection_rows(domain, strategies, analytics, components, techniques, relationships):
+    """Rows for DETECTION_KEYS from the live strategies, analytics and data components of one bundle."""
+    strategy_techniques = [
+        {"strategy_id": strategies[r["source_ref"]]["strategy_id"],
+         "technique_id": techniques[r["target_ref"]]["technique_id"], "domain": domain}
+        for r in relationships
+        if (r.get("relationship_type") or "").strip().lower() == "detects"
+        and r.get("source_ref") in strategies and r.get("target_ref") in techniques
+    ]
+    analytic_rows = []
+    for s in strategies.values():
+        for position, ref in enumerate(s["analytic_refs"]):
+            a = analytics.get(ref)
+            if a:
+                analytic_rows.append({
+                    "strategy_id": s["strategy_id"], "analytic_id": a["analytic_id"], "position": position,
+                    "platforms": ", ".join(a["obj"].get("x_mitre_platforms") or []),
+                    "description": a["obj"].get("description") or "", "domain": domain,
+                })
+    log_sources, tuning = [], []
+    for a in analytics.values():
+        for position, ref in enumerate(a["obj"].get("x_mitre_log_source_references") or []):
+            component = components.get(ref.get("x_mitre_data_component_ref")) or {}
+            log_sources.append({
+                "analytic_id": a["analytic_id"], "position": position, "log_source": ref.get("name") or "",
+                "channel": ref.get("channel") or "", "component_id": component.get("component_id") or "",
+                "domain": domain,
+            })
+        for position, element in enumerate(a["obj"].get("x_mitre_mutable_elements") or []):
+            tuning.append({
+                "analytic_id": a["analytic_id"], "position": position, "field": element.get("field") or "",
+                "description": element.get("description") or "", "domain": domain,
+            })
+    return {
+        "detection_strategies": [{k: s[k] for k in ("stix_id", "strategy_id", "name", "domain")}
+                                 for s in strategies.values()],
+        "strategy_techniques": strategy_techniques,
+        "analytics": analytic_rows,
+        "analytic_log_sources": log_sources,
+        "analytic_tuning": tuning,
+        "data_components": list(components.values()),
     }
 
 def get_threat_landscape(api_url, api_token, *, verify):

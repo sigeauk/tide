@@ -1,0 +1,40 @@
+{# Partial: host_wazuh_vulnerabilities.html -- a Wazuh device's vulnerabilities, as Wazuh found them
+   (app.services.wazuh_assets.host_vulnerabilities): Known exploited first, then by severity and CVSS,
+   each with the package, what fixes it and when it was first seen; a CVE in CISA's KEV catalogue links to
+   its page. Context: wazuh_vulns (list), wazuh_agent ({status, last_seen, agent_id, by_severity, total,
+   kev}), wazuh_alerts ({total, days}). #}
+{% from "macros/icons.html" import icon %}
+{% from "macros/modal.html" import empty_state %}
+<div class="min-w-0 mb-md">
+    <div class="flex items-center justify-between mb-ms">
+        <h2 class="section-title fs-title">{{ icon('shield-alert', '18') }} Vulnerabilities{% if wazuh_vulns %} <span class="rm-fold__count">{{ wazuh_vulns | length }}</span>{% endif %}</h2>
+        {% if wazuh_agent %}
+        <span class="text-muted fs-sm">Wazuh agent {{ wazuh_agent.agent_id }} ·
+            <span class="status-pill status-{{ 'success' if wazuh_agent.status == 'active' else 'muted' }}"><span class="status-dot"></span>{{ wazuh_agent.status | capitalize or 'Unknown' }}</span>
+            {% if wazuh_alerts %} · {{ '{:,}'.format(wazuh_alerts.total) }} alert{{ 's' if wazuh_alerts.total != 1 }} in {{ wazuh_alerts.days }} days{% endif %}</span>
+        {% endif %}
+    </div>
+    <div class="card card-padded-sm">
+    {% if wazuh_vulns %}
+    <table class="rules-table host-vuln-table">
+        <thead><tr><th>CVE</th><th>Severity</th><th>CVSS</th><th>Package</th><th>Fixed by</th><th>First seen</th></tr></thead>
+        <tbody>
+        {% for v in wazuh_vulns %}
+        <tr>
+            <td class="mono">{% if v.kev %}<a href="/cve/{{ v.cve_id }}" title="In CISA's Known Exploited Vulnerabilities catalogue: open its page">{{ v.cve_id }}</a> <span class="badge badge-danger badge--xs">Known exploited</span>{% else %}<span title="{{ v.description or '' }}">{{ v.cve_id }}</span>{% endif %}</td>
+            <td><span class="status-pill status-{{ {'Critical': 'danger', 'High': 'danger', 'Medium': 'warning', 'Low': 'muted'}.get(v.severity, 'muted') }}">{{ v.severity or '-' }}</span></td>
+            <td>{{ v.cvss if v.cvss is not none else '-' }}</td>
+            <td class="mono" title="{{ v.package }} {{ v.version or '' }}">{{ v.package }} {{ v.version or '' }}</td>
+            <td class="text-muted fs-sm">{{ v.condition or '-' }}</td>
+            <td class="text-muted fs-sm" title="Wazuh detected it {{ v.detected_at.strftime('%Y-%m-%d') if v.detected_at else '' }}">{{ v.first_seen.strftime('%Y-%m-%d') if v.first_seen else '-' }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    {% call empty_state('shield-check') %}
+        <p>Wazuh finds no vulnerability on this device{% if wazuh_agent and wazuh_agent.last_seen %}, as of the last sync{% endif %}.</p>
+    {% endcall %}
+    {% endif %}
+    </div>
+</div>

@@ -319,8 +319,8 @@ def get_threat_metrics(
     concurrent sync degrades to an empty render instead of 500-ing the
     HTMX swap (which would leave the dashboard tile broken until reload).
     """
-    from app.main import get_last_sync_time
     from app.models.threats import ThreatLandscapeMetrics
+    from app.services import rule_issues
     try:
         metrics = db.get_threat_landscape_metrics(client_id=client_id)
     except Exception:
@@ -333,7 +333,7 @@ def get_threat_metrics(
     templates = request.app.state.templates
     return templates.TemplateResponse(
         request, "partials/threat_metrics.html",
-        {"metrics": metrics, "last_sync_time": get_last_sync_time()}
+        {"metrics": metrics, "last_sync": rule_issues.freshness(db, client_id)}
     )
 
 

@@ -1,23 +1,36 @@
 {% from "macros/metrics.html" import metric_card, metric_change, metric_change_tip, metric_flow, metric_flow_tip %}
-{% set keys = metric_keys | default(none) %}{% set link = metric_link | default(none) %}
+{# Rule Health shows four cards; a Dashboard section passes the ones it chose, any of the six (dashboards.SOURCES). #}
+{% set keys = metric_keys | default(['enabled', 'validated', 'quality', 'last_synced']) %}{% set link = metric_link | default(none) %}
 {# A Dashboard section comparing with an earlier day passes each card's change, and Validated's
    validations and lapses (flows); the page passes neither. #}
 {% set changes = changes | default({}) %}{% set flows = flows | default({}) %}
-{% from "macros/icons.html" import icon, icon_text %}
 <!-- Metrics Row Partial - swappable via HTMX -->
 
-{# Compact cards: a one-line summary on the face, full detail in the hover/focus tip (.metric-tip). #}
+{# Compact cards: a figure, its label and a line of figures on the face; what each counts in the hover/focus tip (.metric-tip). #}
 
-{# ── 1. Total Rules ── #}
 {% set has_states = (metrics.state_linked + metrics.state_deprecated + metrics.state_offline) > 0 %}
 {% set scopes = metrics.rules_by_scope.items() | list %}
 {% set scope_labels = scope_labels | default({}) %}
+{# The rules' states and where they are: Total rules' tip, and Enabled's, which stands for it on the page. #}
+{% macro rules_tip() %}
+    {% if has_states %}
+    <div class="metric-tip__row"><b>Linked</b> Has another rule in its Linked panel <span>{{ metrics.state_linked }}</span></div>
+    <div class="metric-tip__row"><b>Deprecated</b> Not found in the SIEM at the last successful sync <span>{{ metrics.state_deprecated }}</span></div>
+    {% if metrics.state_offline %}<div class="metric-tip__row"><b>SIEM offline</b> Its SIEM could not be reached before the last sync <span>{{ metrics.state_offline }}</span></div>{% endif %}
+    {% endif %}
+    {% if scopes %}
+    <div class="metric-tip__head">Rules per SIEM</div>
+    {% for key, count in scopes %}<div class="metric-tip__row">{{ scope_labels.get(key, key.split('|')[-1] | capitalize) }} <span>{{ count }}</span></div>{% endfor %}
+    {% endif %}
+{% endmacro %}
+
+{# ── Total rules (a Dashboard's; the page shows it on Enabled) ── #}
 {% call metric_card('total', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value">{{ metrics.total_rules }}</p>
-    <p class="metric-label">Total Rules</p>
+    <p class="metric-label">Total rules</p>
     <p class="metric-sub">
         {% if has_states %}
-            <span>Linked:{{ metrics.state_linked }}</span> <span>Deprecated:{{ metrics.state_deprecated }}</span>{% if metrics.state_offline %} <span>SIEM offline:{{ metrics.state_offline }}</span>{% endif %}
+            {{ metrics.state_linked }} linked · {{ metrics.state_deprecated }} deprecated{% if metrics.state_offline %} · {{ metrics.state_offline }} SIEM offline{% endif %}
         {% elif scopes %}
             {% for key, count in scopes[:3] %}<span class="block">{{ scope_labels.get(key, key.split('|')[-1] | capitalize) }}: {{ count }}</span>{% endfor %}
         {% else %}
@@ -26,85 +39,67 @@
     </p>
     {{ metric_change(changes.total) }}
     <div class="metric-tip" role="tooltip">
-        {% if has_states %}
-        <div class="metric-tip__row"><b>Linked</b> Has another rule in its Linked panel <span>{{ metrics.state_linked }}</span></div>
-        <div class="metric-tip__row"><b>Deprecated</b> Not found in the SIEM at the last successful sync <span>{{ metrics.state_deprecated }}</span></div>
-        {% if metrics.state_offline %}<div class="metric-tip__row"><b>SIEM offline</b> Its SIEM could not be reached before the last sync <span>{{ metrics.state_offline }}</span></div>{% endif %}
-        {% endif %}
-        {% if scopes %}
-        <div class="metric-tip__head">Rules per SIEM</div>
-        {% for key, count in scopes %}<div class="metric-tip__row">{{ scope_labels.get(key, key.split('|')[-1] | capitalize) }} <span>{{ count }}</span></div>{% endfor %}
-        {% endif %}
+        {{ rules_tip() }}
         {{ metric_change_tip(changes.total) }}
     </div>
 {% endcall %}
 
-{# ── 2. Enabled (a tip only for its change, on a Dashboard) ── #}
-{% call metric_card('enabled', keys, link, 'metric-card--tip' if changes.enabled else '', tip=changes.enabled is defined) %}
+{# ── Enabled, of all the rules ── #}
+{% call metric_card('enabled', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value success">{{ metrics.enabled_rules }}</p>
     <p class="metric-label">Enabled</p>
-    <p class="metric-sub">{{ metrics.disabled_rules }} disabled</p>
+    <p class="metric-sub">of {{ metrics.total_rules }} rule{{ '' if metrics.total_rules == 1 else 's' }}</p>
     {{ metric_change(changes.enabled) }}
-    {% if changes.enabled %}<div class="metric-tip" role="tooltip">{{ metric_change_tip(changes.enabled) }}</div>{% endif %}
+    <div class="metric-tip" role="tooltip">
+        <div class="metric-tip__head">Enabled rules, of every rule the filters show: {{ metrics.disabled_rules }} {{ 'is' if metrics.disabled_rules == 1 else 'are' }} disabled</div>
+        {{ rules_tip() }}
+        {{ metric_change_tip(changes.enabled) }}
+    </div>
 {% endcall %}
 
-{# ── 3. Validated ── #}
+{# ── Validated ── #}
 {% call metric_card('validated', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value success">{{ metrics.validated_count }}</p>
     <p class="metric-label">Validated</p>
-    <p class="metric-sub">
-        <span class="text-warning">D:{{ metrics.validation_amber_count }}</span> <span class="text-danger">E:{{ metrics.validation_expired_count }}</span> <span>N:{{ metrics.never_validated_count }}</span>
-    </p>
+    <p class="metric-sub">{{ metrics.validation_amber_count }} due soon · {{ metrics.validation_expired_count }} expired · {{ metrics.never_validated_count }} never</p>
     {% if flows.validated %}{{ metric_flow(flows.validated, 'validated', 'lapsed', up_good=true) }}
     {% else %}{{ metric_change(changes.validated) }}{% endif %}
     <div class="metric-tip" role="tooltip">
-        <div class="metric-tip__row"><b class="text-success">V</b> Validated: currently in policy <span>{{ metrics.validated_count }}</span></div>
-        <div class="metric-tip__row"><b class="text-warning">D</b> Due soon: validation expiring shortly <span>{{ metrics.validation_amber_count }}</span></div>
-        <div class="metric-tip__row"><b class="text-danger">E</b> Expired: validation has lapsed, no longer validated <span>{{ metrics.validation_expired_count }}</span></div>
-        <div class="metric-tip__row"><b>N</b> Never validated <span>{{ metrics.never_validated_count }}</span></div>
+        <div class="metric-tip__row"><b>Validated</b> In policy now <span>{{ metrics.validated_count }}</span></div>
+        <div class="metric-tip__row"><b>Due soon</b> Validation expiring shortly <span>{{ metrics.validation_amber_count }}</span></div>
+        <div class="metric-tip__row"><b>Expired</b> Validation has lapsed, no longer validated <span>{{ metrics.validation_expired_count }}</span></div>
+        <div class="metric-tip__row"><b>Never</b> Never validated <span>{{ metrics.never_validated_count }}</span></div>
         {{ metric_flow_tip(flows.validated, 'Validated, re-validations included,', 'Lapsed, past their period,', 'validated', 'lapsed') }}
         {{ metric_change_tip(changes.validated) }}
     </div>
 {% endcall %}
 
-{# ── 4. Quality (bracket breakdown) ── #}
+{# ── Avg quality, by score bracket ── #}
 {% call metric_card('quality', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value">{{ metrics.avg_score }}</p>
-    <p class="metric-label">Avg Quality</p>
-    <p class="metric-sub">
-        <span class="text-success">H:{{ metrics.quality_excellent }}</span>
-        <span class="text-info">M:{{ metrics.quality_good }}</span>
-        <span class="text-sev-medium">L:{{ metrics.quality_fair }}</span>
-        <span class="text-danger">C:{{ metrics.quality_poor }}</span>
-    </p>
+    <p class="metric-label">Avg quality</p>
+    <p class="metric-sub">{{ metrics.quality_excellent }} high · {{ metrics.quality_good }} medium</p>
+    <p class="metric-sub">{{ metrics.quality_fair }} low · {{ metrics.quality_poor }} critical</p>
     {{ metric_change(changes.quality) }}
     <div class="metric-tip" role="tooltip">
-        <div class="metric-tip__row"><b class="text-success">H</b> High: score 80+ <span>{{ metrics.quality_excellent }}</span></div>
-        <div class="metric-tip__row"><b class="text-info">M</b> Medium: 70-79 <span>{{ metrics.quality_good }}</span></div>
-        <div class="metric-tip__row"><b class="text-sev-medium">L</b> Low: 50-69 <span>{{ metrics.quality_fair }}</span></div>
-        <div class="metric-tip__row"><b class="text-danger">C</b> Critical: below 50 <span>{{ metrics.quality_poor }}</span></div>
+        <div class="metric-tip__row"><b>High</b> Score 80 or more <span>{{ metrics.quality_excellent }}</span></div>
+        <div class="metric-tip__row"><b>Medium</b> 70 to 79 <span>{{ metrics.quality_good }}</span></div>
+        <div class="metric-tip__row"><b>Low</b> 50 to 69 <span>{{ metrics.quality_fair }}</span></div>
+        <div class="metric-tip__row"><b>Critical</b> Below 50 <span>{{ metrics.quality_poor }}</span></div>
         {{ metric_change_tip(changes.quality) }}
     </div>
 {% endcall %}
 
-{# ── 5. Severity ── #}
+{# ── Severity (a Dashboard's; the page's Severity filter has the split) ── #}
 {% set sev = metrics.severity_breakdown %}
 {% call metric_card('severity', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value">{{ metrics.total_rules }}</p>
     <p class="metric-label">Severity</p>
-    <p class="metric-sub">
-        {% if sev.get('critical', 0) > 0 %}<span class="text-danger">C:{{ sev.get('critical', 0) }}</span> {% endif %}
-        {% if sev.get('high', 0) > 0 %}<span class="text-warning">H:{{ sev.get('high', 0) }}</span> {% endif %}
-        {% if sev.get('medium', 0) > 0 %}<span class="text-sev-medium">M:{{ sev.get('medium', 0) }}</span> {% endif %}
-        {% if sev.get('low', 0) > 0 %}<span class="text-success">L:{{ sev.get('low', 0) }}</span>{% endif %}
-    </p>
+    <p class="metric-sub">{% for s in ('critical', 'high', 'medium', 'low') if sev.get(s, 0) > 0 %}{{ sev.get(s, 0) }} {{ s }}{{ ' · ' if not loop.last }}{% endfor %}</p>
     <div class="metric-tip" role="tooltip">
-        <div class="metric-tip__row"><b class="text-danger">C</b> Critical <span>{{ sev.get('critical', 0) }}</span></div>
-        <div class="metric-tip__row"><b class="text-warning">H</b> High <span>{{ sev.get('high', 0) }}</span></div>
-        <div class="metric-tip__row"><b class="text-sev-medium">M</b> Medium <span>{{ sev.get('medium', 0) }}</span></div>
-        <div class="metric-tip__row"><b class="text-success">L</b> Low <span>{{ sev.get('low', 0) }}</span></div>
+        {% for s in ('critical', 'high', 'medium', 'low') %}<div class="metric-tip__row"><b>{{ s | capitalize }}</b> <span>{{ sev.get(s, 0) }}</span></div>{% endfor %}
     </div>
 {% endcall %}
 
-{# ── 6. Last Synced (as Rule Monitoring's: rule_issues.freshness) ── #}
+{# ── Last synced (as Rule Monitoring's: rule_issues.freshness) ── #}
 {% include "partials/last_synced_card.html" %}

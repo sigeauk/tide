@@ -28,7 +28,7 @@
                placeholder="Technique, description, ATT&amp;CK id…" autocomplete="off">
     </div>
 
-    {% set baseline_opts = [('', 'All baselines')] %}
+    {% set baseline_opts = [('', 'Any')] %}
     {% for b in baselines %}{% set _ = baseline_opts.append((b.id, b.name)) %}{% endfor %}
     {{ filter_choice('sys-baseline', 'baseline_id', 'Baseline', baseline_opts, f.baseline_id) }}
 

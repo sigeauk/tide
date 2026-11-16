@@ -49,7 +49,7 @@
             data-rule-open role="button" tabindex="0" aria-label="Open technique: {{ step.title }}"
             hx-get="{{ '/api/baselines/tactics/' ~ step.step_id if template else '/api/systems/' ~ system_id ~ '/steps/' ~ step.step_id }}"
             hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
-            hx-trigger="click, keyup[key=='Enter']">
+            hx-trigger="tide-open" data-opens>
             <td class="rt-name"><span class="rt-title" title="{{ step.title }}">{{ step.title }}</span></td>
             <td>{% for tid in (step.display_technique_ids | default([]))[:2] %}{{ mitre_pill(tid, neutral=true, clickable=true, size='sm') }}{% endfor %}{% if (step.display_technique_ids | default([])) | length > 2 %}<span class="text-muted"> +{{ (step.display_technique_ids | length) - 2 }}</span>{% endif %}</td>
             <td><span class="sys-tactic">{{ tactic_icon(step.tactic, "12") }} {{ step.tactic }}</span></td>
@@ -80,8 +80,10 @@
 </button>
 {%- endmacro %}
 
-{% macro group_block(g, level) -%}
-<details class="sys-group sys-group--{{ level }}" open>
+{# A group stays open or closed as this browser last left it (data-fold), named by where it is listed. #}
+{% macro group_block(g, level, trail='') -%}
+{% set fold = trail ~ '/' ~ g.kind ~ ':' ~ g.key %}
+<details class="sys-group sys-group--{{ level }}" data-fold="{{ fold }}" open>
     <summary class="sys-group__head">
         <span class="sys-group__chev">{{ icon('chevron-down', '14') }}</span>
         <span class="sys-group__label">{% if g.kind == 'tactic' %}{{ tactic_icon(g.label, '14') }} {% endif %}{{ g.label }}</span>
@@ -149,7 +151,7 @@
     </summary>
     <div class="sys-group__body">
         {% if g.groups %}
-            {% for sub in g.groups %}{{ group_block(sub, 'inner') }}{% endfor %}
+            {% for sub in g.groups %}{{ group_block(sub, 'inner', fold) }}{% endfor %}
         {% elif g.steps %}
             {{ items(g.steps) }}
         {% else %}
@@ -172,7 +174,7 @@
 
 {% if steps or groups %}
     {% if groups %}
-        {% for g in groups %}{{ group_block(g, 'outer') }}{% endfor %}
+        {% for g in groups %}{{ group_block(g, 'outer', system_id or 'templates') }}{% endfor %}
     {% else %}
         {{ items(steps) }}
     {% endif %}

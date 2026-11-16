@@ -5,17 +5,17 @@
 {% from "macros/menu.html" import more_button %}
 {% from "macros/icons.html" import icon %}
 
-{% block title %}{{ nist_capability.title }} - NIST 800-53 | TIDE{% endblock %}
+{% block title %}{{ nist_capability.title }} | NIST 800-53 | TIDE{% endblock %}
 
 {% block content %}
-{{ breadcrumb(items=[('Home', '/'), ('MITRE', '/mitre'), ('NIST', '/mitre/nist'), (nist_capability.group_code, nist_capability.group_url), (nist_capability.title, none)]) }}
+{{ breadcrumb(items=[('Home', '/'), ('MITRE', '/mitre'), ('NIST 800-53', '/mitre/nist'), (nist_capability.group_code, nist_capability.group_url), (nist_capability.title, none)]) }}
 
 {# As Rule Health (rule-browser-page): the header and figures stay put; the rest scrolls. #}
 <div class="rule-browser-page">
 <div class="page-header flex items-start justify-between gap-md">
     <div>
         <h1 class="page-title-hero">{{ nist_capability.group_code }} - {{ nist_capability.title }} {{ help_button('nist') }}</h1>
-        <p class="page-subtitle">Capability detail page with the ATT&CK techniques this control mitigates.</p>
+        <p class="page-subtitle">The ATT&amp;CK techniques this control mitigates.</p>
     </div>
     <div class="rh-more shrink-0" data-more>
         {{ more_button('More actions', title='Expand or collapse every section', attrs='name="NIST Actions"') }}
@@ -42,12 +42,12 @@
     <div class="md-content mt-sm">{{ (nist_capability.comments or 'No description available.') | md }}</div>
 </section>
 
-<div id="nist-capability-detail" data-collapse-scope="nist-capability-detail" class="mt-ms">
-<details class="card card-padded mt-md" data-collapse-key="nist-capability-{{ nist_capability.group_code }}-{{ nist_capability.slug }}-techniques">
+<div id="nist-capability-detail" data-fold-store="tide.nistFolds" class="mt-ms">
+<details class="card card-padded mt-md" data-fold="capability-{{ nist_capability.group_code }}-{{ nist_capability.slug }}-techniques">
     <summary class="section-title cursor-pointer">Techniques <span class="rm-fold__count">{{ nist_capability.techniques | length }}</span></summary>
     <div class="cve-list mt-ms">
         {% for technique in nist_capability.techniques %}
-        <details class="cve-card-item cve-card-item--available block" data-collapse-key="nist-capability-technique-{{ technique.id }}">
+        <details class="cve-card-item cve-card-item--available block" data-fold="capability-technique-{{ technique.id }}">
             <summary class="list-none cursor-pointer flex items-start gap-ms">
                 {% set tid = (technique.id or '') | upper %}
                 <div class="cve-card-item__id cve-card-item__id--pill">{{ mitre_pill(tid, covered=(tid in covered_ttps), rule_count=ttp_rule_counts.get(tid, 0), clickable=true, size='sm') }}</div>

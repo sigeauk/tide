@@ -4,7 +4,7 @@
   theme, and (with Settings access) your API keys. Context: user, account (your users row), sso (realm).
 #}
 {% from "macros/icons.html" import icon %}
-{% block title %}Profile & Preferences - TIDE{% endblock %}
+{% block title %}Profile & Preferences | Settings | TIDE{% endblock %}
 {% block settings_subtitle %}Your profile, how you sign in, how TIDE looks, and your API keys.{% endblock %}
 
 {% block settings_tab_content %}
@@ -42,18 +42,18 @@
             <summary class="cursor-pointer fw-600">Change email or password</summary>
             <div class="preferences-grid preferences-grid--two">
                 <div class="overview-section m-0">
-                    <h4 class="mt-0 mr-0 mb-ms ml-0 text-primary">Update Email</h4>
+                    <h4 class="mt-0 mr-0 mb-ms ml-0 text-primary">Update email</h4>
                     <form name="Submit Email" hx-post="/api/settings/profile/email" hx-swap="none" class="profile-form">
                         <input type="email" name="email" class="form-input" required
                                value="{{ user.email or '' }}" placeholder="name@example.com">
                         <div>
-                            <button name="Save Email" type="submit" class="btn btn-primary btn-sm">Save Email</button>
+                            <button name="Save Email" type="submit" class="btn btn-primary btn-sm">Save email</button>
                         </div>
                     </form>
                 </div>
 
                 <div class="overview-section m-0">
-                    <h4 class="mt-0 mr-0 mb-ms ml-0 text-primary">Change Password</h4>
+                    <h4 class="mt-0 mr-0 mb-ms ml-0 text-primary">Change password</h4>
                     <form name="Submit Password" hx-post="/api/settings/profile/password" hx-swap="none" class="profile-form">
                         <input type="password" name="current_password" class="form-input" required minlength="8"
                                placeholder="Current password" autocomplete="current-password">
@@ -62,7 +62,7 @@
                         <input type="password" name="confirm_password" class="form-input" required minlength="8"
                                placeholder="Confirm new password" autocomplete="new-password">
                         <div>
-                            <button name="Update Password" type="submit" class="btn btn-primary btn-sm">Update Password</button>
+                            <button name="Update Password" type="submit" class="btn btn-primary btn-sm">Update password</button>
                         </div>
                     </form>
                 </div>
@@ -113,7 +113,7 @@
             <svg class="preference-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4"/>
             </svg>
-            <h3>API Key Management</h3>
+            <h3>API key management</h3>
         </div>
         <p class="preference-desc">Manage API keys for the external query endpoint (<code>/api/external/query</code>). Keys authenticate external applications to run read-only SQL queries against TIDE data.</p>
 
@@ -177,10 +177,10 @@
 
         <!-- Create key form -->
         <form name="Submit Keys" hx-post="/api/settings/api-keys" hx-target="#api-key-section" hx-swap="innerHTML"
-              hx-on::after-request="if(event.detail.successful){this.reset();}"
+              data-done-reset="success"
               class="flex gap-sm items-center my-md mx-0 flex-wrap">
             <input type="text" name="api_key_label" class="form-input api-key-label-input" placeholder="Key label (e.g. SIEM integration)" required>
-            <button name="Create Key" type="submit" class="btn btn-primary btn-sm">{{ icon('plus','14') }} Create Key</button>
+            <button name="Create Key" type="submit" class="btn btn-primary btn-sm">{{ icon('plus','14') }} Create key</button>
         </form>
 
         <!-- Key list (HTMX loaded) -->

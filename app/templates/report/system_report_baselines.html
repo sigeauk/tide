@@ -1,0 +1,35 @@
+{# System report: each chosen baseline's techniques by status, coverage and effective coverage.
+   Included by the technical report and the executive briefing (system_report_ciso.html). Its
+   statuses share one column, so the figures' headers fit at the report tables' size. #}
+<table class="cols">
+    <colgroup><col class="w-30"/><col class="w-16"/><col/><col class="w-16"/><col class="w-14"/></colgroup>
+    <thead>
+        <tr><th>Baseline</th><th>Techniques</th><th>By status</th><th>Coverage</th><th>Effective</th></tr>
+    </thead>
+    <tbody>
+        {% for bl in report.baselines %}
+        {%- set p = bl.coverage_pct -%}
+        {%- set bt = bl.totals -%}
+        <tr>
+            <td><strong style="color:var(--text);">{{ bl.name }}</strong>
+                {% if bl.description %}<div class="muted" style="font-size:6.5pt;">{{ bl.description }}</div>{% endif %}
+                {% if bl.applied_at %}<div class="muted" style="font-size:6pt;">Applied {{ bl.applied_at.strftime('%Y-%m-%d') }}</div>{% endif %}</td>
+            <td>{{ bt.total }}</td>
+            <td class="status-badges">
+                <span class="badge badge-green">{{ bt.covered }} covered</span>
+                <span class="badge badge-red">{{ bt.none }} no coverage</span>
+                <span class="badge badge-amber">{{ bt.gap }} known gap{{ 's' if bt.gap != 1 }}</span>
+                <span class="badge badge-grey">{{ bt.na }} N/A</span>
+            </td>
+            <td>
+                {% if report.coverage_undefined %}<span class="muted">not scored</span>{% else %}
+                <span class="badge {% if p >= 80 %}badge-green{% elif p >= 40 %}badge-amber{% else %}badge-red{% endif %}">{{ p }}%</span>
+                <div class="coverage-bar"><div class="fill {% if p >= 80 %}good{% elif p >= 40 %}warn{% else %}bad{% endif %}" style="width:{{ p }}%"></div></div>
+                {% endif %}
+            </td>
+            {%- set ep = bl.effective_pct %}
+            <td>{% if report.coverage_undefined %}<span class="muted">—</span>{% else %}<span class="badge {% if ep >= 80 %}badge-green{% elif ep >= 40 %}badge-amber{% else %}badge-red{% endif %}">{{ ep }}%</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>

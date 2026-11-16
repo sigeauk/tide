@@ -21,7 +21,9 @@
              ring, state, field check and validation) · Sigma rules (suggested from its ATT&CK ids,
              or searched; convert each) · Risks (priority and category; Update edits them), and,
              opened from Coverage's "…", Add coverage (rule, gap, N/A, dashboard, report, log).
-    right  : MITRE ATT&CK (Update edits the technique's ATT&CK ids in place).
+    right  : MITRE ATT&CK (Update edits the technique's ATT&CK ids in place) · How to detect (ATT&CK's
+             detection strategies for those techniques, this system's platforms first:
+             components/attack_detection.html; context detection, detection_platforms).
   The header ring is the strongest counted rule's own score (app/scoring.py), as on its card
   (window_ui.technique_ring); a technique no rule covers shows an empty ring in its status's
   colour. Rules beside known gaps are Partial coverage (#92): the ring shows that score in the
@@ -32,6 +34,7 @@
 {% from "macros/icons.html" import icon, tactic_icon %}
 {% from "components/mitre_pill.html" import mitre_pill %}
 {% from "components/mitre_ui.html" import technique_list %}
+{% from "components/attack_detection.html" import detect_section %}
 {% from "components/window_ui.html" import collapse_ctl, drag_ctl, not_effective_pill, remove_btn, rule_card, section_menu, sections_item, tag, technique_ring, window_menu %}
 {% from "macros/modal.html" import close_button %}
 {% from "macros/menu.html" import more_button %}
@@ -49,6 +52,7 @@
     'technique_added': 'Technique added', 'technique_edited': 'Technique edited', 'risks_edited': 'Risks edited',
     'sigma_dismissed': 'Sigma dismissed', 'sigma_restored': 'Sigma restored',
     'siem_coverage': 'SIEM coverage', 'siem_counted': 'SIEM coverage', 'siem_uncounted': 'SIEM coverage',
+    'hardening_added': 'Hardening check', 'hardening_removed': 'Hardening check removed',
 } %}
 {% set step_url = '/api/systems/' ~ system_id ~ '/steps/' ~ step.id %}
 {# Any number of known gaps, one N/A (#92). Each mark is updated or deleted from its own card. #}
@@ -130,11 +134,12 @@
               <option value="asc">Oldest</option>
             </select>
             <select id="history-action-filter" name="Action filter" aria-label="Filter by action">
-              <option value="">All</option>
+              <option value="">All actions</option>
               <option value="rules">Rules &amp; coverage</option>
               <option value="gaps">Gaps &amp; N/A</option>
               <option value="technique">Technique</option>
               <option value="coverage">SIEM coverage</option>
+              <option value="hardening">Hardening</option>
             </select>
             <select id="history-user-filter" name="User filter" aria-label="Filter by user">
               <option value="">All users</option>
@@ -279,6 +284,70 @@
 
         {% if detail.coverage_undefined %}
         <p class="rm-note rm-note--info">{{ icon('info', '13') }} This system has no SIEM coverage chosen yet, so this technique cannot be scored.</p>
+        {% endif %}
+
+        {# Hardening checks named on it (Wazuh SCA / CIS, D6): each with how the system's devices stand on it
+           now. Mitigation beside coverage, never counted in it. Shown while the system's devices have
+           hardening results (Add hardening check, in its menu, names one) or a check is named. The picker
+           lists the devices' checks that carry one of the technique's ATT&CK ids first; search finds the rest. #}
+        {% if not new and (detail.hardening or detail.has_hardening_source) %}
+        <div class="rm-panel" data-fold="tw-hardening" data-section="hardening" data-section-label="Hardening checks">
+          <div class="rm-panel__head">
+            {{ collapse_ctl('hardening checks') }}
+            <h3 class="rm-panel__title">Hardening checks {% if detail.hardening %}<span class="rm-fold__count">{{ detail.hardening | length }}</span>{% endif %}</h3>
+            {% if detail.has_hardening_source %}
+            {% call section_menu('Hardening checks') %}
+            <button name="Add Hardening Check" type="button" role="menuitem" class="rh-more__item" data-click="step.hardeningAdd"
+                    title="Name a check from Wazuh's CIS benchmarks that makes this technique harder">{{ icon('plus', '14') }}<span>Add hardening check</span></button>
+            {% endcall %}
+            {% else %}
+            {{ drag_ctl('Hardening checks') }}
+            {% endif %}
+          </div>
+          <p class="text-muted fs-sm">Checks from Wazuh's CIS benchmarks that make this technique harder, as the devices stand now. They don't count as coverage.</p>
+          {% if detail.has_hardening_source %}
+          <div id="sm-hardening-picker" class="sm-gapform" hidden>
+            <input type="text" id="sm-hardening-search" class="form-input" placeholder="Search checks by CIS id or title…" name="q"
+                   hx-get="{{ step_url }}/hardening-checks"
+                   hx-trigger="input changed delay:300ms, tideOpenPicker"
+                   hx-target="#sm-hardening-results" hx-swap="innerHTML">
+            <div id="sm-hardening-results" class="sm-picker__results">
+              {{ loading_state(inline=true) }}
+            </div>
+            <div class="sm-risks__actions">
+              <button name="Cancel Hardening Check" type="button" class="btn btn-secondary btn-sm" data-click="step.hardeningCancel">Cancel</button>
+            </div>
+          </div>
+          {% endif %}
+          {% if not detail.hardening %}
+          <p class="rm-empty">No hardening checks named yet. Add one from this section's menu.</p>
+          {% endif %}
+          <div class="rm-items">
+            {% for h in detail.hardening %}
+            {% set tone = 'success' if h.devices and h.passed == h.devices else ('danger' if h.failed else 'muted') %}
+            <div class="rm-item">
+              <div class="rm-item__main">
+                <div class="rm-item__name">{% if h.cis_ids %}<span class="mono">CIS {{ h.cis_ids | join(', ') }}</span> {% endif %}{{ h.title }}</div>
+                {% if h.note %}<p class="rm-item__text">{{ h.note }}</p>{% endif %}
+                <div class="rm-item__meta">
+                  <span class="status-pill status-{{ tone }}" title="Passed on {{ h.passed }}, failed on {{ h.failed }}, not applicable on {{ h.not_applicable }} of {{ h.devices }} device{{ 's' if h.devices != 1 }}">{% if h.devices %}Passed on {{ h.passed }} of {{ h.devices }} device{{ 's' if h.devices != 1 }}{% else %}Not on any device now{% endif %}</span>
+                  {{ tag(h.policy_id, title='Policy') }}
+                  {% if h.created_by %}{{ tag(h.created_by, title='Added by') }}{% endif %}
+                  {% if h.created_at %}<span class="text-muted">{{ h.created_at.strftime('%Y-%m-%d') }}</span>{% endif %}
+                </div>
+              </div>
+              <div class="rh-more" data-more>
+                {{ more_button('Actions for ' ~ h.title, title='Hardening check actions', attrs='name="Hardening Actions"') }}
+                <div class="rh-more__menu" role="menu" hidden>
+                  <button name="Remove Hardening" type="button" role="menuitem" class="rh-more__item rh-more__item--danger"
+                          hx-delete="{{ step_url }}/hardening/{{ h.id }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+                          hx-confirm="Remove this hardening check from this technique on this system?">{{ icon('trash-2', '14') }}<span>Remove</span></button>
+                </div>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
         {% endif %}
 
         {# The user's own description only: the tactic, baseline and ATT&CK ids are in the header
@@ -588,6 +657,8 @@
             {% endif %}
           </div>
         </div>
+
+        {{ detect_section(detection | default([]), detail.technique_ids, detection_platforms | default([]), on_system=true, new=new) }}
       </aside>
     </div>
   </div>

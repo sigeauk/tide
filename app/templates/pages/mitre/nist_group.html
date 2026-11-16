@@ -4,17 +4,17 @@
 {% from "macros/menu.html" import more_button %}
 {% from "macros/icons.html" import icon %}
 
-{% block title %}{{ nist_group.code }} - NIST 800-53 | TIDE{% endblock %}
+{% block title %}{{ nist_group.code }} | NIST 800-53 | TIDE{% endblock %}
 
 {% block content %}
-{{ breadcrumb(items=[('Home', '/'), ('MITRE', '/mitre'), ('NIST', '/mitre/nist'), (nist_group.code, none)]) }}
+{{ breadcrumb(items=[('Home', '/'), ('MITRE', '/mitre'), ('NIST 800-53', '/mitre/nist'), (nist_group.code, none)]) }}
 
 {# As Rule Health (rule-browser-page): the header and figures stay put; the rest scrolls. #}
 <div class="rule-browser-page">
 <div class="page-header flex items-start justify-between gap-md">
     <div>
         <h1 class="page-title-hero">{{ nist_group.code }} - {{ nist_group.name }} {{ help_button('nist') }}</h1>
-        <p class="page-subtitle">Capability descriptions under this control family, with the ATT&CK techniques they mitigate.</p>
+        <p class="page-subtitle">The controls in this family, and the ATT&amp;CK techniques each one mitigates.</p>
     </div>
     <div class="rh-more shrink-0" data-more>
         {{ more_button('More actions', title='Expand or collapse every section', attrs='name="NIST Actions"') }}
@@ -42,7 +42,7 @@
     <div class="md-content mt-sm">{{ (nist_group.description or 'Capability descriptions under this control family, with mapped ATT&CK techniques.') | md }}</div>
 </section>
 
-<div id="nist-capability-group-detail" data-collapse-scope="nist-capability-group-detail" class="mt-ms">
+<div id="nist-capability-group-detail" data-fold-store="tide.nistFolds" class="mt-ms">
     <form method="get" action="/mitre/nist/{{ nist_group.code }}" class="filters-bar mt-md">
         <div class="filter-group grow">
             <label class="form-label">Search capabilities</label>
@@ -54,11 +54,11 @@
     </form>
 
     <div id="nist-capabilities" class="mt-md">
-    <details class="card card-padded" data-collapse-key="nist-group-{{ nist_group.code }}-capabilities" open>
+    <details class="card card-padded" data-fold="group-{{ nist_group.code }}-capabilities" open>
         <summary class="section-title cursor-pointer">Capabilities <span class="rm-fold__count">{{ nist_group.capabilities | length }}</span></summary>
         <div class="cve-list mt-ms">
             {% for capability in nist_group.capabilities %}
-            <details class="cve-card-item cve-card-item--available block" data-collapse-key="nist-capability-{{ nist_group.code }}-{{ capability.slug }}">
+            <details class="cve-card-item cve-card-item--available block" data-fold="capability-{{ nist_group.code }}-{{ capability.slug }}">
                 <summary class="row-grid row-grid--top cursor-pointer">
                     <div class="cve-card-item__id">{{ capability.capability_id or capability.slug }}</div>
                     <div class="cve-card-item__body">

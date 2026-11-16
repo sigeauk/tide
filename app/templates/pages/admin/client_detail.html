@@ -5,6 +5,7 @@
 {% from "macros/help.html" import help_button with context %}
 {% from "components/ui/loading_state.html" import loading_state %}
 {% from "components/ui/breadcrumb.html" import breadcrumb %}
+{% from "components/window_ui.html" import section_head %}
 
 {% block title %}{{ client.name }} | Clients | TIDE{% endblock %}
 
@@ -41,13 +42,13 @@
 </div>
 
 <!-- Stats strip -->
-<div class="metrics-grid mb-lg">
+<div class="metrics-grid metrics-grid--6 mb-lg">
     <div class="metric-card">
         <div class="metric-label">{{ icon('server', '16') }} Linked SIEMs</div>
         <div class="metric-value">{{ client_siems | length }}</div>
     </div>
     <div class="metric-card">
-        <div class="metric-label">{{ icon('link', '16') }} CTI Connectors</div>
+        <div class="metric-label">{{ icon('link', '16') }} CTI connectors</div>
         <div class="metric-value">{{ client_connectors | length }}</div>
     </div>
     <div class="metric-card">
@@ -59,7 +60,7 @@
         <div class="metric-value">{{ client_baselines | length }}</div>
     </div>
     <div class="metric-card">
-        <div class="metric-label">{{ icon('users', '16') }} Assigned Users</div>
+        <div class="metric-label">{{ icon('users', '16') }} Assigned users</div>
         <div class="metric-value">{{ client_users | length }}</div>
     </div>
     <div class="metric-card">
@@ -68,54 +69,88 @@
     </div>
 </div>
 
-<!-- Linked SIEMs Section -->
-<div class="card card-padded card-mb" id="client-siems-card">
-    <div id="client-siems-section">
-        {% include "partials/client_siems.html" %}
-    </div>
+{# The client's parts in tabs, as Settings' Tenants & users has them (#108); ?tab= opens one, and
+   choosing one puts it in the address. Each tab's sections collapse as a system's page's do,
+   remembered per browser (data-fold, data-fold-store). Each section's content is a partial its
+   own forms re-render, its head with it. #}
+{% set tabs = [('integrations', 'link', 'Integrations'), ('users', 'users', 'Users'),
+               ('assets', 'monitor', 'Systems & baselines'), ('settings', 'settings', 'Rule settings')] %}
+{% set tab = active_tab if active_tab in ['integrations', 'users', 'assets', 'settings'] else 'integrations' %}
+<div class="settings-tabs settings-tabs--inline" role="tablist" aria-label="{{ client.name }}">
+    {% for key, ico, label in tabs %}
+    <button name="{{ label }}" type="button" role="tab" id="client-tab-btn-{{ key }}" class="settings-tab{% if key == tab %} active{% endif %}"
+            aria-selected="{{ 'true' if key == tab else 'false' }}" aria-controls="client-tab-{{ key }}"
+            data-click="clientDetail.tab" data-tab="{{ key }}">{{ icon(ico, '16') }} {{ label }}</button>
+    {% endfor %}
 </div>
 
-<!-- Linked CTI Connectors Section (the client's OpenCTI connectors, for Threat Landscape) -->
-<div class="card card-padded card-mb" id="client-connectors-card">
-    <div id="client-connectors-section">
-        {% include "partials/client_connectors.html" %}
-    </div>
+{% macro tab_panel(key) -%}
+<div id="client-tab-{{ key }}" role="tabpanel" aria-labelledby="client-tab-btn-{{ key }}" data-client-tab="{{ key }}"
+     data-fold-store="tide.clientPageFolds"{% if key != tab %} hidden{% endif %}>
+    {{ caller() }}
 </div>
+{%- endmacro %}
 
-<!-- GitLab Projects Section (rule backup and issues, app.services.gitlab) -->
-<div class="card card-padded card-mb" id="client-gitlab-card">
-    <div id="client-gitlab-section">
-        {% include "partials/client_gitlab.html" %}
+{% macro section(fold, label, section_id) -%}
+<section class="card card-padded card-mb sys-section" id="{{ section_id }}-card" data-fold="{{ fold }}" aria-label="{{ label }}">
+    <div id="{{ section_id }}-section">
+        {{ caller() }}
     </div>
-</div>
+</section>
+{%- endmacro %}
 
-<!-- Assigned Users Section -->
-<div class="card card-padded card-mb" id="client-users-card">
-    <div id="client-users-section">
-        {% include "partials/client_users.html" %}
-    </div>
-</div>
+{% call tab_panel('integrations') %}
+    {% call section('siems', 'Linked SIEMs', 'client-siems') %}{% include "partials/client_siems.html" %}{% endcall %}
+    {# The client's OpenCTI connectors, for Threat Landscape #}
+    {% call section('connectors', 'Linked CTI connectors', 'client-connectors') %}{% include "partials/client_connectors.html" %}{% endcall %}
+    {# Rule backup and issues (app.services.gitlab) #}
+    {% call section('gitlab', 'GitLab Projects', 'client-gitlab') %}{% include "partials/client_gitlab.html" %}{% endcall %}
+{% endcall %}
 
-<!-- Client Systems Section -->
-<div class="card card-padded card-mb" id="client-systems-card">
-    <div id="client-systems-section">
-        {% include "partials/client_systems.html" %}
-    </div>
-</div>
+{% call tab_panel('users') %}
+    {% call section('users', 'Assigned users', 'client-users') %}{% include "partials/client_users.html" %}{% endcall %}
+    {# Role Templates: what each role may read and change on this client (per tenant) #}
+    <section class="card card-padded card-mb sys-section" id="client-role-templates-card" data-fold="role-templates" aria-label="Role Templates">
+        {{ section_head('Role Templates', 'lock') }}
+        <div class="sys-section__body">
+            <p class="text-secondary text-sm mt-0 mb-ms">
+                Read / write capabilities for each role <strong>in {{ client.name }}</strong>.
+                Changes apply only to this tenant; users assigned the same role in another
+                client will continue to use that client's template. ADMIN always has full access.
+            </p>
+            <div name="Open Permissions" id="client-role-templates"
+                 hx-get="/api/management/clients/{{ client.id }}/permissions"
+                 hx-trigger="load"
+                 hx-swap="innerHTML">
+                {{ loading_state("Loading role templates…") }}
+            </div>
+        </div>
+    </section>
+{% endcall %}
 
-<!-- Client Baselines Section -->
-<div class="card card-padded card-mb" id="client-baselines-card">
-    <div id="client-baselines-section">
-        {% include "partials/client_baselines.html" %}
-    </div>
-</div>
+{% call tab_panel('assets') %}
+    {% call section('systems', 'Systems', 'client-systems') %}{% include "partials/client_systems.html" %}{% endcall %}
+    {% call section('baselines', 'Baselines', 'client-baselines') %}{% include "partials/client_baselines.html" %}{% endcall %}
+{% endcall %}
+
+{% call tab_panel('settings') %}
+    {% call section('validation', 'Validation', 'client-validation') %}{% include "partials/client_validation.html" %}{% endcall %}
+    {% call section('monitoring', 'Rule Monitoring', 'client-monitoring') %}{% include "partials/client_monitoring.html" %}{% endcall %}
+    {# Rule scoring: loaded on demand (partials/client_scoring.html replaces #client-scoring, head and all) #}
+    <section class="card card-padded card-mb sys-section" id="client-scoring-card" data-fold="scoring" aria-label="Rule scoring">
+        <div id="client-scoring" hx-get="/api/management/clients/{{ client.id }}/scoring" hx-trigger="load" hx-swap="outerHTML">
+            {{ section_head('Rule scoring', 'bar-chart-2') }}
+            <div class="sys-section__body">{{ loading_state("Loading rule scoring…", inline=true) }}</div>
+        </div>
+    </section>
+{% endcall %}
 
 <!-- Edit Systems Modal -->
 <div name="Edit Systems Modal" id="edit-systems-modal" class="modal-overlay" style="display:none;"
      data-click="backdrop.hide">
     <div class="modal-content modal-md">
         <div class="modal-header">
-            <h3 class="modal-title">Manage Systems — {{ client.name }}</h3>
+            <h3 class="modal-title">Manage systems — {{ client.name }}</h3>
             {{ close_button('name="Close Modal"
                     data-click="el.hide" data-target="edit-systems-modal"') }}
         </div>
@@ -153,7 +188,7 @@
             <form name="Submit Systems" hx-post="/api/management/clients/{{ client.id }}/systems"
                   hx-target="#client-systems-section" hx-swap="innerHTML"
                   class="stack gap-ms"
-                  hx-on::before-request="if(event.detail.elt===this) document.getElementById('edit-systems-modal').style.display='none'">
+                  data-request-hides="edit-systems-modal">
                 <label class="form-label">Add system</label>
                 <select name="system_id" class="form-input" required>
                     <option value="" disabled selected>Select a system&hellip;</option>
@@ -161,7 +196,7 @@
                     <option value="{{ sys.id }}">{{ sys.name }}{% if sys.classification %} ({{ sys.classification }}){% endif %}</option>
                     {% endfor %}
                 </select>
-                <button name="Add System" type="submit" class="btn btn-primary btn-sm">{{ icon('plus', '14') }} Add System</button>
+                <button name="Add System" type="submit" class="btn btn-primary btn-sm">{{ icon('plus', '14') }} Add system</button>
             </form>
             {% endif %}
             <!-- Move from another client -->
@@ -170,7 +205,7 @@
             <form name="Submit Move From" hx-post="/api/management/clients/{{ client.id }}/move-from"
                   hx-target="#client-systems-section" hx-swap="innerHTML"
                   class="stack gap-ms"
-                  hx-on::before-request="if(event.detail.elt===this) document.getElementById('edit-systems-modal').style.display='none'">
+                  data-request-hides="edit-systems-modal">
                 <label class="form-label">Move from another client</label>
                 <select name="source_client_id" class="form-input" required
                         hx-get="/api/management/clients/{{ client.id }}/move-from/systems"
@@ -184,7 +219,7 @@
                 <select name="system_id" id="edit-move-from-system-select" class="form-input" required>
                     <option value="" disabled selected>Select a source client first&hellip;</option>
                 </select>
-                <button name="Move Here" type="submit" class="btn btn-primary btn-sm">{{ icon('arrow-right-left', '14') }} Move Here</button>
+                <button name="Move Here" type="submit" class="btn btn-primary btn-sm">{{ icon('arrow-right-left', '14') }} Move here</button>
             </form>
             {% endif %}
             <div class="modal-actions">
@@ -200,14 +235,14 @@
      data-click="backdrop.hide">
     <div class="modal-content modal-md">
         <div class="modal-header">
-            <h3 class="modal-title">Move System to Another Client</h3>
+            <h3 class="modal-title">Move system to another client</h3>
             {{ close_button('name="Close Modal"
                     data-click="el.hide" data-target="move-system-modal"') }}
         </div>
         <form name="Submit Move System" hx-post="/api/management/clients/{{ client.id }}/move-system"
               hx-target="#client-systems-section" hx-swap="innerHTML"
               class="stack gap-md"
-              hx-on::before-request="if(event.detail.elt===this) document.getElementById('move-system-modal').style.display='none'">
+              data-request-hides="move-system-modal">
             <input type="hidden" name="system_id" id="move-system-id">
             <div>
                 <p class="fs-base m-0 mb-sm">
@@ -232,7 +267,7 @@
             <div class="modal-actions">
                 <button name="Cancel" type="button" class="btn btn-secondary"
                         data-click="el.hide" data-target="move-system-modal">Cancel</button>
-                <button name="Move System" type="submit" class="btn btn-primary">{{ icon('arrow-right-left', '14') }} Move System</button>
+                <button name="Move System" type="submit" class="btn btn-primary">{{ icon('arrow-right-left', '14') }} Move system</button>
             </div>
         </form>
     </div>
@@ -243,7 +278,7 @@
      data-click="backdrop.hide">
     <div class="modal-content modal-md">
         <div class="modal-header">
-            <h3 class="modal-title">Manage Baselines — {{ client.name }}</h3>
+            <h3 class="modal-title">Manage baselines — {{ client.name }}</h3>
             {{ close_button('name="Close Modal"
                     data-click="el.hide" data-target="edit-baselines-modal"') }}
         </div>
@@ -274,7 +309,7 @@
             <form name="Submit Baselines" hx-post="/api/management/clients/{{ client.id }}/baselines"
                   hx-target="#client-baselines-section" hx-swap="innerHTML"
                   class="stack gap-ms"
-                  hx-on::before-request="if(event.detail.elt===this) document.getElementById('edit-baselines-modal').style.display='none'">
+                  data-request-hides="edit-baselines-modal">
                 <label class="form-label">Add baseline</label>
                 <select name="baseline_id" class="form-input" required>
                     <option value="" disabled selected>Select a baseline&hellip;</option>
@@ -282,7 +317,7 @@
                     <option value="{{ bl.id }}">{{ bl.name }}</option>
                     {% endfor %}
                 </select>
-                <button name="Add Baseline" type="submit" class="btn btn-primary btn-sm">{{ icon('plus', '14') }} Add Baseline</button>
+                <button name="Add Baseline" type="submit" class="btn btn-primary btn-sm">{{ icon('plus', '14') }} Add baseline</button>
             </form>
             {% endif %}
             <!-- Clone from another client -->
@@ -291,7 +326,7 @@
             <form name="Submit Clone Baseline" hx-post="/api/management/clients/{{ client.id }}/clone-baseline"
                   hx-target="#client-baselines-section" hx-swap="innerHTML"
                   class="stack gap-ms"
-                  hx-on::before-request="if(event.detail.elt===this) document.getElementById('edit-baselines-modal').style.display='none'">
+                  data-request-hides="edit-baselines-modal">
                 <label class="form-label">Clone from another client</label>
                 <select name="source_client_id" class="form-input" required
                         hx-get="/api/management/clients/{{ client.id }}/clone-baseline/baselines"
@@ -305,7 +340,7 @@
                 <select name="baseline_id" id="edit-clone-baseline-select" class="form-input" required>
                     <option value="" disabled selected>Select a source client first&hellip;</option>
                 </select>
-                <button name="Clone Baseline" type="submit" class="btn btn-primary btn-sm">{{ icon('copy', '14') }} Clone Baseline</button>
+                <button name="Clone Baseline" type="submit" class="btn btn-primary btn-sm">{{ icon('copy', '14') }} Clone baseline</button>
             </form>
             {% endif %}
             <div class="modal-actions">
@@ -321,7 +356,7 @@
      data-click="backdrop.hide">
     <div class="modal-content modal-md">
         <div class="modal-header">
-            <h3 class="modal-title">Edit Client</h3>
+            <h3 class="modal-title">Edit client</h3>
             {{ close_button('name="Close Modal"
                     data-click="el.hide" data-target="edit-client-modal"') }}
         </div>
@@ -347,31 +382,6 @@
                 <button name="Save" type="submit" class="btn btn-primary">Save</button>
             </div>
         </form>
-    </div>
-</div>
-
-<!-- Role Templates (per-tenant permissions matrix) -->
-<div class="card card-padded card-mb" id="client-role-templates-card">
-    <div  name="Role Templates Per-tenant" class="client-section-toggle"
-         data-click="section.toggle" data-body="role-templates-body" data-chev="role-templates-chev">
-        <span class="client-list-item__icon">{% from "macros/icons.html" import icon %}{{ icon('lock', '14') }}</span>
-        <h2 class="client-section-toggle__title">Role Templates</h2>
-        <span class="badge badge-neutral badge--xs">Per-tenant</span>
-        <span id="role-templates-chev" class="client-section-toggle__chevron"
-              style="transform:rotate(0deg);">{{ icon('chevron-right', '16') }}</span>
-    </div>
-    <div id="role-templates-body" style="display:none;">
-        <p class="text-secondary text-sm mt-sm mb-ms">
-            Read / write capabilities for each role <strong>in {{ client.name }}</strong>.
-            Changes apply only to this tenant; users assigned the same role in another
-            client will continue to use that client's template. ADMIN always has full access.
-        </p>
-        <div name="Open Permissions" id="client-role-templates"
-             hx-get="/api/management/clients/{{ client.id }}/permissions"
-             hx-trigger="load"
-             hx-swap="innerHTML">
-            {{ loading_state("Loading role templates…") }}
-        </div>
     </div>
 </div>
 

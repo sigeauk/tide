@@ -13,7 +13,7 @@
 #}
 {% from "macros/icons.html" import icon %}
 {% from "macros/modal.html" import empty_state %}
-{% block title %}{{ doc_page.title if doc_page else 'Documentation' }} - TIDE{% endblock %}
+{% block title %}{% if active_page == 'changelog' %}Changelog{% else %}{% if doc_page %}{{ doc_page.title }} | {% endif %}Documentation{% endif %} | Settings | TIDE{% endblock %}
 {% block settings_subtitle %}{% if doc_nav is not none %}The TIDE guide for version {{ env.tide_version }}: using TIDE, engineering detections, and installing and running it.{% else %}Every change in TIDE {{ env.tide_version.split('.')[0] }}, newest release first.{% endif %}{% endblock %}
 
 {# A page's sections (h2), each folding its subsections (h3); remembered per page. #}
@@ -22,7 +22,7 @@
     {% for h in doc.contents %}
     <li class="docs-toc__item">
         {% if h.children %}
-        <details class="docs-toc__group" data-remember="docs-toc-{{ page_key }}-{{ h.id }}">
+        <details class="docs-toc__group" data-fold="toc-{{ page_key }}-{{ h.id }}">
             <summary><a href="#{{ h.id }}">{{ h.name }}</a>{{ icon('chevron-down', '14', 'docs-toc__chev') }}</summary>
             <ul class="docs-toc__list docs-toc__sub">
                 {% for c in h.children %}
@@ -43,7 +43,7 @@
 {# The Changelog: its contents beside it, as before. #}
 {% if doc %}
 <div class="docs-layout">
-    <details class="docs-toc" open data-remember="docs-contents">
+    <details class="docs-toc" open data-fold="contents">
         <summary class="docs-toc__title">Contents {{ icon('chevron-down', '14', 'docs-toc__chev') }}</summary>
         <nav aria-label="Contents">{{ sections(doc, 'changelog') }}</nav>
     </details>
@@ -65,7 +65,7 @@
            {% if not doc_slug %}aria-current="page"{% endif %}>{{ icon('book-open', '14') }} Start here</a>
         {% for g in doc_nav %}
         {% set holds_current = doc_page and doc_page.group == g.key %}
-        <details class="docs-nav__group" open {% if not holds_current %}data-remember="docs-group-{{ g.key }}"{% endif %}>
+        <details class="docs-nav__group" open {% if not holds_current %}data-fold="group-{{ g.key }}"{% endif %}>
             <summary class="docs-nav__heading">{{ icon(g.icon, '15') }}<span>{{ g.title }}</span>{{ icon('chevron-down', '14', 'docs-toc__chev') }}</summary>
             <ul class="docs-toc__list docs-nav__pages">
                 {% for p in g.pages %}

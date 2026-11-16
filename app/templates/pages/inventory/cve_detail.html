@@ -2,7 +2,7 @@
 {% from "macros/icons.html" import icon %}
 {% from "components/mitre_pill.html" import mitre_pill %}
 
-{% block title %}{{ cve.cve_id }} — TIDE{% endblock %}
+{% block title %}{{ cve.cve_id }} | CVE Overview | TIDE{% endblock %}
 
 {% from "components/ui/breadcrumb.html" import breadcrumb %}
 {% from "macros/modal.html" import close_button %}
@@ -88,11 +88,11 @@
     <!-- Dual-column: MITRE Techniques (left) + Detection Rules (right) -->
     <div class="cve-detail-split">
         <div class="card card-padded">
-            <h2 class="section-title">{{ icon('crosshair','16') }} MITRE ATT&amp;CK Techniques</h2>
+            <h2 class="section-title">{{ icon('crosshair','16') }} MITRE ATT&amp;CK techniques</h2>
             {% include "partials/cve_mitre_section.html" %}
         </div>
         <div class="card card-padded">
-            <h2 class="section-title">{{ icon('shield-check','16') }} Detection Rules</h2>
+            <h2 class="section-title">{{ icon('shield-check','16') }} Detection rules</h2>
             {% include "partials/cve_detection_badge.html" %}
         </div>
     </div>
@@ -111,7 +111,7 @@
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">
-                Export CVE Audit Report
+                Export CVE audit report
             </h3>
             {{ close_button('name="Close Export Modal" data-click="cvePage.exportClose"') }}
         </div>

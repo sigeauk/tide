@@ -243,12 +243,12 @@ def rule_window(rule_id, siem_id, space) -> dict:
 def _tactic_meta(label: str) -> Optional[dict]:
     """The ATT&CK name, id and reference of the tactic a picker group is labelled with, for a
     rule's threat entry; None if it isn't a tactic."""
-    from app.attack_tactics import ID_BY_NAME, tactic_name
+    from app.attack_tactics import ID_BY_NAME, tactic_name, tactic_url
     name = tactic_name(label)
     if not name:
         return None
     tid = ID_BY_NAME[name]
-    return {"name": name, "id": tid, "reference": f"/mitre/tactic?id={tid}"}
+    return {"name": name, "id": tid, "reference": tactic_url(tid)}
 
 
 def _parse_scope_pair(scope_pair: str) -> tuple[str, str]:
@@ -319,35 +319,20 @@ def _extract_prefill(raw_prefill: Optional[str]) -> dict:
 
 
 def _build_threat_entries(mitre_ids: list[str], technique_lookup: dict[str, dict]) -> list[dict]:
-    tactic_map: dict[str, dict] = {}
+    """The rule's ``threat`` for the techniques picked: each under its tactic, with ATT&CK's own
+    links, a sub-technique nested under its technique, as Kibana and Elastic write them."""
+    from app.attack_tactics import technique_entries
+    by_tactic: dict[str, tuple[dict, list[str]]] = {}
     for technique_id in mitre_ids:
         option = technique_lookup.get(technique_id.upper())
-        if not option:
-            continue
-        tactic_meta = _tactic_meta(option["tactic"])
-        if not tactic_meta:
-            continue
-        tactic = tactic_meta["name"]
-        bucket = tactic_map.setdefault(
-            tactic,
-            {
-                "framework": "MITRE ATT&CK",
-                "tactic": {
-                    "id": tactic_meta["id"],
-                    "name": tactic,
-                    "reference": tactic_meta["reference"],
-                },
-                "technique": [],
-            },
-        )
-        technique_entry = {
-            "id": option["id"],
-            "name": option["name"],
-        }
-        if option.get("url"):
-            technique_entry["reference"] = option["url"]
-        bucket["technique"].append(technique_entry)
-    return list(tactic_map.values())
+        tactic_meta = _tactic_meta(option["tactic"]) if option else None
+        if tactic_meta:
+            by_tactic.setdefault(tactic_meta["name"], (tactic_meta, []))[1].append(option["id"])
+    name_of = lambda tid: (technique_lookup.get(tid) or {}).get("name")  # noqa: E731
+    return [{"framework": "MITRE ATT&CK",
+             "tactic": {"id": meta["id"], "name": meta["name"], "reference": meta["reference"]},
+             "technique": technique_entries(ids, name_of)}
+            for meta, ids in by_tactic.values()]
 
 
 def _rule_form_values(rule, username: str = "", prefill: Optional[dict] = None) -> dict:
@@ -467,7 +452,8 @@ def _data_view_values(raw: dict) -> dict:
 def _build_rule_form_context(db, client_id: str, username: str, form_action: str, submit_label: str,
                              title: str, rule=None, scope_locked: bool = False,
                              prefill: Optional[dict] = None) -> dict:
-    siems = db.get_client_siems(client_id) or []
+    from app.services.siem_kinds import elastic_only
+    siems = elastic_only(db.get_client_siems(client_id))
     technique_groups, technique_lookup = _build_technique_groups(db)
     scope_options = [
         {
@@ -1851,7 +1837,7 @@ async def retry_rule_sync(request: Request, run_id: str, db: DbDep, user: Requir
 @router.get("/sync/last", response_class=HTMLResponse)
 def last_rule_sync(request: Request, user: RequireUser, client_id: ActiveClient):
     """Rule Health's notice when this client's last rule sync failed, partly finished or was
-    interrupted: why, and Retry. Empty when it went fine (the Last Synced card says when)."""
+    interrupted: why, and Retry. Empty when it went fine (the Last synced card says when)."""
     from app.services import sync_runs
     return request.app.state.templates.TemplateResponse(
         request, "partials/rules/last_sync.html", {"run": sync_runs.last_rule_sync(client_id)})
@@ -1922,8 +1908,8 @@ async def get_create_form(
                 client_id,
                 user.username,
                 "/api/rules/create",
-                "Create Rule",
-                "Create Rule",
+                "Create rule",
+                "Create rule",
                 prefill=_extract_prefill(prefill),
             ),
         )
@@ -1975,6 +1961,12 @@ async def create_rule(
         )
         if not siem:
             return _form_error("Could not find the SIEM details for that destination.", 404)
+        # Elastic's own validator (#7): a query it can't parse isn't written to Kibana, when the client says so.
+        from app.services import elastic_validator
+        problems = await run_in_threadpool(elastic_validator.check_rule, db, siem, rule_data)
+        stopped, note = elastic_validator.verdict(problems, elastic_validator.stops(db, client_id), "create the rule")
+        if stopped:
+            return _form_error(stopped)
 
         success, message, new_rule_id = await run_in_threadpool(elastic_helper.create_detection_rule,
             rule_data,
@@ -2006,7 +1998,9 @@ async def create_rule(
 
         # Sync so the new rule shows up. Rule Health shows the sync's progress; from anywhere else
         # (a technique window's Sigma Convert) the sync just runs.
-        return HTMLResponse('<div hidden data-start-sync></div>')
+        headers = {"HX-Trigger": json.dumps({"showToast": {"message": f"Created {rule_name}.{note}", "type": "warning"}})} \
+            if note else None
+        return HTMLResponse('<div hidden data-start-sync></div>', headers=headers)
     except Exception as e:
         logger.exception("create_rule failed")
         return _form_error(f"Could not create the rule: {e}", 500)
@@ -2408,15 +2402,17 @@ def build_rule_card_context(db, client_id: str, rules) -> dict:
     # Whether the Elastic or Sigma rule each came from has a newer version (rule_origins).
     upstream = {f"{k[0]}|{k[1] or ''}|{k[2] or ''}": v
                 for k, v in db.upstream_statuses([(r.rule_id, r.siem_id, r.space) for r in rules]).items()}
-    # What Rule Monitoring found on each, as its card flags it (rule_issues.card_problems), and its
-    # alerts in the last 7 days, for the table's Alerts column (#68).
-    problems, alerts_7d = {}, {}
+    # What Rule Monitoring found on each, as its card flags it (rule_issues.card_problems), its
+    # alerts in the last 7 days, for the table's Alerts column (#68), and the open GitLab issues about
+    # it, raised for it or for a cause it has (#106; its window lists those closed lately too).
+    problems, alerts_7d, raised = {}, {}, {}
     try:
-        from app.services import rule_alerts, rule_issues
+        from app.services import gitlab_issues, rule_alerts, rule_issues
         keys = [(r.rule_id, r.siem_id, r.space) for r in rules if r.siem_id]
         with db.get_connection() as conn:
             found = rule_issues.rule_findings(conn, keys)
             alerts = rule_alerts.per_rule(conn, keys)
+            about = gitlab_issues.about_rules(conn, rule_issues.cause_keys(found, keys), open_only=True)
         for r in rules:
             lifecycle_key = f"{r.rule_id}|{r.siem_id or ''}|{r.space or ''}"
             flagged = rule_issues.card_problems(found.get((r.rule_id, r.siem_id, r.space), []), bool(r.enabled))
@@ -2424,6 +2420,8 @@ def build_rule_card_context(db, client_id: str, rules) -> dict:
                 problems[lifecycle_key] = flagged
             if alerts.get((r.rule_id, r.siem_id, r.space)):
                 alerts_7d[lifecycle_key] = alerts[(r.rule_id, r.siem_id, r.space)]
+            if about.get((r.rule_id, r.siem_id, r.space)):
+                raised[lifecycle_key] = about[(r.rule_id, r.siem_id, r.space)]
     except Exception:
         logger.warning("Could not read Rule Monitoring's findings for the rule cards", exc_info=True)
 
@@ -2436,6 +2434,7 @@ def build_rule_card_context(db, client_id: str, rules) -> dict:
         "upstream_states": upstream,
         "rule_problems": problems,
         "rule_alerts_7d": alerts_7d,
+        "rule_gitlab_issues": raised,
     }
 
 
@@ -2548,18 +2547,21 @@ def _modal_with_card_oob(request, db, client_id: str, rule, space: str, siem_id:
                          settings, **modal_flags) -> HTMLResponse:
     """Re-render the Rule modal and refresh the card (or table row) behind it out-of-band."""
     templates = request.app.state.templates
-    card_ctx = build_rule_card_context(db, client_id, [rule])
     modal_ctx = _build_rule_modal_context(db, client_id, rule, space, siem_id, **modal_flags)
     modal_html = templates.get_template("components/rule_modal.html").render({"request": request, **modal_ctx})
-    # The item behind the modal is a card, or a table row when the page is in table view
-    # (htmx sends the page URL, which carries ``view=table``).
+    return HTMLResponse(modal_html + card_oob_html(request, db, client_id, rule, settings))
+
+
+def card_oob_html(request, db, client_id: str, rule, settings) -> str:
+    """The rule's card, or its table row when the page is in table view (htmx sends the page URL, which
+    carries ``view=table``), to swap in out-of-band after something changed what it shows."""
+    templates = request.app.state.templates
+    card_ctx = build_rule_card_context(db, client_id, [rule])
     as_row = "view=table" in request.headers.get("HX-Current-URL", "")
     item_html = templates.get_template(
         "components/rule_row.html" if as_row else "components/rule_card.html"
     ).render({"request": request, "rule": rule, **card_ctx, "env": settings, "oob": True})
-    if as_row:
-        item_html = f"<template>{item_html}</template>"   # htmx: table rows need a <template> wrapper for OOB
-    return HTMLResponse(modal_html + item_html)
+    return f"<template>{item_html}</template>" if as_row else item_html   # htmx: rows need a <template> for OOB
 
 
 def _rule_covers(rule_id, siem_id, space, linked, client_id):
@@ -2587,9 +2589,11 @@ def _covers_problems(rule_id, siem_id, space, client_id) -> List[str]:
 
 def _build_rule_modal_context(
     db, client_id: str, rule, space: str, siem_id: Optional[str], just_validated: bool = False,
-    flash: str = "",
+    flash: str = "", user=None,
 ) -> dict:
-    """Everything the unified Rule modal needs: history, score chart, details, logic, links."""
+    """Everything the unified Rule modal needs: history, score chart, details, logic, links. ``user``
+    (when opened) decides ``can_fix``: Mute rule… and Unmute rule on its problems. Re-rendered after an
+    action (Validate, Sync, Mute), it is someone who could take that action, so may."""
     actual_siem = siem_id or getattr(rule, "siem_id", "") or ""
     history = db.get_rule_history(rule.rule_id, actual_siem, space, limit=100)
     score_history = db.get_rule_score_history(rule.rule_id, actual_siem, space, limit=50)
@@ -2628,17 +2632,20 @@ def _build_rule_modal_context(
     # Every other linked SIEM+space this client has -- the Move dialog's target picker. Any
     # destination but this rule's own current one. Only what the client-side dialog needs to
     # render and submit a choice -- never api_token_enc or other credential fields.
-    move_targets = [
+    from app.services.siem_kinds import elastic_only
+    # A Wazuh rule is read from Wazuh: it can't be moved, copied or linked to a Kibana rule.
+    wazuh_rule = rule.rule_type == "wazuh"
+    move_targets = [] if wazuh_rule else [
         {"siem_id": s.get("id"), "space": s.get("space"), "name": s.get("name") or s.get("label")}
-        for s in (db.get_client_siems(client_id) or [])
+        for s in elastic_only(db.get_client_siems(client_id))
         if not (s.get("id") == actual_siem and str(s.get("space") or "default").lower() == str(space).lower())
     ]
     # Add link's destinations: the others, then this rule's own (a duplicate beside it, to Compare and
     # Merge). Coverage gains nothing from a link within one destination (CLAUDE.md section 6).
     own = next(({"siem_id": s.get("id"), "space": s.get("space"), "name": s.get("name") or s.get("label")}
-                for s in (db.get_client_siems(client_id) or [])
+                for s in elastic_only(db.get_client_siems(client_id))
                 if s.get("id") == actual_siem and str(s.get("space") or "default").lower() == str(space).lower()), None)
-    link_targets = move_targets + ([own] if own else [])
+    link_targets = [] if wazuh_rule else move_targets + ([own] if own else [])
     from app.services import pending_actions, rule_origins
     key = (rule.rule_id, actual_siem, space)
     # Changes Kibana made but TIDE couldn't record (a new rule id, a move, a restore): Finish in TIDE.
@@ -2655,10 +2662,12 @@ def _build_rule_modal_context(
         from app.services.rule_updates import unconfirmed_links
         link_unconfirmed = (unconfirmed_links(conn, [key]).get(key) or {}).get("sections", []) if can_unlink else []
         unlinked_from = rule_origins.unlinked_name(conn, origin)
-        # What Rule Monitoring found on this rule, for its section of that name, and its alerts (#68).
-        from app.services import rule_alerts, rule_issues
+        # What Rule Monitoring found on this rule, for its section of that name, its alerts (#68), and
+        # the GitLab issues about it: raised for it, or for a cause it has (#106).
+        from app.services import gitlab_issues, rule_alerts, rule_issues
         monitoring = rule_issues.rule_findings(conn, [key]).get(key, [])
         alerts = rule_alerts.for_rule(conn, actual_siem, space, str((rule.raw_data or {}).get("id") or ""))
+        about_issues = gitlab_issues.about_rules(conn, rule_issues.cause_keys({key: monitoring}, [key])).get(key, [])
     # Custom rules Kibana held beside this one under the same rule id at the last sync (TIDE holds one).
     shared_copies = [c for c in db.shared_rule_id_copies(actual_siem, space, rule.rule_id)
                      if not c.get("prebuilt") and not any(e.get("copy_id") == c.get("id") for e in own_pending)]
@@ -2679,6 +2688,8 @@ def _build_rule_modal_context(
         "shared_copies": shared_copies,
         "pending_changes": [{**e, "text": pending_actions.describe(e)} for e in pending],
         "monitoring": monitoring,
+        "gitlab_issues": about_issues,
+        "can_fix": user is None or user.can_write("page:rules"),
         "alerts": alerts,
         "alert_chart": _build_alert_chart(alerts["per_day"]) if alerts and alerts["total"] else None,
         "search_chart": _search_chart_for(db, rule, actual_siem, space),
@@ -2705,10 +2716,49 @@ def _build_rule_modal_context(
         "kibana_rule_url": _kibana_rule_url(db, rule, client_id),
         "just_validated": just_validated,
         "flash": flash,
-        "mapping_info": _mapping_info(db, actual_siem, rule),
-        "index_patterns": _index_patterns(db, actual_siem, rule),
-        "last_run": _last_run(rule),
+        "mapping_info": None if wazuh_rule else _mapping_info(db, actual_siem, rule),
+        "index_patterns": [] if wazuh_rule else _index_patterns(db, actual_siem, rule),
+        "last_run": None if wazuh_rule else _last_run(rule),
+        "is_wazuh": wazuh_rule,
+        "wazuh": _wazuh_window(db, client_id, rule, actual_siem, space) if wazuh_rule else None,
     }
+
+
+def _wazuh_window(db, client_id: str, rule, siem_id: str, space: str) -> dict:
+    """A Wazuh rule's own sections (wazuh_sync.window_details), with the rules it follows that the
+    destination holds, so they open their windows."""
+    from app.services import wazuh_sync
+    details = wazuh_sync.window_details(rule.raw_data or {})
+    details["held"] = {pid for pid in details["parents"] + details["matched_parents"]
+                       if db.get_rule_by_id(pid, space, siem_id=siem_id, client_id=client_id)}
+    return details
+
+
+@router.get("/{rule_id}/wazuh-xml", response_class=HTMLResponse)
+def wazuh_rule_xml(
+    rule_id: str,
+    db: DbDep,
+    user: CurrentUser,
+    client_id: ActiveClient,
+    space: str = Query("default"),
+    siem_id: Optional[str] = Query(None),
+):
+    """A Wazuh rule's XML, read from its manager as the rule window opens: the rule's own element of
+    its file, highlighted as Rule logic shows a Kibana rule's query."""
+    from app.services import wazuh_sync
+    if not siem_id or (siem_id, space) not in set(db.get_client_siem_scopes(client_id) or []):
+        return HTMLResponse('<p class="rm-empty">Rule not found.</p>', status_code=404)
+    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
+    raw = (rule.raw_data or {}) if rule else {}
+    if raw.get("type") != "wazuh":
+        return HTMLResponse('<p class="rm-empty">Rule not found.</p>', status_code=404)
+    xml = wazuh_sync.rule_xml(db.get_siem_inventory_item(siem_id) or {}, raw)
+    if xml is None:
+        return HTMLResponse('<div class="alert alert-danger">Could not read the rule\'s XML: the Wazuh manager '
+                            'didn\'t answer.</div>')
+    from app.services.source_highlight import highlight
+    shown = wazuh_sync.rule_block(xml, rule_id) or xml
+    return HTMLResponse(f'<pre class="query-display rm-query" id="rm-wazuh-xml">{highlight(shown, "xml")}</pre>')
 
 
 @router.get("/{rule_id}/history-modal", response_class=HTMLResponse)
@@ -2728,7 +2778,7 @@ def get_rule_history_modal(
     return request.app.state.templates.TemplateResponse(
         request,
         "components/rule_modal.html",
-        _build_rule_modal_context(db, client_id, rule, space, siem_id),
+        _build_rule_modal_context(db, client_id, rule, space, siem_id, user=user),
     )
 
 
@@ -2912,7 +2962,7 @@ def get_rule_edit_form(
             user.username,
             f'/api/rules/{rule_id}/edit?space={space}'
             + (f'&siem_id={siem_id or getattr(rule, "siem_id", "")}' if (siem_id or getattr(rule, "siem_id", "")) else ""),
-            "Save Changes",
+            "Save changes",
             "Edit Rule",
             rule=rule,
             scope_locked=True,
@@ -2963,6 +3013,16 @@ async def edit_rule(
     cached = dict(rule.raw_data or {})
     rule_mitre = _canonicalize_id_list(getattr(rule, "mitre_ids", []) or [], uppercase=True)
     kibana_changes = {k: v for k, v in changes.items() if k != "mitre_ids"}   # Kibana takes "threat"
+    # Elastic's own validator (#7), when the edit changes what it checks: a query it can't parse isn't
+    # written, when the client says so.
+    from app.services import elastic_validator
+    note = ""
+    if elastic_validator.touches_query(changes):
+        after_edit = {k: v for k, v in {**cached, **kibana_changes}.items() if k not in removed}
+        problems = await run_in_threadpool(elastic_validator.check_rule, db, siem, after_edit)
+        stopped, note = elastic_validator.verdict(problems, elastic_validator.stops(db, client_id), "save the rule")
+        if stopped:
+            return _form_error(stopped)
     if rule.deprecated:
         # Kibana no longer has it: change TIDE's copy only.
         before = cached
@@ -3018,6 +3078,7 @@ async def edit_rule(
         )
     refreshed = db.get_rule_by_id(rule_id, space, siem_id=actual_siem_id, thresholds=thresholds, client_id=client_id) or rule
     flash = f"{update_message} Changed: {changed_fields}." if field_diffs else update_message
+    flash += note
     if status != 200:
         flash += f" Showing TIDE's copy from before the change: reloading it from Kibana failed ({sync_message})."
     return _modal_with_card_oob(request, db, client_id, refreshed, space, actual_siem_id, settings, flash=flash)
@@ -3045,6 +3106,17 @@ def sync_single_rule(db, client_id: str, rule_id: str, siem_id: Optional[str], s
         return 400, "Missing SIEM context.", ""
     if (siem_id, space) not in {(s, sp) for s, sp in (db.get_client_siem_scopes(client_id) or [])}:
         return 404, "SIEM not found.", ""
+    from app.services.siem_kinds import is_wazuh
+    if is_wazuh(db.get_siem_inventory_item(siem_id)):
+        # Wazuh gives its rules all at once (a couple of seconds): the rule's destination is read again.
+        from app.services.sync import run_elastic_sync
+        count = run_elastic_sync(client_id, only_siem_id=siem_id, only_space=space)
+        if count is None or count < 0:
+            return 502, "Could not read the rule from Wazuh: see the sync report.", ""
+        after = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
+        if after and after.deprecated:
+            return 200, "Wazuh no longer has this rule: TIDE keeps it as deprecated.", "deprecated"
+        return 200, f"Read this destination's {count:,} rules and their alerts from Wazuh again.", "synced"
     # No existing row is not an error here (unlike the "Sync this rule" button, which always has
     # one): a rule TIDE just promoted, restored or pushed as master into this (siem, space) for
     # the first time has no row yet — this call both creates and refreshes.
@@ -3113,9 +3185,20 @@ def sync_single_rule(db, client_id: str, rule_id: str, siem_id: Optional[str], s
         except Exception as exc:
             logger.warning("Could not read the exception lists of rule %s", rule_id, exc_info=True)
             message += f" Could not read its exception lists: {exc}."
-    # What needs action on this rule now (Rule Monitoring); a deprecated rule's issues are resolved.
-    from app.services import rule_issues
+    # Elastic's own validator on it (#7), then what needs action on it now (Rule Monitoring); a
+    # deprecated rule's issues are resolved.
+    from app.services import elastic_validator, rule_issues
+    try:
+        elastic_validator.check_synced(db, client_id, [(siem_id, space)], rule_keys={(rule_id, siem_id, space)})
+    except Exception:  # noqa: BLE001 - its last check stands
+        logger.warning("Elastic's validator didn't check rule %s", rule_id, exc_info=True)
     rule_issues.refresh_tenant(db, client_id, rule_keys=[(rule_id, siem_id, space)])
+    # The GitLab issues about it, as a full sync asks about every issue still shown (#106).
+    try:
+        from app.services import gitlab_issues
+        gitlab_issues.after_rule_sync(db, client_id, [(rule_id, siem_id, space)])
+    except Exception:  # noqa: BLE001 - they keep what TIDE had
+        logger.warning("GitLab issues of rule %s not refreshed", rule_id, exc_info=True)
     db.record_rule_history(
         rule_id=rule_id, siem_id=siem_id, space=space, client_id=client_id,
         action=action, actor_user_id=actor_user_id, actor_name=actor_name,
@@ -3192,7 +3275,8 @@ async def restore_rule(
         api_key=full_target.get("api_token_enc"),
     )
     if not success or not new_rule_id:
-        return HTMLResponse(f'<div class="alert alert-danger">Could not restore the rule: {message}</div>', status_code=400)
+        return HTMLResponse(f'<div class="alert alert-danger">Could not restore the rule: {escape(str(message))}</div>',
+                            status_code=400)
 
     # Refresh the tenant cache so the new Elastic ID exists before moving
     # baseline references and recording the migration pair.
@@ -3223,7 +3307,7 @@ async def restore_rule(
         },
     )
     return HTMLResponse(
-        f'<div class="alert alert-success">Rule recreated in Elastic as {new_rule_id}.</div>'
+        f'<div class="alert alert-success">Rule recreated in Elastic as {escape(str(new_rule_id))}.</div>'
     )
 
 

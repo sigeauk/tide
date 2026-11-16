@@ -7,28 +7,34 @@
   before. /settings opens on Management, or Profile & Preferences for those who can't see it.
 #}
 {% from "macros/icons.html" import icon %}
+{% from "macros/help.html" import help_button with context %}
 
 {% block content %}
+{% set tabs = [('management', '/settings/management', 'users', 'Management', user and user.is_admin()),
+               ('diagnostics', '/settings/diagnostics', 'activity', 'Diagnostics', user and (user.is_superadmin or user.is_support())),
+               ('docs', '/settings/docs', 'book-open', 'Documentation', not user or user.can_read('page:documentation')),
+               ('changelog', '/settings/changelog', 'file-text', 'Changelog', not user or user.can_read('page:documentation')),
+               ('settings', '/settings/profile', 'user', 'Profile & Preferences', true)] %}
+{# The page is named after its tab, as the breadcrumb and the browser tab name it (Settings is the group). #}
+{% set ns = namespace(title='Settings') %}
+{# Each tab's ? opens its part of the guide; Documentation and Changelog are the guide and the changelog themselves. #}
+{% set help_topics = {'management': 'clients', 'diagnostics': 'diagnostics', 'settings': 'profile'} %}
+{% for key, href, ico, label, shown in tabs if key == active_page %}{% set ns.title = label %}{% endfor %}
 <div class="page-header settings-hub__header">
     <div>
-        <h1 class="page-title-hero">Settings &amp; Administration</h1>
+        <h1 class="page-title-hero">{{ ns.title }}{% if active_page in help_topics %} {{ help_button(help_topics[active_page]) }}{% endif %}</h1>
         <p class="page-subtitle">{% block settings_subtitle %}{% endblock %}</p>
     </div>
 </div>
 
-<nav class="settings-tabs settings-hub__tabs" aria-label="Settings &amp; Administration">
-    {% set tabs = [('management', '/settings/management', 'users', 'Management', user and user.is_admin()),
-                   ('diagnostics', '/settings/diagnostics', 'activity', 'Diagnostics', user and (user.is_superadmin or user.is_support())),
-                   ('docs', '/settings/docs', 'book-open', 'Documentation', not user or user.can_read('page:documentation')),
-                   ('changelog', '/settings/changelog', 'file-text', 'Changelog', not user or user.can_read('page:documentation')),
-                   ('settings', '/settings/profile', 'user', 'Profile & Preferences', true)] %}
+<nav class="settings-tabs settings-hub__tabs" aria-label="Settings">
     {% for key, href, ico, label, shown in tabs if shown %}
     <a name="{{ label }}" href="{{ href }}" class="settings-tab {% if active_page == key %}active{% endif %}"
        {% if active_page == key %}aria-current="page"{% endif %}>{{ icon(ico, '16') }} {{ label }}</a>
     {% endfor %}
 </nav>
 
-<div class="settings-hub__body">
+<div class="settings-hub__body" data-fold-store="tide.{{ active_page }}Folds">
 {% block settings_tab_content %}{% endblock %}
 </div>
 {% endblock %}

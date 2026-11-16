@@ -22,7 +22,7 @@ Uses hx-post to switch, then a full page reload (only once the switch succeeded)
             hx-post="/api/clients/switch"
             hx-vals='{"client_id": "{{ client.id }}"}'
             hx-swap="none"
-            hx-on::after-request="if (event.detail.successful) window.location.reload()"
+            data-done-reload="success"
         >
             <span class="client-switcher__dot {% if active_client and client.id == active_client.id %}active{% endif %}"></span>
             <span>{{ client.name }}</span>

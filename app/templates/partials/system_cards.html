@@ -10,7 +10,7 @@
 {% endif %}
 
 {% if summaries %}
-<div class="cve-list">
+<div class="cve-list" data-fold-store="tide.systemsListFolds">
     {% for summary in summaries %}
     {% set s = summary.system %}
     <details class="cve-card-item cve-card-item--available system-cve-card block"
@@ -78,7 +78,7 @@
 
                                 <div class="cve-list mt-sm">
                                         {% for tactic in ns_s.phases %}
-                                        <details data-collapse-key="systems-list-{{ s.id }}-baseline-{{ baseline.playbook_id }}-tactic-{{ loop.index }}" class="block">
+                                        <details data-fold="{{ s.id }}-{{ baseline.playbook_id }}-tactic-{{ loop.index }}" class="block">
                                                 <summary class="cursor-pointer list-none py-xs px-0">
                                                         <div class="flex items-center justify-between gap-ms">
                                                                 <div class="fs-md fw-600 text-body">{{ tactic }}</div>
@@ -107,7 +107,7 @@
                                                         {% endif %}
                                                         {% set first_tid = step.display_technique_ids[0] if step.display_technique_ids else (step.technique_id or '') %}
                                                         {% set first_info = ns_cov.map.get(first_tid, {}) if first_tid else {} %}
-                                                        <details class="cve-card-item cve-card-item--available step-card-edge" data-collapse-key="systems-list-{{ s.id }}-baseline-{{ baseline.playbook_id }}-step-{{ step.step_id or loop.index }}" style="--edge: {{ step_color }}">
+                                                        <details class="cve-card-item cve-card-item--available step-card-edge" data-fold="{{ s.id }}-{{ baseline.playbook_id }}-step-{{ step.step_id or loop.index }}" style="--edge: {{ step_color }}">
                                                                 <summary class="cursor-pointer list-none">
                                                                         <div class="row-grid row-grid--top">
                                                                                 <div class="cve-card-item__id cve-card-item__id--pill step-pill-row">
@@ -156,6 +156,6 @@
 {% else %}
 {% call empty_state('monitor') %}
     <p class="empty-state-title">No systems yet.</p>
-    <p>Click <strong>Add System</strong> to create your first enterprise system.</p>
+    <p>Click <strong>Add system</strong> to create your first enterprise system.</p>
 {% endcall %}
 {% endif %}

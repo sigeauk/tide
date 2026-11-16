@@ -15,7 +15,7 @@
     {% if run.destinations %}
     {% set dest_opts = [] %}
     {% for d in run.destinations %}{% set _ = dest_opts.append((d.value, d.label)) %}{% endfor %}
-    {{ filter_choice('hunt-destination', 'destination', 'Run on / save to', dest_opts, dest_opts[0][0], wrap='sigma-select-group',
+    {{ filter_choice('hunt-destination', 'destination', 'Run on', dest_opts, dest_opts[0][0], wrap='sigma-select-group',
                      tip="Run uses this destination's SIEM; Save to Kibana saves into its space") }}
     {{ filter_choice('hunt-lookback', 'lookback', 'Time', run.lookbacks | list, run.lookback, wrap='sigma-select-group') }}
     {% else %}

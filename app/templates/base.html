@@ -10,6 +10,9 @@
     <link rel="stylesheet" href="{{ asset('styles.css') }}">
     
     <!-- HTMX Core + Head Support Extension (bundled locally for air-gapped/standalone) -->
+    {# htmx's indicator styles are in style.css: the style element htmx would add is refused by TIDE's
+       Content-Security-Policy. #}
+    <meta name="htmx-config" content='{"includeIndicatorStyles": false}'>
     <script defer src="/static/js/htmx.min.js?v={{ cache_bust | default('0') }}"></script>
     <script defer src="/static/js/vendor/head-support.min.js?v={{ cache_bust | default('0') }}"></script>
 

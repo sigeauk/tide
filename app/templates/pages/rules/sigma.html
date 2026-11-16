@@ -9,7 +9,7 @@
 #}
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon, icon_text %}
-{% from "macros/filters.html" import filter_dropdown, filter_choice, filter_multi %}
+{% from "macros/filters.html" import filter_dropdown, filter_choice, filter_multi, more_filters %}
 {% from "macros/modal.html" import close_button, empty_state %}
 {% from "macros/menu.html" import more_button %}
 {% from "macros/help.html" import help_button with context %}
@@ -27,7 +27,7 @@
 <div class="page-header flex items-start justify-between gap-md">
     <div class="page-header__text">
         <h1 class="page-title-hero">Sigma Rules {{ help_button('sigma') }}</h1>
-        <p class="page-subtitle">SigmaHQ's detection rules, built into TIDE. Pick one to see it converted for your SIEM with the settings below; Deploy opens it in the rule form, to change it first.</p>
+        <p class="page-subtitle">SigmaHQ's detection rules, built into TIDE, to convert for your SIEM and deploy.</p>
     </div>
     <div class="rh-more" data-more>
         {{ more_button('More actions', title='Create a baseline, add a Sigma rule of your own', attrs='name="Sigma Actions"') }}
@@ -86,7 +86,7 @@
     <input type="hidden" id="form-template-file" name="template_file" value="">
 </div>
 
-<div class="sigma-workbench lib-workbench" data-library="rule">
+<div class="sigma-workbench lib-workbench" data-fold-store="tide.libraryFolds" data-library="rule">
     <div class="rule-browser open" id="rule-browser">
         <div class="rule-browser-header">
             <span>{{ icon('search', '16') }} Rule browser</span>
@@ -97,19 +97,22 @@
                   hx-target="#rules-list" hx-trigger="input delay:300ms, submit">
                 <div class="browser-filter browser-filter--wide">
                     <label class="form-label" for="rule-search">Search</label>
-                    <input type="text" id="rule-search" name="q" placeholder="Title, description, technique…">
+                    <input type="text" id="rule-search" class="form-input" name="q" placeholder="Title, description, technique…">
                 </div>
                 <div class="browser-filter">
                     <label class="form-label" for="technique-filter">MITRE technique</label>
-                    <input type="text" id="technique-filter" name="technique" placeholder="e.g., T1059" value="{{ technique_filter }}">
+                    <input type="text" id="technique-filter" class="form-input" name="technique" placeholder="e.g., T1059" value="{{ technique_filter }}">
                 </div>
-                {% set fc = filter_counts %}
-                {{ filter_multi('product-filter', 'product', 'Product', filter_options.product, picked.product, 'All', fc.product or {}, wrap='browser-filter') }}
-                {{ filter_multi('category-filter', 'category', 'Category', filter_options.category, picked.category, 'All', fc.category or {}, wrap='browser-filter') }}
-                {{ filter_multi('service-filter', 'service', 'Service', filter_options.service, picked.service, 'All', fc.service or {}, wrap='browser-filter') }}
-                {{ filter_multi('tactic-filter', 'tactic', 'Tactic', filter_options.tactic, picked.tactic, 'All', fc.tactic or {}, wrap='browser-filter') }}
-                {{ filter_multi('level-filter', 'level', 'Level', [('critical', 'Critical'), ('high', 'High'), ('medium', 'Medium'), ('low', 'Low'), ('informational', 'Info')], picked.level, 'All', fc.level or {}, wrap='browser-filter') }}
-                {{ filter_multi('status-filter', 'status', 'Status', [('stable', 'Stable'), ('test', 'Test'), ('experimental', 'Experimental'), ('deprecated', 'Deprecated'), ('unsupported', 'Unsupported')], picked.status, 'All', fc.status or {}, wrap='browser-filter') }}
+                {% set active = picked.values() | select | list | length %}
+                {% call more_filters('browser-filters', active) %}
+                    {% set fc = filter_counts %}
+                    {{ filter_multi('product-filter', 'product', 'Product', filter_options.product, picked.product, 'Any', fc.product or {}, wrap='browser-filter') }}
+                    {{ filter_multi('category-filter', 'category', 'Category', filter_options.category, picked.category, 'Any', fc.category or {}, wrap='browser-filter') }}
+                    {{ filter_multi('service-filter', 'service', 'Service', filter_options.service, picked.service, 'Any', fc.service or {}, wrap='browser-filter') }}
+                    {{ filter_multi('tactic-filter', 'tactic', 'Tactic', filter_options.tactic, picked.tactic, 'Any', fc.tactic or {}, wrap='browser-filter') }}
+                    {{ filter_multi('level-filter', 'level', 'Level', [('critical', 'Critical'), ('high', 'High'), ('medium', 'Medium'), ('low', 'Low'), ('informational', 'Info')], picked.level, 'Any', fc.level or {}, wrap='browser-filter') }}
+                    {{ filter_multi('status-filter', 'status', 'Status', [('stable', 'Stable'), ('test', 'Test'), ('experimental', 'Experimental'), ('deprecated', 'Deprecated'), ('unsupported', 'Unsupported')], picked.status, 'Any', fc.status or {}, wrap='browser-filter') }}
+                {% endcall %}
                 <input type="hidden" id="selected-rule-id" name="selected" value="{{ selected_rule_id | default('', true) }}">
             </form>
             <div id="rules-list" class="lib-list">

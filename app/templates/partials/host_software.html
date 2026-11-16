@@ -93,7 +93,7 @@
           hx-put="/api/inventory/software/{{ sw.id }}?host_id={{ host.id }}"
           hx-target="#software-section"
           hx-swap="innerHTML"
-          hx-on::after-request="document.getElementById('sw-edit-{{ sw.id }}').style.display='none';document.getElementById('sw-display-{{ sw.id }}').style.display='';">
+          data-done-hides="sw-edit-{{ sw.id }}" data-done-shows="sw-display-{{ sw.id }}">
         <div>
             <label class="form-label">Name</label>
             <input class="form-input sw-input sw-input--name" name="name" value="{{ sw.name }}" required>

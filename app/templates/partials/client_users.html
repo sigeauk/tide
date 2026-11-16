@@ -6,7 +6,8 @@
 #}
 {% from "macros/icons.html" import icon %}
 {% from "macros/modal.html" import close_button, empty_state %}
-{% from "macros/menu.html" import more_button, manage_menu %}
+{% from "macros/menu.html" import more_button %}
+{% from "components/window_ui.html" import section_head %}
 {% set who = viewer if viewer is defined and viewer else user %}
 {% set may_support = who is defined and who and who.is_superadmin %}
 {% macro role_boxes(checked_roles, may_support) %}
@@ -19,52 +20,55 @@
 {% endfor %}
 {% endmacro %}
 
-<div  name="Assigned Users Edit" class="client-section-toggle" data-click="section.toggle" data-body="users-body" data-chev="users-chev">
-    <span class="client-list-item__icon">{{ icon('users', '14') }}</span>
-    <h2 class="client-section-toggle__title">Assigned Users</h2>
-    <span class="badge badge-neutral badge--xs">{{ client_users | length }}</span>
-    {{ manage_menu('Assigned Users', 'Manage users', 'edit-users-modal', 'Assign users and their roles, or remove them') }}
-    <span id="users-chev" class="client-section-toggle__chevron" style="transform:rotate(90deg);">{{ icon('chevron-right', '16') }}</span>
-</div>
+{{ section_head('Assigned users', 'users', client_users | length, 'Manage users', 'edit-users-modal', 'Assign users and their roles, or remove them') }}
 
-<div id="users-body">
+<div class="sys-section__body">
 {% if client_users %}
-<div class="client-list">
+{# A table, as a system's techniques are listed (#108): a column per role, its box changing the user's
+   roles on this client at once (the row's PUT, every box in the row). #}
+{% set roles = all_roles if all_roles is defined and all_roles else [] %}
+<div class="sys-table-wrap">
+<table class="rules-table client-users-table">
+    <thead>
+        <tr>
+            <th>User</th>
+            <th>Name</th>
+            <th>Email</th>
+            {% for r in roles %}<th class="client-users-table__role" title="{{ r.description or r.name }}">{{ r.name | capitalize }}</th>{% endfor %}
+            <th class="client-users-table__more"><span class="sr-only">Actions</span></th>
+        </tr>
+    </thead>
+    <tbody>
     {% for u in client_users %}
-    <div class="client-list-item client-list-item--{% if u.is_default %}info{% else %}active{% endif %}">
-        <div class="client-list-item__body">
-            <span class="client-list-item__title cursor-default">{{ u.username }}</span>
-            {% if u.is_default %}
-            <span class="badge badge-info badge--xs">Default</span>
-            {% endif %}
-            {% if u.full_name %}
-            <span class="client-list-item__meta">{{ u.full_name }}</span>
-            {% endif %}
-            {% if u.email %}
-            <span class="client-list-item__meta">{{ u.email }}</span>
-            {% endif %}
-            {% if all_roles is defined and all_roles %}
-            <form class="client-list-item__meta client-roles" data-stop-click
-                  hx-put="/api/management/clients/{{ client.id }}/users/{{ u.id }}/role"
-                  hx-target="#client-users-section" hx-swap="innerHTML" hx-trigger="change">
-                <span class="text-secondary client-roles__label">Roles:</span>
-                {{ role_boxes(u._roles or [], may_support) }}
-            </form>
-            {% endif %}
-        </div>
-        <div class="rh-more ml-auto flex-none" data-more>
-            {{ more_button('User actions', title='Remove this user from this client', attrs='name="User Actions"') }}
-            <div class="rh-more__menu" role="menu" hidden>
-                <button name="Remove" type="button" role="menuitem" class="rh-more__item rh-more__item--danger"
-                        hx-delete="/api/management/clients/{{ client.id }}/users/{{ u.id }}"
-                        hx-target="#client-users-section" hx-swap="innerHTML"
-                        hx-confirm="Remove '{{ u.username }}' from this client?">
-                    {{ icon('x', '15') }}<span>Remove from client</span>
-                </button>
-            </div>
-        </div>
-    </div>
+        <tr class="rule-row" hx-put="/api/management/clients/{{ client.id }}/users/{{ u.id }}/role"
+            hx-trigger="change" hx-include="this" hx-target="#client-users-section" hx-swap="innerHTML">
+            <td><span class="rt-title">{{ u.username }}</span>{% if u.is_default %} <span class="badge badge-info badge--xs">Default</span>{% endif %}</td>
+            <td class="rt-sub" title="{{ u.full_name or '' }}">{{ u.full_name or '—' }}</td>
+            <td class="rt-sub" title="{{ u.email or '' }}">{{ u.email or '—' }}</td>
+            {% for r in roles %}
+            {% set locked = r.name == 'SUPPORT' and not may_support %}
+            <td class="client-users-table__role">
+                <input type="checkbox" name="roles" value="{{ r.name }}"{% if r.name in (u._roles or []) %} checked{% endif %}{% if locked %} disabled{% endif %}
+                       aria-label="{{ r.name | capitalize }}" title="{{ 'Only a super admin can grant or remove Support' if locked else (r.name | capitalize) ~ ' on ' ~ client.name }}">
+            </td>
+            {% endfor %}
+            <td class="client-users-table__more">
+                <div class="rh-more" data-more>
+                    {{ more_button('User actions', title='Remove this user from this client', attrs='name="User Actions"') }}
+                    <div class="rh-more__menu" role="menu" hidden>
+                        <button name="Remove" type="button" role="menuitem" class="rh-more__item rh-more__item--danger"
+                                hx-delete="/api/management/clients/{{ client.id }}/users/{{ u.id }}"
+                                hx-target="#client-users-section" hx-swap="innerHTML"
+                                hx-confirm="Remove '{{ u.username }}' from this client?">
+                            {{ icon('x', '15') }}<span>Remove from client</span>
+                        </button>
+                    </div>
+                </div>
+            </td>
+        </tr>
     {% endfor %}
+    </tbody>
+</table>
 </div>
 {% else %}
 {% call empty_state('users') %}
@@ -78,7 +82,7 @@
      data-click="backdrop.hide">
     <div class="modal-content modal-md">
         <div class="modal-header">
-            <h3 class="modal-title">Manage Users — {{ client.name }}</h3>
+            <h3 class="modal-title">Manage users — {{ client.name }}</h3>
             {{ close_button('name="Close Modal"
                     data-click="el.hide" data-target="edit-users-modal"') }}
         </div>
@@ -109,7 +113,7 @@
             <form name="Submit Users" hx-post="/api/management/clients/{{ client.id }}/users"
                   hx-target="#client-users-section" hx-swap="innerHTML"
                   class="stack gap-ms"
-                  hx-on::before-request="if(event.detail.elt===this) document.getElementById('edit-users-modal').style.display='none'">
+                  data-request-hides="edit-users-modal">
                 <label class="form-label" for="assign-user-{{ client.id }}">Assign user</label>
                 {% if may_support %}
                 <select id="assign-user-{{ client.id }}" name="user_id" class="form-input" required>
@@ -127,7 +131,7 @@
                 <span class="form-label">Roles on this client</span>
                 <div class="client-roles">{{ role_boxes(["ANALYST"], may_support) }}</div>
                 {% endif %}
-                <button name="Assign User" type="submit" class="btn btn-primary btn-sm">{{ icon('plus', '14') }} Assign User</button>
+                <button name="Assign User" type="submit" class="btn btn-primary btn-sm">{{ icon('plus', '14') }} Assign user</button>
             </form>
             {% endif %}
             <div class="modal-actions">

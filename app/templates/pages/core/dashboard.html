@@ -22,7 +22,7 @@
             {% if not editing %}
             <div class="rh-more dash-picker" data-more>
                 <button name="Choose Dashboard" type="button" class="btn btn-secondary btn-sm dash-picker__btn" data-more-toggle
-                        aria-haspopup="menu" aria-expanded="false" title="Choose a dashboard">
+                        aria-haspopup="menu" aria-expanded="false" title="This client has {{ dashboards | length }} dashboard{{ '' if dashboards | length == 1 else 's' }}: choose one">
                     <span class="dash-picker__name">{{ dashboard.name }}</span>{{ icon('chevron-down', '14') }}
                 </button>
                 <div class="rh-more__menu dash-picker__menu" role="menu" hidden>
@@ -39,7 +39,7 @@
             </div>
             {% endif %}
         </div>
-        <p class="page-subtitle">Overview of your detection engineering posture across all modules.</p>
+        <p class="page-subtitle">The figures you choose from across TIDE, laid out as you like.</p>
     </div>
     {% if can_edit and not editing %}
     <div class="flex gap-sm items-center">

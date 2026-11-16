@@ -8,17 +8,11 @@
 #}
 {% from "macros/icons.html" import icon %}
 {% from "macros/modal.html" import close_button, empty_state %}
-{% from "macros/menu.html" import manage_menu %}
+{% from "components/window_ui.html" import section_head %}
 
-<div  name="Linked CTI Connectors Edit" class="client-section-toggle" data-click="section.toggle" data-body="connectors-body" data-chev="connectors-chev">
-    <span class="client-list-item__icon">{{ icon('link', '14') }}</span>
-    <h2 class="client-section-toggle__title">Linked CTI Connectors</h2>
-    <span class="badge badge-neutral badge--xs">{{ client_connectors | length }}</span>
-    {{ manage_menu('Linked CTI Connectors', 'Manage connectors', 'edit-connectors-modal', 'Link CTI connectors, or remove them') }}
-    <span id="connectors-chev" class="client-section-toggle__chevron" style="transform:rotate(90deg);">{{ icon('chevron-right', '16') }}</span>
-</div>
+{{ section_head('Linked CTI connectors', 'link', client_connectors | length, 'Manage connectors', 'edit-connectors-modal', 'Link CTI connectors, or remove them') }}
 
-<div id="connectors-body">
+<div class="sys-section__body">
 {% if client_connectors %}
 <div class="client-list">
     {% for c in client_connectors %}
@@ -62,7 +56,7 @@
      data-click="backdrop.hide">
     <div class="modal-content modal-md">
         <div class="modal-header">
-            <h3 class="modal-title">Manage CTI Connectors &mdash; {{ client.name }}</h3>
+            <h3 class="modal-title">Manage CTI connectors &mdash; {{ client.name }}</h3>
             {{ close_button('name="Close Modal"
                     data-click="el.hide" data-target="edit-connectors-modal"') }}
         </div>
@@ -80,7 +74,7 @@
                                 hx-delete="/api/management/clients/{{ client.id }}/connectors/{{ c.id }}"
                                 hx-target="#client-connectors-section" hx-swap="innerHTML"
                                 hx-confirm="Unlink '{{ c.label }}' from this client?"
-                                hx-on::before-request="document.getElementById('edit-connectors-modal').style.display='none'"
+                                data-request-hides="edit-connectors-modal"
                                >
                             {{ icon('x', '12') }} Remove
                         </button>
@@ -94,7 +88,7 @@
             <form name="Submit Connectors" hx-post="/api/management/clients/{{ client.id }}/connectors"
                   hx-target="#client-connectors-section" hx-swap="innerHTML"
                   class="stack gap-ms"
-                  hx-on::before-request="if(event.detail.elt===this) document.getElementById('edit-connectors-modal').style.display='none'">
+                  data-request-hides="edit-connectors-modal">
                 <label class="form-label">Add connector</label>
                 <select name="connector_id" class="form-input" required>
                     <option value="" disabled selected>Select a connector&hellip;</option>
@@ -102,7 +96,7 @@
                     <option value="{{ c.id }}">{{ c.label or '(unnamed)' }} &mdash; {{ c.vendor_label or c.vendor }}</option>
                     {% endfor %}
                 </select>
-                <button name="Link Connector" type="submit" class="btn btn-primary btn-sm">{{ icon('plus', '14') }} Link Connector</button>
+                <button name="Link Connector" type="submit" class="btn btn-primary btn-sm">{{ icon('plus', '14') }} Link connector</button>
             </form>
             {% else %}
             <p class="text-muted fs-base text-center">

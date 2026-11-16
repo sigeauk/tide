@@ -5,7 +5,7 @@
   The filter bar refreshes #rmon-list (which swaps the stat cards out of band) on every change.
 #}
 {% from "macros/icons.html" import icon %}
-{% from "macros/filters.html" import filter_choice, filter_multi %}
+{% from "macros/filters.html" import filter_choice, filter_multi, more_filters %}
 {% from "macros/menu.html" import more_button %}
 {% from "macros/help.html" import help_button with context %}
 {% from "macros/sync_ui.html" import sync_menu_items %}
@@ -20,7 +20,7 @@
             Rule Monitoring
             {{ help_button('rule-monitoring') }}
         </h1>
-        <p class="page-subtitle">Rules that need action: failed runs, missing indexes and fields, rule id problems and stale data, grouped by what causes them.</p>
+        <p class="page-subtitle">Your rules that need action, grouped by what causes it.</p>
         <div id="rh-last-sync" hx-get="/api/rules/sync/last" hx-trigger="load, refreshRules from:body" hx-swap="innerHTML"></div>
     </div>
     <div class="flex items-center gap-ms shrink-0">
@@ -45,13 +45,14 @@
 {% set rmon_hx = 'hx-get="/api/rule-monitoring/list" hx-trigger="change" hx-target="#rmon-list" hx-swap="innerHTML" hx-include="' ~ rmon_include ~ '"' %}
 
 <div class="rule-browser-controls">
-<div class="metrics-grid metrics-grid--7" id="rmon-metrics">
+<div class="metrics-grid" id="rmon-metrics">
     {% include "partials/rule_monitoring_metrics.html" %}
 </div>
 
 <div class="divider"></div>
 
-<div class="filters-bar" id="rmon-filters">
+{# Search and SIEM, the rest under one Filters fold (UX.md 9.5) #}
+<div class="filters-bar" id="rmon-filters" data-fold-store="tide.ruleMonitoringFolds">
     <div class="filter-group grow">
         <label class="form-label" for="rmon-search">Search</label>
         <input type="text" id="rmon-search" name="search" value="{{ filters.search }}" class="form-input"
@@ -60,20 +61,26 @@
                hx-swap="innerHTML" hx-include="{{ rmon_include }}">
     </div>
     {{ filter_choice('rmon-scope', 'scope', 'SIEM', scope_options, filters.scope, counts.scope, rmon_hx) }}
-    {{ filter_multi('rmon-severity', 'severity', 'Severity', severity_options, filters.severity, 'Any', counts.severity, rmon_hx,
-                    {'error': "The rule doesn't do its job until this is fixed", 'warning': 'The rule runs, but less well'}) }}
-    {{ filter_multi('rmon-fixer', 'fixer', 'Who fixes', fixer_options, filters.fixer, 'Anyone', counts.fixer, rmon_hx) }}
-    {{ filter_multi('rmon-issue', 'issue', 'Issue', issue_options, filters.issue, 'Any', counts.issue, rmon_hx, issue_titles) }}
-    {{ filter_choice('rmon-rules', 'rules', 'Rules', rules_options, filters.rules, none, rmon_hx,
-                     {'enabled': 'Enabled rules, as they are failing now', 'all': "Disabled rules too: what would fail if they were switched on"}) }}
-    {{ filter_choice('rmon-show', 'show', 'Show', show_options, filters.show, none, rmon_hx,
-                     {'resolved': 'Fixed in the last 14 days'}) }}
-    {{ filter_choice('rmon-group', 'group', 'Group by', group_options, filters.group, none, rmon_hx) }}
+    {# The count names the filters that narrow the list: Rules and Show when not their default
+       (data-filter-default); Group by only arranges it (data-filter-order). #}
+    {% set d = filter_defaults %}
+    {% set active = [filters.severity, filters.fixer, filters.issue, filters.rules != d.rules, filters.show != d.show] | select | list | length %}
+    {% call more_filters('filters', active) %}
+        {{ filter_multi('rmon-severity', 'severity', 'Severity', severity_options, filters.severity, 'Any', counts.severity, rmon_hx,
+                        {'error': "The rule doesn't do its job until this is fixed", 'warning': 'The rule runs, but less well'}) }}
+        {{ filter_multi('rmon-fixer', 'fixer', 'Who fixes', fixer_options, filters.fixer, 'Any', counts.fixer, rmon_hx) }}
+        {{ filter_multi('rmon-issue', 'issue', 'Issue', issue_options, filters.issue, 'Any', counts.issue, rmon_hx, issue_titles) }}
+        {{ filter_choice('rmon-rules', 'rules', 'Rules', rules_options, filters.rules, none, rmon_hx ~ ' data-filter-default="' ~ d.rules ~ '"',
+                         {'enabled': 'Enabled rules, as they are failing now', 'all': "Disabled rules too: what would fail if they were switched on"}) }}
+        {{ filter_choice('rmon-show', 'show', 'Show', show_options, filters.show, none, rmon_hx ~ ' data-filter-default="' ~ d.show ~ '"',
+                         {'resolved': 'Fixed in the last 14 days'}) }}
+        {{ filter_choice('rmon-group', 'group', 'Group by', group_options, filters.group, none, rmon_hx ~ ' data-filter-order') }}
+    {% endcall %}
 </div>
 </div>
 
 <div class="rule-scroll-region">
-<div id="rmon-list" class="rmon-list" data-rule-list data-keep-url="/rule-monitoring" hx-get="/api/rule-monitoring/list" hx-trigger="refreshRules from:body, rmonChanged from:body"
+<div id="rmon-list" class="rmon-list" data-fold-store="tide.ruleMonitoringFolds" data-rule-list data-keep-url="/rule-monitoring" hx-get="/api/rule-monitoring/list" hx-trigger="refreshRules from:body, rmonChanged from:body"
      hx-swap="innerHTML" hx-include="{{ rmon_include }}">
     {% include "partials/rule_monitoring_list.html" %}
 </div>

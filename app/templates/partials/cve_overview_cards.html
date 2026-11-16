@@ -1,0 +1,89 @@
+{#
+  CVE Overview's cards (api.inventory.cve_overview_view): ``view.rows`` (each a CVE, its coverage and
+  its systems), 50 at a time; the next 50 load as the end scrolls into view. From the cards endpoint,
+  the first 50 also update how many match (``oob``).
+#}
+{% from "macros/icons.html" import icon %}
+{% from "components/ui/loading_state.html" import loading_state %}
+{% for r in view.rows %}
+{% set cve, coverage_status = r.cve, r.status %}
+{% set matched = cve.affected_hosts | length > 0 %}
+<div class="cve-card-item cve-card-item--{{ coverage_status }}" data-cve-id="{{ cve.cve_id }}">
+
+    {# Left: CVE ID #}
+    <div class="cve-card-item__id">
+        <a  name="Cve" href="/cve/{{ cve.cve_id }}"
+           class="{% if coverage_status == 'detected' %}cve-detected{% elif coverage_status == 'partial' %}cve-partial{% elif matched %}cve-matched{% else %}cve-unmatched{% endif %}">
+            {{ cve.cve_id }}
+        </a>
+        {% if cve.known_ransomware %}
+        <span class="badge badge-danger fs-2xs py-2xs px-sm">
+            {{ icon('zap','10') }} Ransomware
+        </span>
+        {% endif %}
+    </div>
+
+    {# Body: name + description + meta #}
+    <div class="cve-card-item__body">
+        <div class="cve-card-item__name" title="{{ cve.vulnerability_name }}">{{ cve.vulnerability_name }}</div>
+        {% if cve.short_description %}
+        <div class="cve-card-item__desc">{{ cve.short_description }}</div>
+        {% endif %}
+        <div class="cve-card-item__meta">
+            <span>{{ icon('box','11') }} {{ cve.vendor_project }} / {{ cve.product }}</span>
+            <span>{{ icon('calendar','11') }} Added: {{ cve.date_added }}</span>
+            <span>{{ icon('clock','11') }} Due: {{ cve.due_date }}</span>
+        </div>
+    </div>
+
+    {# Right: systems + detection #}
+    <div class="cve-card-item__right">
+        {# Affected system/host count pills #}
+        {% if cve.affected_hosts %}
+        <div class="cve-card-item__systems">
+            {% set ns_sys = namespace(ids=r.system_ids) %}
+            {% if coverage_status == 'detected' %}
+            <span class="status-pill status-chip status-chip--success" title="Affects {{ ns_sys.ids | length }} system(s) / {{ cve.affected_hosts | length }} host(s)">
+                {{ icon('triangle-alert','10') }} {{ ns_sys.ids | length }} System{{ 's' if ns_sys.ids | length != 1 }} / {{ cve.affected_hosts | length }} Host{{ 's' if cve.affected_hosts | length != 1 }}
+            </span>
+            {% elif coverage_status == 'partial' %}
+            <span class="status-pill status-chip status-chip--warning" title="Affects {{ ns_sys.ids | length }} system(s) / {{ cve.affected_hosts | length }} host(s)">
+                {{ icon('triangle-alert','10') }} {{ ns_sys.ids | length }} System{{ 's' if ns_sys.ids | length != 1 }} / {{ cve.affected_hosts | length }} Host{{ 's' if cve.affected_hosts | length != 1 }}
+            </span>
+            {% else %}
+            <span class="status-pill status-chip status-chip--danger" title="Affects {{ ns_sys.ids | length }} system(s) / {{ cve.affected_hosts | length }} host(s)">
+                {{ icon('triangle-alert','10') }} {{ ns_sys.ids | length }} System{{ 's' if ns_sys.ids | length != 1 }} / {{ cve.affected_hosts | length }} Host{{ 's' if cve.affected_hosts | length != 1 }}
+            </span>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        {# Detection badge #}
+        <div class="cve-card-item__badges">
+            {% if coverage_status == 'detected' %}
+                <span class="status-pill status-chip status-chip--success" title="All hosts monitored">
+                    {{ icon('shield','10') }} Monitored
+                </span>
+            {% elif coverage_status == 'partial' %}
+                <span class="status-pill status-chip status-chip--warning" title="{{ cve.detections | length }} rule{{ 's' if cve.detections | length != 1 }} — partial coverage">
+                    {{ icon('shield','10') }} Partial
+                </span>
+            {% elif matched %}
+                <span class="status-pill status-chip status-chip--danger" title="No detection rules recorded">
+                    {{ icon('shield-off','10') }} No rules
+                </span>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endfor %}
+{% if view.next_url %}
+<div class="infinite-scroll-sentinel" hx-get="{{ view.next_url }}" hx-trigger="tideLoadMore once" hx-target="this" hx-swap="outerHTML" hx-include="unset">
+    {{ loading_state("Loading more CVEs…", inline=true) }}
+</div>
+{% elif view.offset %}
+<div class="infinite-scroll-end">All {{ view.shown }} loaded</div>
+{% elif not view.rows %}
+<p class="rm-empty">No CVEs match these filters.</p>
+{% endif %}
+{% if oob | default(false) %}<span id="cve-visible-count" hx-swap-oob="true">{{ view.shown }}</span>{% endif %}

@@ -5,7 +5,8 @@
   how many began and how many were fixed in the period, in place of Errors' and Warnings' new in 7 days.
 #}
 {% from "macros/metrics.html" import metric_card, metric_flow, metric_flow_tip %}
-{% set keys = metric_keys | default(none) %}{% set link = metric_link | default(none) %}
+{# The page shows four cards, the kinds of problem on Rules needing action; a Dashboard section passes the ones it chose (dashboards.SOURCES). #}
+{% set keys = metric_keys | default(['rules', 'causes', 'resolved', 'last_synced']) %}{% set link = metric_link | default(none) %}
 {% set m = metrics %}{% set flows = flows | default({}) %}
 {# Until Rule Monitoring has a week of history, every problem looks new: say since when it has tracked instead. #}
 {% set new_known = m.new_known | default(true) %}
@@ -13,11 +14,16 @@
 
 {% call metric_card('rules', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value{{ ' danger' if m.errors else ' warning' if m.rules else ' success' }}">{{ m.rules }}</p>
-    <p class="metric-label">Rules Needing Action</p>
+    <p class="metric-label">Rules needing action</p>
+    <p class="metric-sub"><span class="{{ 'text-danger' if m.errors }}">{{ m.errors }} error{{ '' if m.errors == 1 else 's' }}</span> · <span class="{{ 'text-warning' if m.warnings }}">{{ m.warnings }} warning{{ '' if m.warnings == 1 else 's' }}</span> · {{ m.info | default(0) }} info</p>
     <p class="metric-sub">{% if filters.rules == 'all' %}of {{ m.rules_total }} rules{% else %}{{ m.rules_enabled }} of {{ m.rules_total }} enabled{% endif %}</p>
     {% if filters.rules != 'all' and m.rules > m.rules_enabled %}<p class="metric-sub">{{ m.rules - m.rules_enabled }} disabled</p>{% endif %}
     {{ metric_flow(flows.rules) }}
-    <div class="metric-tip" role="tooltip">Rules with at least one open issue, for the filters shown{% if filters.rules != 'all' %}: enabled rules, and disabled ones with a rule id problem TIDE can fix. Beneath: the enabled rules needing action, out of the enabled rules in the destinations shown{% endif %}.
+    <div class="metric-tip" role="tooltip">Rules with at least one open issue, for the filters shown{% if filters.rules != 'all' %}: enabled rules, and disabled ones with a rule id problem TIDE can fix{% endif %}. Beneath: how many (or whole destinations) have each kind{% if filters.rules != 'all' %}, then the enabled rules needing action, out of the enabled rules in the destinations shown{% endif %}.
+        <div class="metric-tip__row"><b>Errors</b> They don't do their job until it is fixed{% if new_known and not flows.rules %}; {{ m.new_errors }} new in 7 days{% endif %} <span>{{ m.errors }}</span></div>
+        <div class="metric-tip__row"><b>Warnings</b> Warnings only: they run, but less well{% if new_known and not flows.rules %}; {{ m.new_warnings }} new in 7 days{% endif %} <span>{{ m.warnings }}</span></div>
+        <div class="metric-tip__row"><b>Info</b> Only information, worth knowing{% if new_known and not flows.rules %}; {{ m.new_info | default(0) }} new in 7 days{% endif %} <span>{{ m.info | default(0) }}</span></div>
+        {% if not new_known and not flows.rules %}<div class="metric-tip__head">What is new in 7 days shows once Rule Monitoring has a week of history; it began on {{ m.tracked_since.strftime('%d %b') }}.</div>{% endif %}
         {{ metric_flow_tip(flows.rules, 'Began needing action', 'No longer needing action') }}</div>
 {% endcall %}
 
@@ -50,7 +56,7 @@
 
 {% call metric_card('causes', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value">{{ m.causes }}</p>
-    <p class="metric-label">Things to Fix</p>
+    <p class="metric-label">Things to fix</p>
     <p class="metric-sub">{{ m.rules }} rule{{ '' if m.rules == 1 else 's' }}</p>
     {# Who fixes them, in words; a fixer with nothing to fix is left off the face, not the detail. #}
     {# Two to a line, so the card wraps between them, not inside one. #}
@@ -72,7 +78,7 @@
     <p class="metric-label">Resolved</p>
     <p class="metric-sub">{{ m.resolved_rules }} rule{{ '' if m.resolved_rules == 1 else 's' }}</p>
     <p class="metric-sub">last 14 days</p>
-    <div class="metric-tip" role="tooltip">Causes fixed in the last 14 days, counted as Things to Fix are, and beneath, the rules they were on. Show → Resolved recently lists them.</div>
+    <div class="metric-tip" role="tooltip">Causes fixed in the last 14 days, counted as Things to fix are, and beneath, the rules they were on. Show → Resolved recently lists them.</div>
 {% endcall %}
 
 {% set last_sync = {"at": m.last_synced, "stale": m.stale, "days": stale_days} %}

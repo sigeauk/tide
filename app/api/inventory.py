@@ -21,6 +21,7 @@ API routes (HTMX / JSON):
 
   GET    /api/inventory/hosts/{id}/cve-matches     CVE matches for device (partial)
   GET    /api/inventory/cve-overview-partial        KEV table (HTMX reload)
+  GET    /api/inventory/cve-overview-cards          its cards, filtered and sorted, 50 at a time
   POST   /api/inventory/feed/cisa                   Ingest CISA KEV blob (file upload)
   GET    /api/inventory/cve/{cve_id}/detect          Get detection for a CVE
   POST   /api/inventory/cve/{cve_id}/detect          Mark CVE as detected
@@ -34,7 +35,7 @@ import logging
 import json
 import uuid
 from typing import Any, Dict, List, Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from app.api.deps import ActiveClient, CurrentUser, RequireUser
@@ -188,8 +189,16 @@ def _system_baseline_or_none(system_id: str, baseline_id: str, client_id: str):
 
 def _system_page(request: Request, system, user, client_id: str):
     """The system page, where all of its baselines are managed."""
+    from app.inventory_engine import system_wazuh_figures
+    from app.services import attack_detection
     from app.services.report_generator import CLASSIFICATION_OPTIONS
+    with get_database_service().get_connection() as conn:
+        device_platforms = attack_detection.system_platforms(conn, system.id)["from_devices"]
     return _render("pages/inventory/system_detail.html", request, {
+        "platform_options": attack_detection.PLATFORMS, "device_platforms": device_platforms,   # Edit system
+        "wazuh_destinations": _wazuh_destinations(client_id),
+        "hardening": _system_hardening(system.id),
+        "wazuh": system_wazuh_figures(system.id, client_id=client_id),   # the strip's Vulnerabilities and Hardening cards
         "active_page": "systems", "system": system, "system_id": system.id,
         "host_summaries": get_host_summaries(system.id, client_id=client_id), "user": user,
         "classifications": list_classifications(client_id=client_id), "clf_colors": _clf_color_map(client_id=client_id),
@@ -225,11 +234,118 @@ def page_host_detail(request: Request, host_id: str, user: CurrentUser, client_i
     software = list_host_software(host_id, client_id=client_id)
     vulns = get_host_vulnerabilities(host_id, client_id=client_id)
     clf_color = get_classification_color(system.classification, client_id=client_id) if system and system.classification else None
+    wazuh_vulns = wazuh_agent = wazuh_alerts = hardening = None
+    if host.source == "wazuh":          # Wazuh's own findings, beside the matches made from packages
+        from app.services import wazuh_assets
+        with get_database_service().get_connection() as conn:
+            wazuh_vulns = wazuh_assets.host_vulnerabilities(conn, host_id)
+            wazuh_agent = wazuh_assets.host_counts(conn, [host_id]).get(host_id)
+            wazuh_alerts = wazuh_assets.host_alerts(conn, host_id)
+            hardening = wazuh_assets.host_hardening(conn, host_id)
     return _render("pages/inventory/host_detail.html", request, {
         "active_page": "systems", "host": host, "system": system,
         "software": software, "vulns": vulns, "user": user,
-        "clf_color": clf_color,
+        "clf_color": clf_color, "wazuh_vulns": wazuh_vulns, "wazuh_agent": wazuh_agent, "wazuh_alerts": wazuh_alerts,
+        "hardening": hardening,
     })
+
+
+def _system_hardening(system_id: str) -> list:
+    """The system's Hardening section (wazuh_assets.system_hardening); [] when it has no Wazuh devices."""
+    from app.services import wazuh_assets
+    try:
+        with get_database_service().get_connection() as conn:
+            return wazuh_assets.system_hardening(conn, system_id)
+    except Exception:
+        logger.debug("No hardening for system %s", system_id, exc_info=True)
+        return []
+
+
+@router.get("/api/systems/{system_id}/steps/{step_id}/hardening-checks", response_class=HTMLResponse)
+def api_technique_hardening_checks(request: Request, system_id: str, step_id: str, user: CurrentUser,
+                                   client_id: ActiveClient, q: str = Query("")):
+    """The checks a technique can name (Hardening checks › Add hardening check): those whose Wazuh ATT&CK ids
+    include one of the technique's first, then any matching ``q``."""
+    from app.services import wazuh_assets
+    _system_step_or_404(system_id, step_id, client_id)
+    step = get_playbook_step(step_id, client_id=client_id)
+    ids = [t.technique_id for t in step.techniques] + ([step.technique_id] if step.technique_id else [])
+    with get_database_service().get_connection() as conn:
+        found = wazuh_assets.offered_checks(conn, system_id, ids, q)
+        named = {(h["policy_id"], h["check_id"]) for h in wazuh_assets.step_hardening(conn, [step_id], system_id).get(step_id, [])}
+    return _render("partials/technique_hardening_options.html", request,
+                   {**found, "named": named, "query": q, "step_url": f"/api/systems/{system_id}/steps/{step_id}"})
+
+
+@router.post("/api/systems/{system_id}/steps/{step_id}/hardening", response_class=HTMLResponse)
+def api_add_technique_hardening(request: Request, system_id: str, step_id: str, user: RequireUser, client_id: ActiveClient,
+                                policy_id: str = Form(...), check_id: str = Form(...), note: str = Form("")):
+    """Name a hardening check on this technique on this system, then return its window."""
+    from app.inventory_engine import add_technique_hardening
+    _system_step_or_404(system_id, step_id, client_id)
+    add_technique_hardening(step_id, system_id, policy_id, check_id, note, actor=_actor(user), client_id=client_id)
+    return _step_modal_response(request, system_id, step_id, client_id)
+
+
+@router.delete("/api/systems/{system_id}/steps/{step_id}/hardening/{hardening_id}", response_class=HTMLResponse)
+def api_remove_technique_hardening(request: Request, system_id: str, step_id: str, hardening_id: str, user: RequireUser,
+                                   client_id: ActiveClient):
+    from app.inventory_engine import remove_technique_hardening
+    _system_step_or_404(system_id, step_id, client_id)
+    remove_technique_hardening(hardening_id, step_id, system_id, actor=_actor(user), client_id=client_id)
+    return _step_modal_response(request, system_id, step_id, client_id)
+
+
+def _wazuh_destinations(client_id: str) -> list:
+    """The client's Wazuh destinations, as Wazuh agents… lists them."""
+    from app.services.siem_kinds import is_wazuh
+    return [{"siem_id": d["id"], "space": d.get("space") or "*", "name": d.get("name") or d.get("label"),
+             "color": d.get("color")} for d in (get_database_service().get_client_siems(client_id) or []) if is_wazuh(d)]
+
+
+def _wazuh_agents_dialog(request: Request, system_id: str, client_id: str, problems=None):
+    from app.services import wazuh_assets
+    with get_database_service().get_connection() as conn:
+        taken = wazuh_assets.system_sources(conn, system_id)
+    destinations = [dict(d, taken=(d["siem_id"], d["space"]) in taken, pattern=taken.get((d["siem_id"], d["space"]), ""))
+                    for d in _wazuh_destinations(client_id)]
+    return _render("partials/system_wazuh_agents_dialog.html", request,
+                   {"system_id": system_id, "destinations": destinations, "problems": problems or []})
+
+
+@router.get("/api/systems/{system_id}/wazuh-agents", response_class=HTMLResponse)
+def api_wazuh_agents_dialog(request: Request, system_id: str, user: CurrentUser, client_id: ActiveClient):
+    """Wazuh agents…: which of the client's Wazuh destinations supply this system's devices."""
+    missing = _system_not_found(system_id, client_id)
+    if missing:
+        return missing
+    return _wazuh_agents_dialog(request, system_id, client_id)
+
+
+@router.post("/api/systems/{system_id}/wazuh-agents", response_class=HTMLResponse)
+async def api_wazuh_agents_save(request: Request, system_id: str, user: RequireUser, client_id: ActiveClient):
+    """Save the setting, read the agents now (devices, vulnerabilities, alerts), then reload the page; a
+    read that fails leaves the dialog open saying why, the setting saved."""
+    from starlette.concurrency import run_in_threadpool
+    from app.services import wazuh_assets
+    missing = _system_not_found(system_id, client_id)
+    if missing:
+        return missing
+    form = await request.form()
+    allowed = {(d["siem_id"], d["space"]) for d in _wazuh_destinations(client_id)}
+    sources = {}
+    for value in form.getlist("take"):
+        siem_id, _, space = str(value).partition("|")
+        if (siem_id, space) in allowed:
+            sources[(siem_id, space)] = str(form.get(f"pattern:{siem_id}|{space}") or "").strip()[:200]
+    db = get_database_service()
+    with db.get_connection() as conn:
+        wazuh_assets.save_system_sources(conn, system_id, sources)
+    problems = await run_in_threadpool(wazuh_assets.refresh_system, db, client_id, system_id)
+    logger.info("Wazuh agents of system %s set to %d destination(s) by %s", system_id, len(sources), user.username)
+    if problems:
+        return _wazuh_agents_dialog(request, system_id, client_id, problems)
+    return _system_page_reload()
 
 
 @router.get("/cve-overview", response_class=HTMLResponse)
@@ -382,11 +498,15 @@ async def api_create_system(request: Request, user: RequireUser, client_id: Acti
 
 @router.put("/api/inventory/systems/{system_id}", response_class=HTMLResponse)
 async def api_update_system(request: Request, system_id: str, user: RequireUser, client_id: ActiveClient):
+    from app.services.attack_detection import PLATFORMS
     form = await request.form()
+    chosen = set(form.getlist("platforms"))
     data = SystemUpdate(
         name=form.get("name") or None,
         description=form.get("description") or None,
         classification=form.get("classification") or None,
+        # A multiple select sends nothing when none is ticked: platforms_shown says the form had it.
+        platforms=[p for p in PLATFORMS if p in chosen] if form.get("platforms_shown") else None,
     )
     system = edit_system(system_id, data, client_id=client_id)
     if not system:
@@ -643,16 +763,95 @@ def api_host_cve_matches(request: Request, host_id: str, user: CurrentUser, clie
     })
 
 
+# ── CVE Overview's list: filtered and sorted here, 50 cards at a time (UX.md 9.5) ──
+CVE_PAGE = 50
+_CVE_SORTS = ("cve_id", "name", "vendor", "date_added", "due_date", "matched")
+
+
+def _cve_number(cve) -> tuple:
+    """CVE-2024-12345 as (2024, 12345), so 12345 sorts after 9999."""
+    parts = (cve.cve_id or "").split("-")
+    try:
+        return int(parts[1]), int(parts[2])
+    except (IndexError, ValueError):
+        return 0, 0
+
+
+_CVE_SORT_KEYS = {
+    "cve_id": _cve_number,
+    "name": lambda c: (c.vulnerability_name or "").lower(),
+    "vendor": lambda c: ((c.vendor_project or "").lower(), (c.product or "").lower()),
+    "date_added": lambda c: c.date_added or "",
+    "due_date": lambda c: c.due_date or "",
+    "matched": lambda c: (bool(c.affected_hosts), _cve_number(c)),
+}
+
+
+def _cve_coverage(cve) -> str:
+    """A CVE's card colour and Coverage: unaffected or available (rules, but no device has it), and on
+    your devices detected (every affected device covered), partial or nocover."""
+    if not cve.affected_hosts:
+        return "available" if cve.detections else "unaffected"
+    if not cve.detections:
+        return "nocover"
+    covered = sum(1 for h in cve.affected_hosts if h.coverage_status == "amber")
+    return "detected" if covered >= len(cve.affected_hosts) else "partial" if covered else "nocover"
+
+
+def cve_overview_view(cves, params) -> dict:
+    """The cards the filter bar asks for (``params``: search, matched, system and coverage, each
+    repeated, "none" for none ticked, sort, dir, offset), 50 from ``offset``, with how many match and
+    the address of the next 50. Partly covered CVEs count as Has rules."""
+    q = (params.get("search") or "").strip().lower()
+    systems, coverage = set(params.getlist("system")), set(params.getlist("coverage"))
+    sort = params.get("sort") if params.get("sort") in _CVE_SORTS else "cve_id"
+    try:
+        offset = max(0, int(params.get("offset") or 0))
+    except ValueError:
+        offset = 0
+    rows = []
+    for c in cves:
+        status = _cve_coverage(c)
+        system_ids = list(dict.fromkeys(h.system_id for h in c.affected_hosts))
+        if params.get("matched") == "matched" and not c.affected_hosts:
+            continue
+        if systems and not systems & set(system_ids):
+            continue
+        if coverage and ("detected" if status == "partial" else status) not in coverage:
+            continue
+        if q and q not in " ".join((c.cve_id, c.vulnerability_name, c.short_description or "", c.vendor_project, c.product)).lower():
+            continue
+        rows.append({"cve": c, "status": status, "system_ids": system_ids})
+    rows.sort(key=lambda r: _CVE_SORT_KEYS[sort](r["cve"]), reverse=params.get("dir") != "asc")
+    nxt = offset + CVE_PAGE
+    query = [(k, v) for k, v in params.multi_items() if k != "offset"] + [("offset", nxt)]
+    return {"rows": rows[offset:nxt], "shown": len(rows), "offset": offset,
+            "next_url": f"/api/inventory/cve-overview-cards?{urlencode(query)}" if nxt < len(rows) else ""}
+
+
+def _cve_table(request: Request, user, client_id: str, toast: Optional[str] = None) -> HTMLResponse:
+    """CVE Overview's filter bar and first 50 cards, newest CVE first."""
+    from app.inventory_engine import list_systems
+    from starlette.datastructures import QueryParams
+    cves = get_all_cve_overview(client_id=client_id)
+    ctx = {"cves": cves, "matched_count": sum(1 for c in cves if c.affected_hosts), "user": user,
+           "systems": list_systems(client_id=client_id), "view": cve_overview_view(cves, QueryParams(""))}
+    if toast:
+        ctx["toast"] = toast
+    return _render("partials/cve_overview_table.html", request, ctx)
+
+
 @router.get("/api/inventory/cve-overview-partial", response_class=HTMLResponse)
 def api_cve_overview_partial(request: Request, user: CurrentUser, client_id: ActiveClient):
-    from app.inventory_engine import list_systems
-    cves = get_all_cve_overview(client_id=client_id)
-    matched_count = sum(1 for c in cves if c.affected_hosts)
-    systems = list_systems(client_id=client_id)
-    return _render("partials/cve_overview_table.html", request, {
-        "cves": cves, "matched_count": matched_count, "user": user,
-        "systems": systems,
-    })
+    return _cve_table(request, user, client_id)
+
+
+@router.get("/api/inventory/cve-overview-cards", response_class=HTMLResponse)
+def api_cve_overview_cards(request: Request, user: CurrentUser, client_id: ActiveClient):
+    """CVE Overview's cards for its filter bar (cve_overview.js), or the next 50 as the list's end
+    scrolls into view."""
+    view = cve_overview_view(get_all_cve_overview(client_id=client_id), request.query_params)
+    return _render("partials/cve_overview_cards.html", request, {"view": view, "user": user, "oob": not view["offset"]})
 
 
 # ---------------------------------------------------------------------------
@@ -780,13 +979,8 @@ async def api_reset_kev_override(request: Request, user: RequireUser, client_id:
     if path and os.path.exists(path):
         os.remove(path)
         removed = True
-    cves = get_all_cve_overview(client_id=client_id)
-    stats = get_cve_overview_stats(cves=cves, client_id=client_id)
-    return _render("partials/cve_overview_table.html", request, {
-        "cves": cves, "matched_count": stats.matched_count,
-        "stats": stats, "user": user,
-        "toast": "KEV override removed — using system catalogue." if removed else "No override file found.",
-    })
+    return _cve_table(request, user, client_id,
+                      "KEV override removed — using system catalogue." if removed else "No override file found.")
 
 @router.post("/api/inventory/feed/cisa", response_class=HTMLResponse)
 async def api_ingest_cisa(
@@ -803,13 +997,7 @@ async def api_ingest_cisa(
         count = ingest_cisa_feed(raw)
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
-    cves = get_all_cve_overview(client_id=client_id)
-    stats = get_cve_overview_stats(cves=cves, client_id=client_id)
-    return _render("partials/cve_overview_table.html", request, {
-        "cves": cves, "matched_count": stats.matched_count,
-        "stats": stats, "user": user,
-        "toast": f"CISA KEV feed ingested: {count} vulnerabilities loaded.",
-    })
+    return _cve_table(request, user, client_id, f"CISA KEV feed ingested: {count} vulnerabilities loaded.")
 
 
 # ---------------------------------------------------------------------------
@@ -1811,7 +1999,8 @@ def _template_window(request: Request, step_id: str, client_id: str, changed: bo
     detail = get_template_step_detail(step_id, client_id=client_id)
     if not detail:
         return HTMLResponse('<div class="rm-empty">This technique no longer exists.</div>', status_code=404)
-    resp = _render("components/template_step_modal.html", request, {"detail": detail})
+    resp = _render("components/template_step_modal.html", request,
+                   {"detail": detail, **_how_to_detect(detail.get("technique_ids") or [])})
     if changed:
         resp.headers["HX-Trigger"] = "stepsChanged"
     return resp
@@ -2125,7 +2314,18 @@ def _step_modal_response(request: Request, system_id: str, step_id: str, client_
         return HTMLResponse('<div class="rm-empty">This technique no longer exists.</div>', status_code=404)
     return _render("components/step_modal.html", request, {
         "detail": detail, "system_id": system_id, "coverage_error": coverage_error,
+        **_how_to_detect(detail.get("technique_ids") or [], system_id),
     })
+
+
+def _how_to_detect(technique_ids: List[str], system_id: str = "") -> Dict[str, Any]:
+    """A baseline technique window's How to detect: ATT&CK's detection strategies for its techniques,
+    split by the system's platforms (a template's, with no system, shows every platform)."""
+    from app.services import attack_detection
+    with get_database_service().get_connection() as conn:
+        platforms = attack_detection.system_platforms(conn, system_id)["names"] if system_id else []
+        found = attack_detection.strategies(conn, technique_ids)
+    return {"detection": attack_detection.for_platforms(found, platforms), "detection_platforms": platforms}
 
 
 @router.get("/api/systems/{system_id}/steps/{step_id}", response_class=HTMLResponse)
@@ -2342,7 +2542,7 @@ def api_technique_sigma_convert_form(
     request: Request, system_id: str, step_id: str, user: CurrentUser, client_id: ActiveClient,
     sigma_id: str = Query(...),
 ):
-    """Convert a suggested Sigma rule: choose the pipeline, then the Create Rule form opens."""
+    """Convert a suggested Sigma rule: choose the pipeline, then the Create rule form opens."""
     _system_step_or_404(system_id, step_id, client_id)
     return _sigma_convert_form(request, client_id, sigma_id, f"/api/systems/{system_id}/steps/{step_id}")
 
@@ -2369,7 +2569,7 @@ def api_technique_sigma_convert(
 
 def _sigma_convert(request: Request, user, client_id: str, sigma_id: str, pipeline: str, technique_url: str,
                    template: bool = False):
-    """Convert the Sigma rule (Elastic, Lucene) and open the Create Rule form filled in with it.
+    """Convert the Sigma rule (Elastic, Lucene) and open the Create rule form filled in with it.
     Creating the rule does not map it anywhere: mapping it to a technique is a separate step."""
     import yaml
     from app import sigma_helper as sigma_mod
@@ -2396,7 +2596,7 @@ def _sigma_convert(request: Request, user, client_id: str, sigma_id: str, pipeli
     return _templates(request).TemplateResponse(
         request, "components/rule_create_form.html",
         _build_rule_form_context(get_database_service(), client_id, user.username, "/api/rules/create",
-                                 "Create Rule", "Create Rule", prefill=prefill),
+                                 "Create rule", "Create rule", prefill=prefill),
     )
 
 
@@ -2513,10 +2713,26 @@ def api_system_steps_metrics(
     missing = _system_not_found(system_id, client_id)
     if missing:
         return missing
+    from app.inventory_engine import system_wazuh_figures
     data = get_system_steps(system_id, client_id=client_id)
     return _render("partials/system_steps_metrics.html", request, {
-        "system_id": system_id, **data,
+        "system_id": system_id, **data, "wazuh": system_wazuh_figures(system_id, client_id=client_id),
     })
+
+
+@router.get("/api/systems/{system_id}/log-sources", response_class=HTMLResponse)
+def api_system_log_sources(request: Request, system_id: str, user: CurrentUser, client_id: ActiveClient):
+    """The system page's Log sources: what ATT&CK's analytics for its baseline techniques read, on its
+    platforms (app.services.attack_detection)."""
+    from app.inventory_engine import get_system_steps
+    from app.services import attack_detection
+    missing = _system_not_found(system_id, client_id)
+    if missing:
+        return missing
+    steps = get_system_steps(system_id, client_id=client_id)["steps"]
+    with get_database_service().get_connection() as conn:
+        data = attack_detection.system_log_sources(conn, system_id, steps)
+    return _render("partials/system_log_sources.html", request, {"system_id": system_id, "has_steps": bool(steps), **data})
 
 
 @router.post("/api/systems/{system_id}/coverage-destinations", response_class=HTMLResponse)
@@ -2564,6 +2780,37 @@ def api_siem_coverage_dialog(request: Request, system_id: str, user: CurrentUser
     return _render("partials/system_siem_coverage_dialog.html", request, {
         "system_id": system_id, **_coverage_destination_context(system_id, client_id),
     })
+
+
+@router.get("/api/systems/{system_id}/map-by-attack", response_class=HTMLResponse)
+def api_map_by_attack_dialog(request: Request, system_id: str, user: CurrentUser, client_id: ActiveClient,
+                             disabled: bool = Query(False)):
+    """Map rules by ATT&CK id…: the system's techniques with no rule mapped, each with the Wazuh and
+    Elastic rules carrying one of its ATT&CK ids, none ticked; ``disabled`` (Include disabled rules)
+    lists disabled ones too (inventory_engine.attack_id_suggestions)."""
+    from app.inventory_engine import attack_id_suggestions
+    missing = _system_not_found(system_id, client_id)
+    if missing:
+        return missing
+    found = attack_id_suggestions(system_id, client_id=client_id, include_disabled=disabled)
+    return _render("partials/system_map_attack_dialog.html", request, {
+        "system_id": system_id, **found, "include_disabled": disabled,
+        "rule_count": sum(len(i["rules"]) for i in found["items"]),
+    })
+
+
+@router.post("/api/systems/{system_id}/map-by-attack", response_class=HTMLResponse)
+async def api_map_by_attack(request: Request, system_id: str, user: RequireUser, client_id: ActiveClient):
+    """Map the ticked suggestions, each as a rule mapped by hand; then the page reloads."""
+    from starlette.concurrency import run_in_threadpool
+    from app.inventory_engine import map_rules_by_attack
+    missing = _system_not_found(system_id, client_id)
+    if missing:
+        return missing
+    picks = [str(p) for p in (await request.form()).getlist("pick")]
+    mapped = await run_in_threadpool(map_rules_by_attack, system_id, picks, client_id, _actor(user))
+    logger.info("Mapped %d rule(s) by ATT&CK id on system %s", mapped, system_id)
+    return _system_page_reload()
 
 
 def _baselines_dialog(request: Request, system_id: str, client_id: str):
@@ -2777,6 +3024,20 @@ def _no_fetch(url: str, *args, **kwargs):
     raise ValueError(f"Report resources are not fetched: {url}")
 
 
+# A system report's template by audience (``mode``): the technical report, or the executive briefing.
+SYSTEM_REPORT_TEMPLATES = {"technical": "report/system_report.html", "executive": "report/system_report_ciso.html"}
+
+
+def prepare_system_report(report: dict, mode: str) -> dict:
+    """The report's data for its audience: the executive briefing adds its KPIs, kill chain,
+    roadmap and summary (system_brief)."""
+    from app.services import system_brief
+    report["mode"] = mode
+    if mode == "executive":
+        report["brief"] = system_brief.brief(report)
+    return report
+
+
 @router.get("/api/inventory/systems/{system_id}/report")
 def api_system_report(
     request: Request, system_id: str, user: CurrentUser, client_id: ActiveClient,
@@ -2785,12 +3046,15 @@ def api_system_report(
     classification: str = Query("Official"),
     include_devices: str = Query("1"),
     include_baselines: str = Query("1"),
+    include_wazuh: str = Query("1"),
     baseline_id: List[str] = Query([]),
     techniques: str = Query("gaps", pattern="^(gaps|all|none)$"),
 ):
-    """Generate a System report — CISO Executive Summary or Technical Deep Dive — for the chosen
-    baselines (``baseline_id``, repeated; all of them when none are named). ``techniques`` picks
-    which techniques get a detail entry in a technical report."""
+    """Generate a System report for the chosen baselines (``baseline_id``, repeated; all of them when
+    none are named): ``mode`` technical (the full report) or executive (a two- or three-page CISO
+    briefing). ``techniques`` picks which techniques get a detail entry in a technical report.
+    ``include_wazuh`` adds the Wazuh devices' vulnerabilities and hardening (D14), when the system
+    has such devices."""
     import os
     from datetime import datetime
     from app.services.report_generator import CLASSIFICATION_OPTIONS
@@ -2805,21 +3069,22 @@ def api_system_report(
     report_data = build_system_report_data(
         system_id, include_devices=include_devices_flag, client_id=client_id,
         baseline_ids=[b for b in baseline_id if b], techniques=techniques if mode == "technical" else "none",
+        include_wazuh=include_wazuh == "1",
     )
     if not report_data:
         raise HTTPException(status_code=404, detail="System not found")
 
-    report_data["mode"] = mode
     report_data["classification"] = classification
     report_data["include_devices"] = include_devices_flag
     report_data["include_baselines"] = include_baselines_flag and bool(report_data["baselines"])
+    prepare_system_report(report_data, mode)
 
     safe_name = report_data["system"]["name"].replace(" ", "_").replace("/", "_")[:30]
     level_tag = "ciso" if mode == "executive" else "technical"
     date_str = datetime.utcnow().strftime("%Y%m%d")
 
     if format == "markdown":
-        md = _generate_system_markdown(report_data, classification)
+        md = (_generate_system_markdown if mode == "technical" else _generate_brief_markdown)(report_data, classification)
         filename = f"{date_str}-{safe_name}-{level_tag}.md"
         content = md.encode("utf-8")
         return Response(
@@ -2837,7 +3102,7 @@ def api_system_report(
         from weasyprint import HTML as WeasyprintHTML
         from jinja2 import Environment, FileSystemLoader
         env = Environment(loader=FileSystemLoader(templates_dir), autoescape=True)
-        template = env.get_template("report/system_report.html")
+        template = env.get_template(SYSTEM_REPORT_TEMPLATES[mode])
         html_str = template.render(report=report_data)
         pdf_bytes = WeasyprintHTML(string=html_str, url_fetcher=_no_fetch).write_pdf()
     except ImportError:
@@ -3016,6 +3281,136 @@ def _md_coverage_line(c: dict) -> str:
     return f"- **{c['label']} added {_md_date(c.get('added'))}**{by} — {c['name']}{where}{tail}"
 
 
+def _wazuh_markdown(w: dict, hardening: list) -> List[str]:
+    """The Markdown report's Vulnerabilities and Hardening sections: Wazuh's findings on the system's Wazuh
+    devices (inventory_engine.system_wazuh_report), and its CIS benchmark results by policy."""
+    plural = lambda n, word: f"{n} {word}{'' if n == 1 else 's'}"  # noqa: E731
+    by_severity = ", ".join(f"{n} {s.lower()}" for s, n in w["by_severity"].items())
+    lines = ["## Vulnerabilities", "",
+             f"Wazuh's findings on the system's {plural(w['devices'], 'Wazuh device')}: {w['vulnerabilities']} in all "
+             f"({by_severity}), {w['kev']} known exploited, on {plural(w['affected'], 'device')}. A finding Wazuh no "
+             "longer reports is left out.", ""]
+    if w["top"]:
+        lines += [f"### CVEs on most devices ({len(w['top'])} of {w['distinct']})", "",
+                  "| CVE | Severity | CVSS | Devices | Known exploited | Packages |",
+                  "|-----|----------|------|---------|-----------------|----------|"]
+        for v in w["top"]:
+            lines.append(f"| {_md(v['cve_id'])} | {_md(v['severity'])} | {v['cvss'] if v['cvss'] is not None else '—'} | "
+                         f"{v['devices']} | {'Yes' if v['kev'] else 'No'} | {_md(', '.join(v['packages']))} |")
+        lines.append("")
+    lines += ["### By device", "",
+              "| Device | Agent | Critical | High | Medium | Low | Known exploited |",
+              "|--------|-------|----------|------|--------|-----|-----------------|"]
+    for d in w["devices_list"]:
+        s = d["by_severity"]
+        lines.append(f"| {_md(d['name'])} | {_md(d['status'].capitalize() or 'Unknown')} | {s['Critical']} | {s['High']} | "
+                     f"{s['Medium']} | {s['Low']} | {d['kev']} |")
+    lines += ["", "## Hardening", ""]
+    if not hardening:
+        return lines + ["No CIS benchmark results yet: Wazuh hasn't run a policy on these devices.", ""]
+    lines += ["Each CIS benchmark policy Wazuh ran on the system's Wazuh devices: the average and lowest score, and the "
+              "checks most devices fail, with their CIS ids.", "",
+              "| Policy | Devices | Average score | Lowest | Failing checks |",
+              "|--------|---------|---------------|--------|----------------|"]
+    for p in hardening:
+        lowest = f"{p['worst_score']}% ({_md(p['worst'])})" if p.get("worst_score") is not None else "—"
+        lines.append(f"| {_md(p['name'] or p['policy_id'])} | {p['devices']} | {p['avg_score']}% | {lowest} | {p['total_failing']} |")
+    lines.append("")
+    for p in hardening:
+        if not p["failing"]:
+            continue
+        lines += [f"### {_md(p['name'] or p['policy_id'])}: checks most devices fail", "",
+                  "| CIS | Check | Devices failing |", "|-----|-------|-----------------|"]
+        for c in p["failing"]:
+            lines.append(f"| {_md(', '.join(c['cis_ids']))} | {_md(c['title'])} | {c['failing']} of {c['devices']} |")
+        lines.append("")
+    return lines
+
+
+def _generate_brief_markdown(data: dict, classification: str) -> str:
+    """The executive briefing as Markdown: the same sections and figures as its PDF
+    (report/system_report_ciso.html), the coverage trend as each baseline's first and latest week."""
+    b = data["brief"]
+    sys = data["system"]
+    lines = [f"<!-- {classification} -->", "", f"# {sys['name']} — Executive / CISO briefing", "",
+             f"**Classification:** {classification}"]
+    if sys.get("classification"):
+        lines.append(f"**System classification:** {sys['classification']}")
+    lines += [f"**Generated:** {data['generated_at']}",
+              *([f"**Rules last synced:** {data['rules_synced']}"] if data.get("rules_synced") else []),
+              "**Audience:** Executive / CISO"]
+    if data.get("include_baselines"):
+        names = ", ".join(x["name"] for x in data["baselines"])
+        lines.append(f"**Baselines:** {'All — ' if data.get('all_baselines') else ''}{names}")
+    lines += ["", "---", "", "## Risk Posture", "",
+              "| " + " | ".join(k["label"] for k in b["kpis"]) + " |",
+              "|" + "---|" * len(b["kpis"]),
+              "| " + " | ".join(f"{_md(k['value'])} ({_md(k['sub'])})" for k in b["kpis"]) + " |", "",
+              " ".join(b["summary"]), ""]
+    if data["coverage_undefined"]:
+        lines += ["> No SIEM coverage destinations are set for this system, so coverage is not scored.", ""]
+
+    if data.get("include_baselines"):
+        if data.get("trend"):
+            first, last = {}, {}
+            for p in data["trend"]:
+                first.setdefault(p["baseline_name"], p)
+                last[p["baseline_name"]] = p
+            lines += ["### Coverage trend", ""]
+            lines += [f"- {name}: {first[name]['covered']}% on {first[name]['day']:%Y-%m-%d}, "
+                      f"{last[name]['covered']}% on {last[name]['day']:%Y-%m-%d}" for name in last]
+            lines.append("")
+        lines += ["## Threat Exposure", "",
+                  "| Baseline | Techniques | Covered | No coverage | Known gaps | N/A | Coverage | Effective |",
+                  "|----------|------------|---------|-------------|------------|-----|----------|-----------|"]
+        scored = not data["coverage_undefined"]
+        for x in data["baselines"]:
+            bt = x["totals"]
+            lines.append(f"| {_md(x['name'])} | {bt['total']} | {bt['covered']} | {bt['none']} | {bt['gap']} | {bt['na']} | "
+                         f"{x['coverage_pct'] if scored else '—'}{'%' if scored else ''} | "
+                         f"{x['effective_pct'] if scored else '—'}{'%' if scored else ''} |")
+        lines += ["", "### Kill-chain coverage", "",
+                  "| Tactic | Techniques | Covered | No coverage | Known gaps | N/A | Effective |",
+                  "|--------|------------|---------|-------------|------------|-----|-----------|"]
+        pct = lambda v: "—" if not scored or v is None else f"{v}%"  # noqa: E731
+        for r in b["tactics"]:
+            lines.append(f"| {_md(r['tactic'])} | {r['total']} | {r['covered']} | {r['none']} | {r['gap']} | {r['na']} | "
+                         f"{pct(r['effective_pct'])} |")
+        lines += ["", "## Remediation Roadmap", "",
+                  "Quick wins first (operational blockers, no new engineering), then the detections to build.", ""]
+        if b["roadmap"]:
+            lines += ["| # | Action | Effort | Impact |", "|---|--------|--------|--------|"]
+            for i, a in enumerate(b["roadmap"], 1):
+                effort = "Quick win" if a["kind"] == "quick" else "Engineering"
+                lines.append(f"| {i} | **{_md(a['title'])}** — {_md(a['detail'])} | {effort} | {_md(a['impact'])} |")
+        else:
+            lines.append("Nothing to remediate: every technique is covered by rules that work, or accepted with a reason "
+                         "that isn't due for review.")
+        lines.append("")
+
+    if data.get("include_devices"):
+        lines += ["## Device & Vulnerability Posture", ""]
+        if data["total_hosts"]:
+            lines += ["| Devices | Clean | At risk | Monitored | Unique CVEs |", "|---|---|---|---|---|",
+                      f"| {data['total_hosts']} | {data['green_hosts']} | {data['red_hosts']} | {data['amber_hosts']} | "
+                      f"{data['total_cves']} |", ""]
+        if not data["total_cves"]:
+            lines.append(f"No known exploited vulnerability matched on {sys['name']}'s {data['total_hosts']} devices."
+                         if data["total_hosts"] else f"No devices are recorded on {sys['name']}.")
+        else:
+            lines += ["| CVE | Vulnerability | At risk | Monitored | Ransomware |", "|---|---|---|---|---|"]
+            for cve in data["top5_cves"]:
+                lines.append(f"| {cve['cve_id']} | {_md(cve['vulnerability_name'][:70])} | {len(cve.get('hosts_red', []))} | "
+                             f"{len(cve.get('hosts_amber', []))} | {'Yes' if cve.get('known_ransomware') else 'No'} |")
+        lines.append("")
+    if data.get("wazuh"):
+        w = data["wazuh"]
+        by = ", ".join(f"{n} {s.lower()}" for s, n in w["by_severity"].items())
+        lines += [f"Wazuh reports {w['vulnerabilities']} findings ({by}) on {w['affected']} of the system's {w['devices']} "
+                  f"Wazuh devices, {w['kev']} known exploited.", ""]
+    return "\n".join(lines)
+
+
 def _generate_system_markdown(data: dict, classification: str) -> str:
     """Generate a Markdown system report: the same sections and figures as the PDF."""
     mode = data.get("mode", "executive")
@@ -3175,6 +3570,9 @@ def _generate_system_markdown(data: dict, classification: str) -> str:
                 f"{h['cve_count']} | {h['red_count']} | {h['amber_count']} |"
             )
         lines.append("")
+
+    if data.get("wazuh"):
+        lines += _wazuh_markdown(data["wazuh"], data.get("hardening") or [])
 
     if mode == "technical" and show_baselines:
         lines += ["## Coverage Matrix", ""]

@@ -356,7 +356,8 @@ def deploy_to_siem(
     # ``SIEM/space mismatch detected`` for every space other than that row's.
     target_siem = None
     requested_space = (space or "default")
-    client_siems = db.get_client_siems(client_id)
+    from app.services.siem_kinds import elastic_only
+    client_siems = elastic_only(db.get_client_siems(client_id))
     for s in client_siems:
         if s.get("id") == siem_id and (s.get("space") or "default") == requested_space:
             target_siem = s
@@ -391,13 +392,19 @@ def deploy_to_siem(
     # needs nothing; otherwise the user chooses to update it or to deploy a separate copy under a
     # new rule id (``resolution``).
     rule_id_override = ""
+    payload, error = sigma.deploy_payload(yaml_content, enabled, index_pattern or None, pipeline_file,
+                                          template_file, user.username)
+    if payload is None:
+        return HTMLResponse(f'<div class="alert alert-danger">{escape(error)}</div>')
+    # Elastic's own validator (#7): a query it can't parse isn't deployed, when the client says so.
+    from app.services import elastic_validator
+    problems = elastic_validator.check_rule(db, target_siem, payload)
+    stopped, note = elastic_validator.verdict(problems, elastic_validator.stops(db, client_id), "deploy the rule")
+    if stopped:
+        return HTMLResponse(f'<div class="alert alert-danger">{escape(stopped)}</div>')
     if resolution != "update":
         from app.elastic_helper import find_rule_in_space
         from app.services.rule_diff import conflict_differences
-        payload, error = sigma.deploy_payload(yaml_content, enabled, index_pattern or None, pipeline_file,
-                                              template_file, user.username)
-        if payload is None:
-            return HTMLResponse(f'<div class="alert alert-danger">{escape(error)}</div>')
         state, live = find_rule_in_space(payload.get("rule_id", ""), target_space, target_siem["kibana_url"],
                                          target_siem["api_token_enc"])
         if state == "unknown":
@@ -446,7 +453,7 @@ def deploy_to_siem(
                 db, client_id, (new_rule_id, siem_id, target_space), "sigma", sigma_id, "deployed", user.username,
                 convert_options={"pipeline_file": pipeline_file, "template_file": template_file,
                                  "index_pattern": index_pattern})
-        return HTMLResponse(f'<div class="alert alert-success">{message}</div>')
+        return HTMLResponse(f'<div class="alert alert-{"warning" if note else "success"}">{message}{escape(note)}</div>')
     else:
         return HTMLResponse(f'<div class="alert alert-danger">{message}</div>')
 
@@ -485,7 +492,7 @@ def get_pipelines(request: Request, user: CurrentUser):
 def get_categories(request: Request, user: CurrentUser):
     """Get rule categories as HTML options."""
     categories = sigma.get_rule_categories()
-    html = '<option value="">All Categories</option>'
+    html = '<option value="">Any</option>'
     for cat in categories:
         html += f'<option value="{cat}">{cat.title()}</option>'
     return HTMLResponse(html)
@@ -493,8 +500,9 @@ def get_categories(request: Request, user: CurrentUser):
 
 @router.get("/spaces", response_class=HTMLResponse)
 def get_spaces(request: Request, user: CurrentUser, db: DbDep, client_id: ActiveClient):
-    """Get deploy target SIEMs as HTML options, scoped to active client."""
-    client_siems = db.get_client_siems(client_id)
+    """Get deploy target SIEMs as HTML options, scoped to active client (Elastic destinations only)."""
+    from app.services.siem_kinds import elastic_only
+    client_siems = elastic_only(db.get_client_siems(client_id))
     html = ""
     for s in client_siems:
         if s.get("space"):

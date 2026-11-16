@@ -148,7 +148,7 @@ def in_validated_range(rule, lo: Optional[datetime], hi: Optional[datetime], sta
 
 
 # Schema version for migrations
-SCHEMA_VERSION = 103
+SCHEMA_VERSION = 110
 
 # The per-client role that opens Diagnostics for that client. Only a super admin can grant or
 # revoke it (set_user_roles(grant_support=...)).
@@ -235,6 +235,8 @@ VALIDATION_KEY_SQL = "COALESCE(json_extract_string(raw_data, '$.rule_id'), rule_
 _NO_RULES_LEFT = "Removed from TIDE: Kibana returned no rules for its space at a sync."
 RULE_REMOVED_UNLINKED = "Removed from TIDE: its destination was unlinked from this client."
 RULE_REMOVED_NOT_LINKED = "Removed from TIDE: its destination is no longer linked to this client."
+RULE_REMOVED_NOT_HELD = ("Removed from TIDE: its Wazuh destination holds only the rules with an ATT&CK technique "
+                         "and the custom ones.")
 
 
 def rule_json_keys(raw_data) -> Tuple[str, Optional[str], str]:
@@ -466,6 +468,44 @@ class DatabaseService:
         except:
             return 0
     
+    def _ensure_wazuh_tables_in_tenants(self, conn, migration: int) -> None:
+        """Create the Wazuh tables (app.services.wazuh_assets.DDL) in every tenant DB that exists. New
+        tenant DBs get them from _create_tenant_schema."""
+        from app.services import wazuh_assets
+        self._in_every_tenant(conn, migration, wazuh_assets.ensure, "Wazuh tables ensured")
+
+    @staticmethod
+    def add_system_platforms_column(tconn) -> None:
+        """Migration 109 for one tenant DB (and every new tenant). Idempotent. The platforms a person
+        adds to a system (Edit system), beside those its devices show (app.services.attack_detection)."""
+        tconn.execute("ALTER TABLE systems ADD COLUMN IF NOT EXISTS platforms VARCHAR[]")
+
+    def _in_every_tenant(self, conn, migration: int, apply, done: str) -> None:
+        """Run ``apply(tenant_conn)`` on every tenant DB that exists. Additive changes only; a tenant that
+        can't be opened is logged and skipped."""
+        try:
+            rows = conn.execute("SELECT id, name, db_filename FROM clients WHERE db_filename IS NOT NULL").fetchall()
+        except Exception as exc:
+            logger.warning(f"Migration {migration}: could not list tenant DBs: {exc}")
+            rows = []
+        data_dir = os.path.dirname(self.db_path)
+        migrated = 0
+        for cid, cname, fname in rows:
+            tdb_path = os.path.join(data_dir, fname)
+            if not os.path.exists(tdb_path):
+                logger.warning(f"Migration {migration}: tenant DB missing for client {cname} ({cid[:8]}) — skipping")
+                continue
+            try:
+                tconn = duckdb.connect(tdb_path)
+                try:
+                    apply(tconn)
+                    migrated += 1
+                finally:
+                    tconn.close()
+            except Exception as exc:
+                logger.error(f"Migration {migration}: failed on {fname} ({cname}): {exc}")
+        logger.info("Migration %d: %s in %d tenant DB(s).", migration, done, migrated)
+
     def _set_schema_version(self, conn, version: int):
         """Record schema version in database."""
         conn.execute("""
@@ -4201,6 +4241,58 @@ class DatabaseService:
             self._set_schema_version(conn, 103)
             logger.info("Migration 103: clients can set when a rule has too many exceptions.")
 
+        # ── Migration 104: what the Content-Security-Policy would block (6.5.0, #89 R3) ──
+        # One row per distinct violation browsers report (app.services.csp). Additive only.
+        if current_version < 104:
+            from app.services.csp import DDL as _CSP_DDL
+            conn.execute(_CSP_DDL)
+            self._set_schema_version(conn, 104)
+            logger.info("Migration 104: TIDE keeps what its Content-Security-Policy would block.")
+
+        # ── Migration 105: Elastic's validator stops saves only when the client says so (6.5.0, #7) ──
+        # elastic_blocks: 1 stops a save or deploy whose query Elastic's validator refuses; NULL / 0 only
+        # warns (the default, the owner's choice). Additive only.
+        if current_version < 105:
+            conn.execute("ALTER TABLE clients ADD COLUMN IF NOT EXISTS elastic_blocks INTEGER")
+            self._set_schema_version(conn, 105)
+            logger.info("Migration 105: clients can stop saves Elastic's validator refuses.")
+
+        # ── Migration 106: a Wazuh destination can hold every Wazuh rule ──
+        # all_rules: true holds every rule of the destination's Wazuh manager; NULL / false only those
+        # carrying an ATT&CK id and the custom ones (app.services.wazuh_sync). Additive only.
+        if current_version < 106:
+            conn.execute("ALTER TABLE client_siem_map ADD COLUMN IF NOT EXISTS all_rules BOOLEAN")
+            self._set_schema_version(conn, 106)
+            logger.info("Migration 106: a Wazuh destination can hold every Wazuh rule.")
+
+        # ── Migration 107: Wazuh agents as devices, in every tenant DB ──
+        # The agent, vulnerability and alert tables are created (app.services.wazuh_assets.DDL). New tenant DBs get them from _create_tenant_schema;
+        # this gives them to the tenants that exist. Additive only.
+        if current_version < 107:
+            self._ensure_wazuh_tables_in_tenants(conn, 107)
+            self._set_schema_version(conn, 107)
+
+        # ── Migration 108: Wazuh phase 5, in every tenant DB ──
+        # Each destination's agents and how its last read went (Rule Monitoring's Wazuh agents disconnected and
+        # Wazuh read incomplete), and each policy's score history (the Dashboard's Hardening card). Additive only.
+        if current_version < 108:
+            self._ensure_wazuh_tables_in_tenants(conn, 108)
+            self._set_schema_version(conn, 108)
+
+        # ── Migration 109: a system's platforms, in every tenant DB ──
+        # The ATT&CK platforms a person adds to a system in Edit system (SaaS, IaaS, an identity provider:
+        # what no device shows), for How to detect and the system's Log sources. NULL: none added. Additive only.
+        if current_version < 109:
+            self._in_every_tenant(conn, 109, self.add_system_platforms_column, "systems can have platforms")
+            self._set_schema_version(conn, 109)
+
+        # ── Migration 110: the Detection Backlog page ──
+        # It shows the systems' baseline techniques, so each role starts with what it has on Systems.
+        if current_version < 110:
+            self.seed_page_permissions(conn, "page:detection_backlog", "page:systems")
+            self._set_schema_version(conn, 110)
+            logger.info("Migration 110: page:detection_backlog seeded from page:systems for every client.")
+
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
 
     @staticmethod
@@ -5637,88 +5729,6 @@ class DatabaseService:
                 "SELECT rule_id, siem_id, space FROM detection_rules"
             ).fetchall()
             return {(r[0], r[1], r[2]) for r in rows}
-
-    def get_existing_rule_data(self) -> dict:
-        """Get existing rule scores and raw_data keyed by (rule_id, siem_id, space).
-        Used to preserve mapping data for rules that skip mapping during lazy sync.
-        Keyed by ``(siem_id, space)`` since 4.1.12 (Migration 44)."""
-        with self.get_connection() as conn:
-            rows = conn.execute(
-                "SELECT rule_id, siem_id, space, score, quality_score, meta_score, "
-                "score_mapping, score_field_type, score_search_time, score_language, "
-                "score_note, score_override, score_tactics, score_techniques, "
-                "score_author, score_highlights, raw_data "
-                "FROM detection_rules"
-            ).fetchall()
-            columns = [desc[0] for desc in conn.description]
-            result = {}
-            for row in rows:
-                d = dict(zip(columns, row))
-                key = (d['rule_id'], d['siem_id'], d['space'])
-                # Parse raw_data JSON to get results
-                raw = d.get('raw_data')
-                if isinstance(raw, str):
-                    try:
-                        raw = json.loads(raw)
-                    except:
-                        raw = {}
-                d['raw_data'] = raw
-                result[key] = d
-            return result
-
-    def move_rule_space(self, rule_id: str, from_space: str, to_space: str,
-                        siem_id: Optional[str] = None):
-        """Move a rule from one space to another in DuckDB (for instant UI update
-        after promotion). When ``siem_id`` is supplied (4.0.13+), the move is
-        scoped to that SIEM only so an in-place promote within SIEM A doesn't
-        accidentally rename SIEM B's identically-keyed rule."""
-        with self.get_connection() as conn:
-            if siem_id is None:
-                # Legacy fallback: scope by space only. Logged at WARN because
-                # this is ambiguous when multiple SIEMs share a space name.
-                logger.warning(
-                    "move_rule_space called without siem_id (rule_id=%s %s->%s) — "
-                    "this is ambiguous across SIEMs; update caller to pass siem_id",
-                    rule_id, from_space, to_space,
-                )
-                conn.execute(
-                    "DELETE FROM detection_rules WHERE rule_id = ? AND space = ?",
-                    [rule_id, to_space]
-                )
-                conn.execute(
-                    "UPDATE detection_rules SET space = ? WHERE rule_id = ? AND space = ?",
-                    [to_space, rule_id, from_space]
-                )
-            else:
-                # SIEM-scoped: target row may already exist for the same SIEM
-                # (e.g. a previous promotion left a duplicate). Drop it first.
-                conn.execute(
-                    "DELETE FROM detection_rules "
-                    "WHERE rule_id = ? AND space = ? AND siem_id = ?",
-                    [rule_id, to_space, siem_id]
-                )
-                conn.execute(
-                    "UPDATE detection_rules SET space = ? "
-                    "WHERE rule_id = ? AND space = ? AND siem_id = ?",
-                    [to_space, rule_id, from_space, siem_id]
-                )
-            # CHECKPOINT is best-effort — flushes pending writes to the
-            # main DB file. Will fail if a concurrent writer (e.g. a
-            # post-promote sync task on the same tenant DB) holds an open
-            # transaction; the move itself is already committed by the
-            # `with self.get_connection()` context exit, so we just log
-            # and move on instead of bubbling a 500 to the operator.
-            try:
-                conn.execute("CHECKPOINT")
-            except Exception as _ckpt_exc:  # noqa: BLE001
-                logger.debug(
-                    "move_rule_space CHECKPOINT skipped (non-fatal): %s",
-                    _ckpt_exc,
-                )
-        logger.info(
-            "Moved rule %s from '%s' to '%s' in DB (siem_id=%s)",
-            rule_id, from_space, to_space, siem_id or '<unscoped>',
-        )
 
     def get_rule_by_id(self, rule_id: str, space: str = "default",
                        siem_id: Optional[str] = None,
@@ -7176,141 +7186,6 @@ class DatabaseService:
                 pass
             return origins, sources
     
-    def _dead_get_promotion_metrics(
-        self,
-        staging_scopes: Optional[List[Tuple[str, str]]] = None,
-        production_scopes: Optional[List[Tuple[str, str]]] = None,
-    ) -> Dict[str, Any]:
-        """Get metrics specifically for staging rules ready for promotion.
-
-        Args:
-            staging_scopes:    ``(siem_id, space)`` pairs tagged
-                ``environment_role='staging'`` for the active client.
-            production_scopes: ``(siem_id, space)`` pairs tagged
-                ``environment_role='production'`` for the active client.
-
-        If neither is provided, falls back to filtering by the literal
-        ``staging`` / ``production`` space-name strings — used only by the
-        stand-alone (no-client) admin views.
-
-        Composite ``(siem_id, space)`` predicates are mandatory whenever a
-        client scope is in play. Filtering by space-name alone leaks rules
-        across SIEMs that share a Kibana space name (CLAUDE.md §8.2 g4).
-        """
-        with self.get_connection() as conn:
-            # ── Build staging filter ──
-            if staging_scopes is not None:
-                if not staging_scopes:
-                    import pandas as _pd
-                    staging_df = _pd.DataFrame(
-                        columns=['enabled', 'score', 'severity', 'name', 'vkey']
-                    )
-                else:
-                    frag, params = _scope_predicate(staging_scopes)
-                    staging_df = conn.execute(
-                        f"SELECT enabled, score, severity, name, {VALIDATION_KEY_SQL} AS vkey "
-                        f"FROM detection_rules WHERE {frag}",
-                        params,
-                    ).df()
-            else:
-                staging_df = conn.execute(
-                    f"SELECT enabled, score, severity, name, {VALIDATION_KEY_SQL} AS vkey FROM detection_rules WHERE LOWER(space) = 'staging'"
-                ).df()
-
-            # ── Build production count ──
-            if production_scopes is not None:
-                if not production_scopes:
-                    prod_result = (0,)
-                else:
-                    frag, params = _scope_predicate(production_scopes)
-                    prod_result = conn.execute(
-                        f"SELECT COUNT(*) FROM detection_rules WHERE {frag}",
-                        params,
-                    ).fetchone()
-            else:
-                prod_result = conn.execute(
-                    "SELECT COUNT(*) FROM detection_rules WHERE LOWER(space) = 'production'"
-                ).fetchone()
-            production_total = prod_result[0] if prod_result else 0
-            
-            if staging_df.empty:
-                return {
-                    'staging_total': 0,
-                    'staging_enabled': 0,
-                    'staging_avg_score': 0,
-                    'staging_min_score': 0,
-                    'staging_max_score': 0,
-                    'staging_low_quality': 0,
-                    'staging_high_quality': 0,
-                    'staging_quality_excellent': 0,
-                    'staging_quality_good': 0,
-                    'staging_quality_fair': 0,
-                    'staging_quality_poor': 0,
-                    'staging_severity': {},
-                    'staging_validated': 0,
-                    'staging_validation_expired': 0,
-                    'staging_never_validated': 0,
-                    'production_total': production_total,
-                }
-            
-            staging_total = len(staging_df)
-            staging_enabled = len(staging_df[staging_df['enabled'] == 1])
-            staging_avg_score = float(staging_df['score'].mean()) if 'score' in staging_df.columns else 0
-            staging_min_score = int(staging_df['score'].min()) if 'score' in staging_df.columns else 0
-            staging_max_score = int(staging_df['score'].max()) if 'score' in staging_df.columns else 0
-            staging_low_quality = len(staging_df[staging_df['score'] < 50])
-            staging_high_quality = len(staging_df[staging_df['score'] >= 80])
-            
-            # Quality brackets
-            staging_quality_excellent = len(staging_df[staging_df['score'] >= 80])
-            staging_quality_good = len(staging_df[(staging_df['score'] >= 70) & (staging_df['score'] < 80)])
-            staging_quality_fair = len(staging_df[(staging_df['score'] >= 50) & (staging_df['score'] < 70)])
-            staging_quality_poor = len(staging_df[staging_df['score'] < 50])
-            
-            staging_severity = {}
-            if 'severity' in staging_df.columns:
-                sev_counts = staging_df['severity'].value_counts().to_dict()
-                staging_severity = {str(k).lower(): int(v) for k, v in sev_counts.items()}
-            
-            # Validation stats for staging rules
-            staging_validated = 0
-            staging_validation_expired = 0
-            validation_data = self._load_validation_data()
-            if validation_data:
-                now = datetime.now()
-                for rule_id, rule_name in zip(staging_df['vkey'].tolist(), staging_df['name'].tolist()):
-                    rule_v = validation_for(validation_data, rule_id, rule_name)
-                    if rule_v:
-                        staging_validated += 1
-                        val_str = rule_v.get('last_checked_on', '')
-                        if val_str:
-                            try:
-                                val_date = datetime.strptime(val_str[:10], "%Y-%m-%d")
-                                weeks = (now - val_date).days / 7
-                                if weeks > 12:
-                                    staging_validation_expired += 1
-                            except:
-                                pass
-            
-            return {
-                'staging_total': staging_total,
-                'staging_enabled': staging_enabled,
-                'staging_avg_score': staging_avg_score,
-                'staging_min_score': staging_min_score,
-                'staging_max_score': staging_max_score,
-                'staging_low_quality': staging_low_quality,
-                'staging_high_quality': staging_high_quality,
-                'staging_quality_excellent': staging_quality_excellent,
-                'staging_quality_good': staging_quality_good,
-                'staging_quality_fair': staging_quality_fair,
-                'staging_quality_poor': staging_quality_poor,
-                'staging_severity': staging_severity,
-                'staging_validated': staging_validated,
-                'staging_validation_expired': staging_validation_expired,
-                'staging_never_validated': staging_total - staging_validated,
-                'production_total': production_total,
-            }
-    
     # --- RULE LIFECYCLE HISTORY ---
 
     def _ensure_rule_lifecycle_history_table(self, conn) -> None:
@@ -8062,7 +7937,14 @@ class DatabaseService:
                 updated_stamp = updated_utc.isoformat() if updated_utc else ""
                 has_created, elastic_edits = state.get((rule_id, siem_id, space), (False, set()))
 
-                if not has_created:
+                if not has_created and raw_data.get("type") == "wazuh":
+                    # Wazuh keeps no creation date or author for a rule (app.services.wazuh_sync).
+                    events.append([
+                        str(uuid.uuid4()), rule_id, siem_id, space, client_id, "created", None, "Wazuh",
+                        json.dumps({"source": "wazuh_sync", "message": "In Wazuh when TIDE first read it."}),
+                        created_at,
+                    ])
+                elif not has_created:
                     events.append([
                         str(uuid.uuid4()), rule_id, siem_id, space, client_id, "created", None, "elastic",
                         json.dumps({
@@ -8640,16 +8522,17 @@ class DatabaseService:
     
     def get_threat_landscape_metrics(self, client_id: str = None) -> "ThreatLandscapeMetrics":
         """Calculate comprehensive threat landscape metrics.
-        If client_id provided, coverage is scoped to that client's production
-        ``(siem_id, space)`` pairs. Composite scope is mandatory — a
+        If client_id provided, coverage is scoped to every ``(siem_id, space)`` destination linked
+        to the client, as get_covered_ttps_for_client counts it. Composite scope is mandatory — a
         space-only filter would leak TTP coverage from any other SIEM that
         shares a Kibana space name (CLAUDE.md §8.2 g4)."""
         from app.models.threats import ThreatLandscapeMetrics
 
-        # Pre-fetch composite scopes outside the main connection.
+        # Pre-fetch composite scopes outside the main connection. Every linked destination: a
+        # destination's name is a label, never a key (CLAUDE.md §6).
         prod_scopes = None
         if client_id:
-            prod_scopes = self.get_client_siem_scopes(client_id, "production")
+            prod_scopes = self.get_client_siem_scopes(client_id)
         
         # The actors are exactly those Threat Landscape lists (get_threat_actors): MITRE's, which
         # every client sees, and the client's own OpenCTI actors merged in. Only rule *coverage*
@@ -8818,6 +8701,25 @@ class DatabaseService:
             ).fetchall()
             return {row[0]: row[1] for row in result if row[0] and row[1]}
     
+    def get_technique_revisions(self) -> Dict[str, str]:
+        """Each ATT&CK technique id a later release replaced, and the id that stands for it now
+        (``mitre_technique_revisions``; a chain of replacements is followed to its end). Empty on a
+        reference database built before the table existed."""
+        try:
+            with self.get_connection() as conn:
+                rows = conn.execute("SELECT old_id, new_id FROM mitre_technique_revisions").fetchall()
+        except Exception:
+            return {}
+        step = {old: new for old, new in rows if old and new}
+        out = {}
+        for old in step:
+            cur, seen = old, set()
+            while cur in step and cur not in seen:
+                seen.add(cur)
+                cur = step[cur]
+            out[old] = cur
+        return out
+
     def get_technique_names(self) -> Dict[str, str]:
         """Get mapping of technique IDs to names."""
         with self.get_connection() as conn:
@@ -11069,6 +10971,11 @@ class DatabaseService:
                 ("tags", "tags"),
                 ("risk_score", "risk score"),
                 ("threat", "threat mapping"),
+                # A Wazuh rule's own (app.services.wazuh_sync); Kibana rules have none of these.
+                ("level", "level"),
+                ("groups", "groups"),
+                ("details", "conditions"),
+                ("compliance", "compliance"),
             ]
             for key, label in tracked_raw:
                 before = _norm_compare(old_raw.get(key))
@@ -11278,11 +11185,12 @@ class DatabaseService:
 
                         raw_data = _parse_raw(new_row.get('raw_data'))
                         sync_utc = kibana_utc(raw_data.get('updated_at'))
-                        changed.append((key, field_diffs, sync_utc, utc_to_local(sync_utc)))
+                        changed.append((key, field_diffs, sync_utc, utc_to_local(sync_utc),
+                                        raw_data.get('type') == 'wazuh'))
 
-                    since = min(((ts or datetime.now()) for _, _, _, ts in changed), default=datetime.now())
+                    since = min(((ts or datetime.now()) for _, _, _, ts, _ in changed), default=datetime.now())
                     history = _recent_edits(conn, [c[0] for c in changed], since - timedelta(minutes=10)) if changed else {}
-                    for key, field_diffs, sync_utc, sync_ts in changed:
+                    for key, field_diffs, sync_utc, sync_ts, from_wazuh in changed:
                         if _is_recent_local_edit_echo(history.get(key, []), field_diffs, sync_ts):
                             continue
 
@@ -11293,9 +11201,11 @@ class DatabaseService:
                                 'space': key[2],
                                 'client_id': client_id,
                                 'created_at': sync_ts,
+                                'actor': 'Wazuh' if from_wazuh else 'elastic',
                                 'detail': {
-                                    'source': 'elastic_sync',
-                                    'message': 'Rule metadata changed during Elastic sync.',
+                                    'source': 'wazuh_sync' if from_wazuh else 'elastic_sync',
+                                    'message': ('Changed in Wazuh, seen at a sync.' if from_wazuh
+                                                else 'Rule metadata changed during Elastic sync.'),
                                     'changed_fields': ', '.join(diff.get('field') for diff in field_diffs),
                                     'field_diffs': field_diffs,
                                     'elastic_timestamp': sync_utc.isoformat() if sync_utc else '',
@@ -11346,7 +11256,7 @@ class DatabaseService:
                     self._ensure_rule_lifecycle_history_table(conn)
                     self._insert_history_rows(conn, [
                         [str(uuid.uuid4()), e['rule_id'], e['siem_id'], e['space'], e['client_id'], 'edited',
-                         None, 'elastic', json.dumps(e['detail']), e.get('created_at') or datetime.now()]
+                         None, e.get('actor') or 'elastic', json.dumps(e['detail']), e.get('created_at') or datetime.now()]
                         for e in pending_sync_edit_events])
             except Exception:
                 logger.exception('Failed to record the edits Elastic sync found for client_id=%s', client_id)
@@ -11690,6 +11600,7 @@ class DatabaseService:
                 "rule_validation_high_amber_weeks, rule_validation_high_expired_weeks, "
                 "rule_validation_critical_amber_weeks, rule_validation_critical_expired_weeks, "
                 "delete_source_after_promotion, data_window_hours, noisy_per_day, noisy_share_pct, silent_enabled_days, silent_days, "
+                "upstream_pending_days, validation_stale, exceptions_many, elastic_blocks, "
                 "created_at, updated_at "
                 "FROM clients WHERE id = ?", [client_id]
             ).fetchone()
@@ -11705,6 +11616,7 @@ class DatabaseService:
                  "rule_validation_critical_amber_weeks", "rule_validation_critical_expired_weeks",
                  "delete_source_after_promotion", "data_window_hours", "noisy_per_day", "noisy_share_pct",
                  "silent_enabled_days", "silent_days",
+                 "upstream_pending_days", "validation_stale", "exceptions_many", "elastic_blocks",
                  "created_at", "updated_at"], row
             ))
 
@@ -11760,7 +11672,7 @@ class DatabaseService:
             "rule_validation_mode",
             "delete_source_after_promotion",
             "data_window_hours", "noisy_per_day", "noisy_share_pct", "silent_enabled_days", "silent_days",
-            "upstream_pending_days", "validation_stale", "exceptions_many",
+            "upstream_pending_days", "validation_stale", "exceptions_many", "elastic_blocks",
             "rule_validation_amber_weeks",
             "rule_validation_expired_weeks",
             "rule_validation_low_amber_weeks",
@@ -12191,7 +12103,8 @@ class DatabaseService:
             query = (
                 "SELECT s.id, s.label, s.siem_type, s.elasticsearch_url, s.kibana_url, "
                 "s.api_token_enc, "
-                "m.name, m.space, m.default_index, s.is_active, s.created_at, m.color "
+                "m.name, m.space, m.default_index, s.is_active, s.created_at, m.color, "
+                "COALESCE(m.all_rules, false), s.extra_config "
                 "FROM siem_inventory s JOIN client_siem_map m ON s.id = m.siem_id "
                 "WHERE m.client_id = ?"
             )
@@ -12203,10 +12116,14 @@ class DatabaseService:
             rows = conn.execute(query, params).fetchall()
             cols = ["id", "label", "siem_type", "elasticsearch_url", "kibana_url",
                 "api_token_enc",
-                "name", "space", "default_index", "is_active", "created_at", "color"]
+                "name", "space", "default_index", "is_active", "created_at", "color", "all_rules"]
             result = []
             for r in rows:
-                d = reveal_fields(dict(zip(cols, r)), "api_token_enc")
+                d = reveal_fields(dict(zip(cols, r[:-1])), "api_token_enc")
+                if d.get("siem_type") == "wazuh":
+                    # Its manager's address, for display (its settings, sealed password and all, stay put).
+                    from app.services.wazuh import addresses as _wazuh_addresses
+                    d["manager_url"] = _wazuh_addresses({"extra_config": r[-1]})["manager_url"]
                 # Normalise NULL/empty space to 'default' (Kibana built-in space)
                 if not d.get("space") or not str(d["space"]).strip():
                     d["space"] = "default"
@@ -12313,8 +12230,10 @@ class DatabaseService:
     def update_client_siem_destination(
         self, client_id: str, siem_id: str, space: str,
         name: Optional[str] = None, color: Optional[str] = None, default_index: Optional[str] = None,
+        all_rules: Optional[bool] = None,
     ) -> Optional[str]:
-        """Update a linked destination's name, colour and/or default index in one call --
+        """Update a linked destination's name, colour, default index and/or (a Wazuh destination's)
+        whether it holds every Wazuh rule in one call --
         backs the rule window's "..." edit menu. Any argument left ``None`` keeps its current
         value. Returns an error message, or ``None`` on success. Like ``rename_client_siem``,
         none of this touches rules, scores, validation or history -- all keyed by
@@ -12323,13 +12242,13 @@ class DatabaseService:
         space = space or "default"
         with self.get_shared_connection() as conn:
             existing = conn.execute(
-                "SELECT name, color, default_index FROM client_siem_map "
+                "SELECT name, color, default_index, COALESCE(all_rules, false) FROM client_siem_map "
                 "WHERE client_id = ? AND siem_id = ? AND space = ?",
                 [client_id, siem_id, space],
             ).fetchone()
             if not existing:
                 return "Linked SIEM destination not found."
-            cur_name, cur_color, cur_default_index = existing
+            cur_name, cur_color, cur_default_index, cur_all_rules = existing
             new_name = cur_name
             if name is not None:
                 name = name.strip()
@@ -12341,9 +12260,10 @@ class DatabaseService:
             if default_index is not None:
                 new_default_index = default_index.strip() or None
             conn.execute(
-                "UPDATE client_siem_map SET name = ?, color = ?, default_index = ? "
+                "UPDATE client_siem_map SET name = ?, color = ?, default_index = ?, all_rules = ? "
                 "WHERE client_id = ? AND siem_id = ? AND space = ?",
-                [new_name, new_color, new_default_index, client_id, siem_id, space],
+                [new_name, new_color, new_default_index, cur_all_rules if all_rules is None else bool(all_rules),
+                 client_id, siem_id, space],
             )
         return None
 
@@ -12784,7 +12704,9 @@ class DatabaseService:
             status = "pass"
         if status not in ("pass", "fail"):
             return False
-        msg = (message or "")[:500]
+        # A SIEM's per-check JSON (already shortened check by check) is kept whole: cut, it can't be
+        # read back for the card's result panel.
+        msg = (message or "")[:4000 if (message or "").startswith("{") else 500]
         with self.get_shared_connection() as conn:
             conn.execute(
                 f"UPDATE {table} SET last_test_status = ?, last_test_at = now(), "
@@ -12832,102 +12754,6 @@ class DatabaseService:
                     "api_token_enc", "log_target_space", "log_schedule",
                     "log_retention_days", "log_destination_path"]
             return [dict(zip(cols, r)) for r in rows]
-
-    def get_all_kibana_spaces(self) -> List[str]:
-        """Return every distinct Kibana space known to TIDE.
-
-        Used by the per-SIEM Rule Logging picker so every SIEM card offers
-        the same option set regardless of which `siem_inventory` row received
-        the last rule sync (two aliases of the same backend would otherwise
-        show different lists).
-
-        Discovery union (in order, deduped):
-        1. Every `space` value present in `detection_rules` (any SIEM, any
-           tenant — the query runs against the shared connection so it sees
-           the global table when not in multi-DB mode; in multi-DB mode the
-           per-tenant tables are inspected).
-        2. Every distinct ``client_siem_map.space`` value, so freshly-mapped
-           SIEMs without a sync yet still surface their intended spaces.
-        3. Every distinct ``siem_kibana_spaces.space`` value (Migration 41
-           persistent test-connection cache).
-
-        No name-based filtering is applied. Releases 4.1.5–4.1.7 stripped
-        the literal strings ``'production'`` / ``'staging'`` from every
-        source on the theory that they were always role-name confusion;
-        that theory turned out to be wrong (Kibana permits space ids with
-        those names and at least one standalone deployment uses them), and
-        the filter was the cause of those legitimate spaces being invisible
-        in the link-to-tenant picker on the airgapped box whenever the live
-        Kibana lookup fell back to the persisted cache.
-        """
-        spaces: list[str] = []
-        seen: set[str] = set()
-        with self.get_shared_connection() as conn:
-            try:
-                rows = conn.execute(
-                    "SELECT DISTINCT COALESCE(NULLIF(TRIM(space), ''), 'default') "
-                    "FROM detection_rules ORDER BY 1"
-                ).fetchall()
-                for r in rows:
-                    v = r[0]
-                    if v and v not in seen:
-                        spaces.append(v); seen.add(v)
-            except Exception as exc:
-                logger.debug(f"get_all_kibana_spaces: detection_rules scan failed: {exc}")
-            try:
-                extra = conn.execute(
-                    "SELECT DISTINCT COALESCE(NULLIF(TRIM(space), ''), 'default') "
-                    "FROM client_siem_map "
-                    "WHERE space IS NOT NULL AND TRIM(space) <> ''"
-                ).fetchall()
-                for r in extra:
-                    v = r[0]
-                    if v and v not in seen:
-                        spaces.append(v); seen.add(v)
-            except Exception as exc:
-                logger.debug(f"get_all_kibana_spaces: client_siem_map scan failed: {exc}")
-            # Migration 41: union from the persistent test-connection cache so
-            # freshly-discovered spaces appear in the picker even before any
-            # rules have synced.
-            try:
-                rows = conn.execute(
-                    "SELECT DISTINCT space FROM siem_kibana_spaces "
-                    "WHERE space IS NOT NULL AND TRIM(space) <> ''"
-                ).fetchall()
-                for r in rows:
-                    v = r[0]
-                    if v and v not in seen:
-                        spaces.append(v); seen.add(v)
-            except Exception as exc:
-                logger.debug(f"get_all_kibana_spaces: siem_kibana_spaces scan failed: {exc}")
-        # Also union spaces from every tenant DB so multi-tenant deployments
-        # see the full list. Ignored when not in multi-DB mode.
-        try:
-            from app.services.tenant_manager import is_multi_db_mode, _tenant_db_cache
-            if is_multi_db_mode():
-                from app.services.connection_pool import get_pool
-                pool = get_pool()
-                for client_id, _fname in list(_tenant_db_cache.items()):
-                    from app.services.tenant_manager import resolve_tenant_db_path
-                    import os as _os
-                    tdb = resolve_tenant_db_path(client_id, _os.path.dirname(self.db_path))
-                    if not tdb:
-                        continue
-                    try:
-                        with pool.acquire(tdb) as tconn:
-                            rows = tconn.execute(
-                                "SELECT DISTINCT COALESCE(NULLIF(TRIM(space), ''), 'default') "
-                                "FROM detection_rules"
-                            ).fetchall()
-                        for r in rows:
-                            v = r[0]
-                            if v and v not in seen:
-                                spaces.append(v); seen.add(v)
-                    except Exception as exc:
-                        logger.debug(f"get_all_kibana_spaces: tenant {client_id} scan failed: {exc}")
-        except Exception as exc:
-            logger.debug(f"get_all_kibana_spaces: tenant fan-out failed: {exc}")
-        return sorted(spaces)
 
     # --- Sigma asset (pipeline / template) tenant assignments (Migration 33) ---
 
@@ -13003,17 +12829,6 @@ class DatabaseService:
                 [asset_type, client_id],
             ).fetchall()
         return [r[0] for r in rows]
-
-    def get_all_sync_spaces(self) -> List[str]:
-        """Get every distinct Kibana space across all client-SIEM mappings.
-        NULL/empty values are normalised to 'default'.
-        Used by the sync service to know which spaces to fetch rules from."""
-        with self.get_shared_connection() as conn:
-            rows = conn.execute(
-                "SELECT DISTINCT COALESCE(NULLIF(TRIM(space), ''), 'default') "
-                "FROM client_siem_map"
-            ).fetchall()
-            return [r[0] for r in rows if r[0]]
 
     def get_siem_spaces(self, siem_id: str) -> List[str]:
         """Get every distinct Kibana space mapped to a single SIEM via client_siem_map.

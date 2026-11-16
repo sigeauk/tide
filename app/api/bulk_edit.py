@@ -39,8 +39,11 @@ ACTIONS = {
     # TIDE's own fixes (Rule Monitoring, #81): only the selected rules they apply to run.
     "own_rule_id": "Give own rule ids to",
     "finish": "Finish in TIDE for",
+    # A GitLab issue for each rule (#106), as its window's Raise issue does.
+    "raise_issue": "Raise issues for",
 }
 MAX_ITEMS = 2000
+MAX_ISSUES = 50          # issues one Raise issue run may raise, so a Select all can't flood a project
 # A synced rule Kibana no longer has: marked deprecated, and listed when the run ends.
 NOT_IN_ELASTIC = "Not in Elastic: marked deprecated."
 
@@ -74,6 +77,20 @@ def _parse_items(raw: str) -> List[Dict[str, str]]:
     return items
 
 
+# Actions that change the rule in Kibana: a Wazuh rule is read from Wazuh and changed there.
+KIBANA_WRITES = {"enable", "disable", "move", "delete"}
+ALL_WAZUH = "These are Wazuh rules: TIDE reads them from Wazuh, so change them there."
+
+
+def _without_wazuh(db, action: str, items: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """``items`` less the Wazuh rules, for an action that changes rules in Kibana; all of them otherwise."""
+    if action not in KIBANA_WRITES:
+        return items
+    from app.services.siem_kinds import is_wazuh
+    kinds = {sid: is_wazuh(db.get_siem_inventory_item(sid)) for sid in {i["siem_id"] for i in items if i["siem_id"]}}
+    return [i for i in items if not kinds.get(i["siem_id"])]
+
+
 def _eligibility(action: str, count: int) -> Optional[str]:
     """Why ``action`` cannot run on this many selected rules; None when it can.
 
@@ -87,15 +104,22 @@ _NONE_ELIGIBLE = {
     "own_rule_id": "None of these rules is a custom rule using one of Elastic's rule ids, so none needs a rule id "
                    "of its own.",
     "finish": "None of these rules has a change left to finish in TIDE.",
+    "raise_issue": "Every one of these rules already has an open GitLab issue raised for it.",
 }
 
 
 def _applicable(db, action: str, client_id: str, items: List[Dict[str, str]]) -> List[Dict[str, str]]:
     """Of ``items``, the rules TIDE's own fix ``action`` applies to: own_rule_id, a custom rule (not
     deprecated) under one of Elastic's rule ids with no such change already pending; finish, a rule
-    with a change Kibana made but TIDE couldn't record (pending_actions). Other actions: all of them."""
+    with a change Kibana made but TIDE couldn't record (pending_actions); raise_issue, a rule with no
+    open issue raised for it (gitlab_issues). Other actions: all of them."""
     if action not in _NONE_ELIGIBLE:
         return items
+    if action == "raise_issue":
+        from app.services import gitlab_issues
+        with db.get_connection() as conn:
+            raised = {tuple(k) for i in gitlab_issues.every(conn) if i["state"] == "opened" for k in i["rules"]}
+        return [i for i in items if (i["rule_id"], i["siem_id"], i["space"]) not in raised]
     from app.services import pending_actions, rule_origins
     out = []
     for item in items:
@@ -188,6 +212,12 @@ def bulk_edit_dialog(
         ctx["error"] = f"That is {len(parsed)} rules. Bulk edit handles up to {MAX_ITEMS} at a time; narrow the filters first."
     else:
         ctx["error"] = _eligibility(action, len(parsed))
+        if not ctx["error"] and action in KIBANA_WRITES:
+            kept = _without_wazuh(db, action, parsed)
+            ctx.update(total=len(kept), wazuh_skipped=len(parsed) - len(kept))
+            parsed = kept
+            if not kept:
+                ctx["error"] = ALL_WAZUH
         if not ctx["error"] and action in _NONE_ELIGIBLE:
             applicable = _applicable(db, action, client_id, parsed)
             ctx.update(total=len(applicable), skipped=len(parsed) - len(applicable))
@@ -195,10 +225,20 @@ def bulk_edit_dialog(
             if not applicable:
                 ctx["error"] = _NONE_ELIGIBLE[action]
     if not ctx["error"] and action == "move":
-        destinations = db.get_client_siems(client_id) or []
+        from app.services.siem_kinds import elastic_only
+        destinations = elastic_only(db.get_client_siems(client_id))
         if not destinations:
             ctx["error"] = "No SIEM is linked to this client. Link one under Management, then try again."
         ctx["destinations"] = destinations
+    if not ctx["error"] and action == "raise_issue":
+        from app.services import gitlab_issues
+        ctx["projects"] = gitlab_issues.usable_projects(db, client_id)
+        if not ctx["projects"]:
+            ctx["error"] = ("No GitLab issues project TIDE can use is linked to this client. Link one on the client's "
+                            "page and Test it there, then try again.")
+        elif len(parsed) > MAX_ISSUES:
+            ctx["error"] = (f"That would raise {len(parsed)} issues. Raise issue raises up to {MAX_ISSUES} at a time: "
+                            f"select fewer rules.")
     client = db.get_client(client_id) or {}
     ctx.update({
         "items_json": json.dumps(parsed),
@@ -248,6 +288,9 @@ def _apply_one(db, action: str, user_id: str, username: str, client_id: str,
         status, message, _new_id = _own_rule_id_sync(db, user_id, username, client_id, rule_id, siem_id, space)
         return status, message, None
 
+    if action == "raise_issue":
+        return _raise_issue(db, client_id, username, item, opts)
+
     if action == "finish":
         from app.services import pending_actions
         pending = pending_actions.for_rule(client_id, (rule_id, siem_id, space))
@@ -280,6 +323,14 @@ def _apply_one(db, action: str, user_id: str, username: str, client_id: str,
         # marked deprecated (its history kept), and listed when the run ends.
         if not siem_id:
             return 400, "Missing SIEM context.", rule.name
+        # Wazuh gives a destination's rules all at once: read each Wazuh destination once a run.
+        read = opts.setdefault("_wazuh_read", set())
+        wazuh_rule = getattr(rule, "rule_type", "") == "wazuh"
+        if wazuh_rule and (siem_id, space) in read:
+            after = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
+            return 200, (NOT_IN_ELASTIC if after and after.deprecated else "Synced."), rule.name
+        if wazuh_rule:
+            read.add((siem_id, space))
         status, message, done = sync_single_rule(db, client_id, rule_id, siem_id, space, user_id, username)
         if status not in (200, 202):
             return status, message, rule.name
@@ -338,6 +389,31 @@ def _apply_one(db, action: str, user_id: str, username: str, client_id: str,
     # score and raw_data agree with the state Elastic now reports.
     sync_single_rule(db, client_id, rule_id, siem_id, space, user_id, username)
     return 200, message, rule.name
+
+
+def _raise_issue(db, client_id: str, username: str, item: Dict[str, str], opts: Dict[str, Any]):
+    """Raise one rule's GitLab issue (#106), as its window's Raise issue does: titled with the rule's
+    name, what was written above the rule and its Rule Monitoring problems, recorded as the rule's."""
+    from datetime import datetime
+    from types import SimpleNamespace
+    from app.api.rule_monitoring import _footer, _selection
+    from app.services import gitlab, gitlab_issues
+    sel = _selection(db, client_id, item, None)
+    if not sel["rule"]:
+        return 404, "Rule not found.", None
+    name = sel["rule"].name
+    link = next((p for p in gitlab_issues.usable_projects(db, client_id) if p["id"] == opts["link_id"]), None)
+    if not link:
+        return 400, "Its GitLab issues project can no longer be used: Test it on the client's page.", name
+    note = opts.get("note") or ""
+    body = (f"{note}\n\n" if note else "") + sel["text"] + _footer(SimpleNamespace(label=username), datetime.now(), sel)
+    try:
+        issue = gitlab.create_issue(link, name, body, opts.get("labels") or [], opts.get("assignee_id"))
+    except gitlab.GitLabError as exc:
+        return 502, f"Not raised. {exc}", name
+    with db.get_connection() as conn:
+        gitlab_issues.record(conn, link, issue, name, [], username, rules=[sel["rule_key"]])
+    return 200, f"Raised {link['project']}#{issue['iid']}.", name
 
 
 async def _run_in_context(fn, *args):
@@ -439,6 +515,10 @@ async def bulk_edit_start(
     target_scope: str = Form(""),
     remove_links: str = Form(""),  # an unchecked checkbox sends nothing at all, not "false"
     from_elastic: str = Form(""),
+    link_id: str = Form(""),       # raise_issue: the GitLab issues project, assignee, labels and what to write
+    assignee_id: str = Form(""),
+    labels: str = Form(""),
+    note: str = Form(""),
 ):
     """Re-check the selection, then run ``action`` on it in the background."""
     job = _EDIT_JOBS.get(client_id)
@@ -450,6 +530,9 @@ async def bulk_edit_start(
     if not parsed or len(parsed) > MAX_ITEMS:
         return HTMLResponse('<div class="toast toast-danger">Nothing valid to run.</div>', status_code=400)
     why = _eligibility(action, len(parsed))
+    parsed = _without_wazuh(db, action, parsed)
+    if not why and not parsed:
+        why = ALL_WAZUH
     if why:
         return HTMLResponse(f'<div class="toast toast-danger">{escape(why)}</div>', status_code=400)
 
@@ -468,6 +551,17 @@ async def bulk_edit_start(
         opts["target_name"] = next(
             (s.get("name") or target_space for s in (db.get_client_siems(client_id) or [])
              if s.get("id") == target_siem_id and str(s.get("space") or "default") == target_space), target_space)
+    if action == "raise_issue":
+        from app.services import gitlab_issues
+        if len(parsed) > MAX_ISSUES:
+            return HTMLResponse(f'<div class="toast toast-danger">Raise issue raises up to {MAX_ISSUES} issues at a '
+                                f'time.</div>', status_code=400)
+        if not any(p["id"] == link_id for p in gitlab_issues.usable_projects(db, client_id)):
+            return HTMLResponse('<div class="toast toast-danger">Choose one of the client\'s GitLab issues '
+                                'projects.</div>', status_code=400)
+        # The project's id only: its token is looked up for each rule, and never logged with the options.
+        opts.update(link_id=link_id, assignee_id=int(assignee_id) if assignee_id.strip().isdigit() else None,
+                    labels=[s.strip() for s in labels.split(",") if s.strip()], note=note.strip()[:5000])
 
     job = {
         "state": "running", "action": action, "label": ACTIONS[action], "total": len(parsed),

@@ -20,7 +20,7 @@ from app.services.icons import (close_button as _close_button, icon as _icon, ic
                                 empty_state as _empty_state, more_button as _more_button)
 from app.api.deps import (DbDep, ClientAdmin, RequireAdmin, RequireSuperadmin, ActiveClient, admin_client_ids,
                           can_manage_user, require_client_member, require_manageable_user)
-from app.services import tls
+from app.services import siem_kinds, tls, wazuh
 from app.services.log_context import audit_admin
 from app.services.database import RULE_REMOVED_UNLINKED, SUPPORT_ROLE
 
@@ -620,9 +620,10 @@ def delete_gitlab(request: Request, gitlab_id: str, db: DbDep, user: RequireSupe
 
 def _gitlab_destinations(db, client_id: str) -> list:
     """The client's destinations a backup project can back up: ``key`` ("siem_id|space", a form
-    value), ``pair`` ((siem_id, space), as in a project's ``skip``) and ``name``."""
+    value), ``pair`` ((siem_id, space), as in a project's ``skip``) and ``name``. The backup holds
+    Kibana's JSON, so Elastic destinations only."""
     out = []
-    for d in db.get_client_siems(client_id) or []:
+    for d in siem_kinds.elastic_only(db.get_client_siems(client_id)):
         space = str(d.get("space") or "default")
         out.append({"key": f"{d['id']}|{space}", "pair": (d["id"], space), "name": d.get("name") or space})
     return out
@@ -842,6 +843,27 @@ def remove_gitlab_project(request: Request, client_id: str, link_id: str, db: Db
 # SIEM Inventory CRUD
 # ---------------------------------------------------------------------------
 
+def _wazuh_form(form, existing: Optional[dict] = None) -> tuple:
+    """The SIEM dialog's Wazuh fields: ``(api_password, extra_config, why_refused)``. A password left
+    blank keeps the saved one (``existing``, when editing); a new Wazuh SIEM needs every field."""
+    text = {k: str(form.get(f"wazuh_{k}") or "").strip() for k in ("manager_url", "api_user", "indexer_url",
+                                                                    "indexer_user")}
+    api_password = str(form.get("wazuh_api_password") or "")
+    indexer_password = str(form.get("wazuh_indexer_password") or "")
+    have = dict(text, api_password=api_password or (existing or {}).get("api_token_enc"),
+                indexer_password=indexer_password or (wazuh.settings(existing)["indexer_password"] if existing else ""))
+    missing = wazuh.missing_settings(have)
+    if missing:
+        return None, None, f"Enter the {', '.join(missing)}."
+    bad = [name for key, name in (("manager_url", "manager API URL"), ("indexer_url", "indexer URL"))
+           if not text[key].lower().startswith(("https://", "http://"))]
+    if bad:
+        return None, None, f"The {' and '.join(bad)} must start with https:// or http://."
+    extra = wazuh.stored_config(text["manager_url"], text["api_user"], text["indexer_url"], text["indexer_user"],
+                                indexer_password, (existing or {}).get("extra_config"))
+    return api_password or None, extra, None
+
+
 @router.post("/siems", response_class=HTMLResponse)
 async def create_siem(request: Request, db: DbDep, user: RequireSuperadmin):
     """Create a SIEM in the centralized inventory."""
@@ -857,8 +879,18 @@ async def create_siem(request: Request, db: DbDep, user: RequireSuperadmin):
     if not label:
         return _form_refused("SIEM label is required.")
 
-    if siem_type not in ("elastic", "splunk", "sentinel"):
+    if siem_type not in ("elastic", "wazuh", "splunk", "sentinel"):
         return _form_refused("Invalid SIEM type.")
+
+    if siem_type == siem_kinds.WAZUH:
+        api_password, extra, why = _wazuh_form(form)
+        if why:
+            return _form_refused(why)
+        db.create_siem_inventory_item(siem_type=siem_type, label=label, api_token_enc=api_password,
+                                      extra_config=extra, tls_verify=bool(_form_tls_verify(form)))
+        tls.invalidate()
+        logger.info(f"SIEM inventory item created: {label} (Wazuh) by {user.username}")
+        return _integrations_response(request, db, f"SIEM '{label}' created.")
 
     db.create_siem_inventory_item(
         siem_type=siem_type, label=label,
@@ -875,7 +907,16 @@ async def update_siem(request: Request, siem_id: str, db: DbDep, user: RequireSu
     """Update a SIEM in the inventory."""
     form = await request.form()
     updates = {}
-    for field in ("label", "elasticsearch_url", "kibana_url"):
+    existing = db.get_siem_inventory_item(siem_id)
+    if siem_kinds.is_wazuh(existing):
+        api_password, extra, why = _wazuh_form(form, existing)
+        if why:
+            return _form_refused(why)
+        updates["extra_config"] = extra
+        if api_password:
+            updates["api_token_enc"] = api_password
+    # A Wazuh SIEM's Kibana columns stay empty: nothing that calls Kibana may reach it.
+    for field in ("label",) if siem_kinds.is_wazuh(existing) else ("label", "elasticsearch_url", "kibana_url"):
         val = form.get(field)
         if val is not None:
             updates[field] = str(val).strip() or None
@@ -952,12 +993,12 @@ def _format_test_result_panel(result: dict, *, panel_id: str = "siem-test-result
     spaces = result.get("spaces") or []
     spaces_hint = (
         f'<div class="mt-sm fs-md text-secondary">'
-        f'Discovered spaces: <code>{_esc(", ".join(spaces))}</code></div>'
+        f'{_esc(result.get("spaces_label") or "Discovered spaces")}: <code>{_esc(", ".join(spaces))}</code></div>'
     ) if spaces else ""
     return (
         f'<div id="{panel_id}" hx-swap-oob="true" class="test-panel">'
         f'<div class="flex items-center justify-between">'
-        f'<strong>Test Connection result</strong>'
+        f'<strong>Test connection result</strong>'
         f'<span class="status-pill {overall_cls}">{overall_label}</span>'
         f'</div>'
         + "".join(rows)
@@ -982,6 +1023,8 @@ async def test_siem_connection(request: Request, db: DbDep, user: RequireSuperad
     api_token, tok_err = _normalize_api_token(form.get("api_token"))
     siem_type = str(form.get("siem_type", "elastic")).strip()
 
+    if siem_type == siem_kinds.WAZUH:
+        return await _test_wazuh_form(form, db, siem_id)
     if siem_type != "elastic":
         return HTMLResponse(
             '<span class="badge badge-secondary">Test not available for this SIEM type</span>'
@@ -1012,47 +1055,64 @@ async def test_siem_connection(request: Request, db: DbDep, user: RequireSuperad
         linked = db.get_siem_spaces(siem_id) if siem_id else []
         result = await run_in_threadpool(test_elastic_connection_full, kibana_url, api_token, linked_spaces=linked,
                                          verify=tls.verify_arg(_form_tls_verify(form)))
-        # Persist roll-up + per-check JSON so the SIEMs tab pill stays accurate
-        # and the operator can revisit the result without re-testing.
-        if siem_id:
-            try:
-                msg = _siem_test_message(result)
-                db.update_inventory_test_status(
-                    "siems", siem_id, "pass" if result["ok"] else "fail", msg,
-                )
-            except Exception as exc:  # pragma: no cover - best effort
-                logger.warning(f"persist test-status failed for {siem_id}: {exc}")
-        # Refresh the cached spaces lookup so the link-form dropdown picks
-        # them up immediately on the next render — no separate "Refresh" click
-        # needed when the operator just proved Kibana is reachable. Also
-        # persist to the DB (Migration 41) so the dropdown survives restarts
-        # and is available before the first sync ever runs.
-        if siem_id and result.get("spaces"):
-            import time as _time
-            _KIBANA_SPACES_CACHE[siem_id] = (
-                _time.time() + _KIBANA_SPACES_TTL,
-                set(result["spaces"]),
-            )
-            try:
-                db.save_siem_spaces(siem_id, list(result["spaces"]))
-            except Exception as exc:
-                logger.warning(f"persist spaces failed for {siem_id}: {exc}")
-        badge_cls = "badge-success" if result["ok"] else "badge-danger"
-        badge_text = "Connected" if result["ok"] else "Failed"
-        # Pull the first failing check's detail into the inline badge so the
-        # operator sees the headline without scrolling to the panel.
-        first_fail = next((c for c in result["checks"] if not c["ok"]), None)
-        headline = first_fail["detail"] if first_fail else result["checks"][0]["detail"]
-        badge_html = (
-            f'<span class="badge {badge_cls}">{badge_text} — {_esc(headline)[:120]}</span>'
-        )
-        panel_html = _format_test_result_panel(result)
-        return HTMLResponse(badge_html + panel_html)
+        return HTMLResponse(_siem_test_response(db, siem_id, result))
     except Exception as exc:
         logger.warning(f"SIEM test-connection error: {exc}")
         return HTMLResponse(
             f'<span class="badge badge-danger">Error — {_esc(str(exc))[:120]}</span>'
         )
+
+
+def _siem_test_response(db, siem_id: str, result: dict) -> str:
+    """The SIEM dialog's Test connection answer: a badge with the first failure (or the first check),
+    and the result panel. A saved SIEM keeps the result on its card, and the spaces (a Wazuh SIEM's
+    agent groups) the test found are saved for the link form's picker."""
+    # Persist roll-up + per-check JSON so the SIEMs tab pill stays accurate
+    # and the operator can revisit the result without re-testing.
+    if siem_id:
+        try:
+            db.update_inventory_test_status("siems", siem_id, "pass" if result["ok"] else "fail",
+                                            _siem_test_message(result))
+        except Exception as exc:  # pragma: no cover - best effort
+            logger.warning(f"persist test-status failed for {siem_id}: {exc}")
+    # Refresh the cached spaces lookup so the link-form dropdown picks
+    # them up immediately on the next render — no separate "Refresh" click
+    # needed when the operator just proved the SIEM is reachable. Also
+    # persist to the DB (Migration 41) so the dropdown survives restarts
+    # and is available before the first sync ever runs.
+    if siem_id and result.get("spaces"):
+        import time as _time
+        _KIBANA_SPACES_CACHE[siem_id] = (_time.time() + _KIBANA_SPACES_TTL, set(result["spaces"]))
+        try:
+            db.save_siem_spaces(siem_id, list(result["spaces"]))
+        except Exception as exc:
+            logger.warning(f"persist spaces failed for {siem_id}: {exc}")
+    badge_cls = "badge-success" if result["ok"] else "badge-danger"
+    badge_text = "Connected" if result["ok"] else "Failed"
+    # Pull the first failing check's detail into the inline badge so the
+    # operator sees the headline without scrolling to the panel.
+    first_fail = next((c for c in result["checks"] if not c["ok"]), None)
+    headline = first_fail["detail"] if first_fail else result["checks"][0]["detail"]
+    return (f'<span class="badge {badge_cls}">{badge_text} — {_esc(headline)[:120]}</span>'
+            + _format_test_result_panel(result))
+
+
+async def _test_wazuh_form(form, db, siem_id: str) -> HTMLResponse:
+    """Test connection for the dialog's Wazuh fields, as typed: a password left blank is the saved one."""
+    from starlette.concurrency import run_in_threadpool
+    stored = db.get_siem_inventory_item(siem_id) if siem_id else None
+    s = wazuh.settings(stored) if siem_kinds.is_wazuh(stored) else {"api_password": "", "indexer_password": ""}
+    for key in ("manager_url", "api_user", "indexer_url", "indexer_user"):
+        s[key] = str(form.get(f"wazuh_{key}") or "").strip().rstrip("/")
+    for key in ("api_password", "indexer_password"):
+        s[key] = str(form.get(f"wazuh_{key}") or "") or s[key]
+    s["verify"] = tls.verify_arg(_form_tls_verify(form))
+    try:
+        result = await run_in_threadpool(wazuh.test_connection, s)
+    except Exception as exc:
+        logger.warning(f"Wazuh test-connection error: {exc}")
+        return HTMLResponse(f'<span class="badge badge-danger">Error — {_esc(str(exc))[:120]}</span>')
+    return HTMLResponse(_siem_test_response(db, siem_id, result))
 
 
 # ---------------------------------------------------------------------------
@@ -1067,10 +1127,11 @@ def _siem_test_message(result: dict) -> str:
         "summary": "All checks passed" if result["ok"] else "One or more checks failed",
         "checks": [
             {"name": c["name"], "ok": c["ok"], "status_code": c.get("status_code"),
-             "detail": (c["detail"] or "")[:300], "elapsed_ms": c.get("elapsed_ms")}
+             "detail": (c["detail"] or "")[:300], "elapsed_ms": c.get("elapsed_ms"), "endpoint": c.get("endpoint")}
             for c in result["checks"]
         ],
         "spaces": result.get("spaces", [])[:20],
+        "spaces_label": result.get("spaces_label"),
     })
 
 
@@ -1085,6 +1146,9 @@ def _run_inventory_test(kind: str, item: dict, linked_spaces=None) -> tuple[bool
     try:
         if kind == "siems":
             stype = (item.get("siem_type") or "").lower()
+            if stype == siem_kinds.WAZUH:
+                result = wazuh.test_connection(wazuh.settings(item))
+                return result["ok"], _siem_test_message(result)
             if stype != "elastic":
                 return False, f"Test not supported for SIEM type '{stype}'"
             kibana_url = (item.get("kibana_url") or "").strip()
@@ -1250,8 +1314,9 @@ async def test_inventory_card(
             result_for_panel = {
                 "ok": ok,
                 "spaces": parsed.get("spaces", []),
+                "spaces_label": parsed.get("spaces_label"),
                 "checks": [
-                    {**c, "endpoint": _SIEM_CHECK_ENDPOINT.get(c["name"], ""),
+                    {**c, "endpoint": c.get("endpoint") or _SIEM_CHECK_ENDPOINT.get(c["name"], ""),
                      "body_excerpt": None}
                     for c in parsed.get("checks", [])
                 ],
@@ -1289,6 +1354,12 @@ _SIEM_CHECK_ENDPOINT = {
 }
 
 
+_GROUP_REASON_TEXT = {
+    "no_credentials": "This Wazuh SIEM has no manager API URL or user saved, so its agent groups can't be listed.",
+    "live_failed": "TIDE could not reach the Wazuh manager to list its agent groups: test the SIEM in Integrations.",
+    "no_spaces_found": "The Wazuh manager listed no agent groups.",
+}
+
 _SPACE_REASON_TEXT = {
     "no_credentials": "This SIEM has no Kibana URL or API key saved, so spaces cannot be discovered.",
     "live_failed": "TIDE could not reach Kibana to list spaces (see the app log for the HTTP status or error).",
@@ -1315,10 +1386,12 @@ def list_siem_spaces(siem_id: str, db: DbDep, user: RequireAdmin):
         logger.warning("list_siem_spaces(%s) failed: %r", siem_id, exc)
         spaces, reason = set(), "live_failed"
     _KIBANA_SPACES_CACHE.pop(siem_id, None)
+    texts = _GROUP_REASON_TEXT if siem_kinds.is_wazuh(db.get_siem_inventory_item(siem_id)) else _SPACE_REASON_TEXT
     return JSONResponse({
-        "spaces": sorted((str(s) for s in spaces), key=str.lower),
+        # "*" (every agent) first, then the rest by name.
+        "spaces": sorted((str(s) for s in spaces), key=lambda sp: (sp != wazuh.ALL_AGENTS, sp.lower())),
         "reason": reason,
-        "message": "" if spaces else _SPACE_REASON_TEXT.get(reason, "No spaces found."),
+        "message": "" if spaces else texts.get(reason, "No spaces found."),
     })
 
 
@@ -1377,11 +1450,12 @@ async def link_siem_to_client(request: Request, client_id: str, db: DbDep, user:
     """Link one SIEM+space destination to a client, under a name the operator chooses."""
     form = await request.form()
     siem_id = str(form.get("siem_id", "")).strip()
-    space = str(form.get("space", "")).strip() or "default"
-    name = str(form.get("name", "")).strip() or space.title()
-    default_index = str(form.get("default_index", "")).strip()
     if not siem_id:
         return HTMLResponse("")
+    is_wazuh = siem_kinds.is_wazuh(db.get_siem_inventory_item(siem_id))
+    space = str(form.get("space", "")).strip() or (wazuh.ALL_AGENTS if is_wazuh else "default")
+    name = str(form.get("name", "")).strip() or space.title()
+    default_index = "" if is_wazuh else str(form.get("default_index", "")).strip()
 
     # NOTE: prior releases (4.1.5–4.1.7) hard-rejected the literal values
     # ``'production'`` / ``'staging'`` here on the assumption they were
@@ -1408,6 +1482,9 @@ async def link_siem_to_client(request: Request, client_id: str, db: DbDep, user:
             from html import escape
             avail = ", ".join(escape(s) for s in sorted(real_spaces)) or "(none)"
             msg = (
+                f"Agent group '{escape(space)}' doesn't exist on this Wazuh manager. Groups: {avail}. "
+                f"Use * for every agent."
+            ) if is_wazuh else (
                 f"Kibana space '{escape(space)}' does not exist on this SIEM. "
                 f"Available: {avail}. The role label (Production/Staging) is "
                 f"separate from the Kibana space id \u2014 they're rarely the same value."
@@ -1518,8 +1595,10 @@ async def edit_client_siem_destination(
     name = str(form.get("name", "")).strip()
     color = str(form.get("color", "")).strip()
     default_index = str(form.get("default_index", "")).strip()
+    # A Wazuh destination's Include every Wazuh rule (an unticked box sends nothing, so the form says it showed it).
+    all_rules = str(form.get("all_rules") or "") == "1" if form.get("all_rules_shown") else None
     error = db.update_client_siem_destination(
-        client_id, siem_id, space, name=name, color=color, default_index=default_index,
+        client_id, siem_id, space, name=name, color=color, default_index=default_index, all_rules=all_rules,
     )
     if error:
         return _render_client_siems_partial(client_id, db, toast=error)
@@ -1705,7 +1784,8 @@ def system_move_check(request: Request, client_id: str,
     else:
         html_parts.append(
             '<div class="callout callout--success">'
-            f'&#x2705; <strong>SIEM Compatible</strong> — shared spaces: {", ".join(check["shared_spaces"]) or "none"}. '
+            f'&#x2705; <strong>SIEM Compatible</strong> — shared spaces: '
+            f'{", ".join(escape(str(s)) for s in check["shared_spaces"]) or "none"}. '
             'Rule coverage will persist.</div>'
         )
 
@@ -2010,8 +2090,8 @@ async def move_from(request: Request, client_id: str,
 # used to be a single global env var pair, but different tenants run
 # different review cadences. This endpoint persists per-tenant overrides
 # on the ``clients`` row (NULL means "inherit the global default") and
-# re-renders the Linked SIEMs partial so the form bounces back with the
-# new values.
+# re-renders the client's Validation section so the form bounces back with
+# the new values.
 
 @router.post("/clients/{client_id}/validation-thresholds",
              response_class=HTMLResponse)
@@ -2055,8 +2135,8 @@ async def update_validation_thresholds(
     amber, amber_ok = _parse("amber_weeks")
     expired, expired_ok = _parse("expired_weeks")
     if not amber_ok or not expired_ok:
-        return _render_client_siems_partial(
-            client_id, db,
+        return _render_client_settings_partial(
+            client_id, db, "validation",
             toast="Thresholds must be positive whole numbers.",
         )
 
@@ -2066,21 +2146,21 @@ async def update_validation_thresholds(
             a, a_ok = _parse(f"{severity}_amber_weeks")
             e, e_ok = _parse(f"{severity}_expired_weeks")
             if not a_ok or not e_ok:
-                return _render_client_siems_partial(
-                    client_id, db,
+                return _render_client_settings_partial(
+                    client_id, db, "validation",
                     toast=f"{severity.title()} thresholds must be positive whole numbers.",
                 )
             if a is not None and e is not None and a >= e:
-                return _render_client_siems_partial(
-                    client_id, db,
+                return _render_client_settings_partial(
+                    client_id, db, "validation",
                     toast=f"{severity.title()} amber threshold must be less than expired threshold.",
                 )
             per_severity[f"rule_validation_{severity}_amber_weeks"] = a
             per_severity[f"rule_validation_{severity}_expired_weeks"] = e
 
     if amber is not None and expired is not None and amber >= expired:
-        return _render_client_siems_partial(
-            client_id, db,
+        return _render_client_settings_partial(
+            client_id, db, "validation",
             toast="Amber threshold must be less than expired threshold.",
         )
     db.update_client(
@@ -2096,8 +2176,8 @@ async def update_validation_thresholds(
         f"{user.username}: mode={mode} amber={amber}, expired={expired}, "
         f"delete_source_after_promotion={delete_source_after_promotion}, per_severity={per_severity}"
     )
-    return _render_client_siems_partial(
-        client_id, db, toast="Validation thresholds saved.",
+    return _render_client_settings_partial(
+        client_id, db, "validation", toast="Validation thresholds saved.",
     )
 
 
@@ -2113,6 +2193,8 @@ _MONITORING_SETTINGS = {
 }
 # Rule Monitoring checks the client turns on or off (a ticked box saves 1, else 0).
 _MONITORING_SWITCHES = {"validation_stale": "List expired or changed validations"}
+# Switches saved with them that change how rules are written, not what Rule Monitoring finds (#7).
+_WRITE_SWITCHES = {"elastic_blocks": "Stop saves Elastic's validator refuses"}
 
 
 @router.post("/clients/{client_id}/rule-monitoring", response_class=HTMLResponse)
@@ -2129,19 +2211,19 @@ async def update_rule_monitoring_settings(request: Request, client_id: str, db: 
         except ValueError:
             values[name] = -1
         if values[name] is not None and not lo <= values[name] <= hi:
-            return _render_client_siems_partial(client_id, db, toast=f"{label} must be a whole number from {lo:,} to {hi:,}.")
-    for name in _MONITORING_SWITCHES:
+            return _render_client_settings_partial(client_id, db, "monitoring", toast=f"{label} must be a whole number from {lo:,} to {hi:,}.")
+    for name in (*_MONITORING_SWITCHES, *_WRITE_SWITCHES):
         values[name] = 1 if str(form.get(name) or "").lower() in ("1", "on", "true") else 0
     before = db.get_client(client_id) or {}
     db.update_client(client_id, **values)
     logger.info("Client %s Rule Monitoring settings updated by %s: %s", client_id, user.username, values)
-    if any(before.get(k) != v for k, v in values.items()):
+    if any(before.get(k) != v for k, v in values.items() if k not in _WRITE_SWITCHES):
         await run_in_threadpool(_refresh_monitoring, db, client_id)
-    return _render_client_siems_partial(client_id, db, toast="Rule Monitoring settings saved.")
+    return _render_client_settings_partial(client_id, db, "monitoring", toast="Rule Monitoring settings saved.")
 
 
 # ---------------------------------------------------------------------------
-# Rule scoring weights (Linked SIEMs section of the client page)
+# Rule scoring weights (the client page's Rule settings tab)
 # ---------------------------------------------------------------------------
 
 def _render_client_scoring(request: Request, db, client_id: str, shown: dict = None,
@@ -2467,7 +2549,7 @@ def _card_menu(kind: str, test: str, edit: str, delete: str) -> str:
     toggle = _more_button(f"{kind} actions", title="Test the connection, edit or delete it",
                           attrs=f'name="{kind} Actions"')
     return (f'<div class="rh-more" data-more>{toggle}<div class="rh-more__menu" role="menu" hidden>'
-            f'{item("Test Connection", "zap", "Test connection", test)}{item("Edit", "pencil", "Edit", edit)}'
+            f'{item("Test connection", "zap", "Test connection", test)}{item("Edit", "pencil", "Edit", edit)}'
             f'<div class="rh-more__sep" role="separator"></div>{item("Delete", "trash-2", "Delete", delete, True)}'
             f'</div></div>')
 
@@ -2540,7 +2622,7 @@ def _render_clients_tab(clients: list) -> str:
                     {baseline_count} baseline{"s" if baseline_count != 1 else ""}
                 </span>
             </div>
-            <a href="/clients/{cid}" class="btn btn-secondary btn-sm btn-block">Manage Assets &rarr;</a>
+            <a href="/clients/{cid}" class="btn btn-secondary btn-sm btn-block">Manage assets &rarr;</a>
         </div>'''
 
     empty = ""
@@ -2552,7 +2634,7 @@ def _render_clients_tab(clients: list) -> str:
         <span class="text-secondary">{count} client{"s" if count != 1 else ""} configured</span>
         <button class="btn btn-primary" data-click="clients.create">
             {_icon("plus", "16")}
-            New Client
+            New client
         </button>
     </div>
     <div class="systems-grid">{cards}</div>
@@ -2710,16 +2792,29 @@ def _siem_card(s: dict) -> str:
     sid = s["id"]
     lbl_esc = escape(s["label"])
     stype_esc = escape(s["siem_type"])
-    es_url = escape(s.get("elasticsearch_url") or "-")
-    kb_url = escape(s.get("kibana_url") or "-")
+    if siem_kinds.is_wazuh(s):
+        w = wazuh.addresses(s)
+        rows = (("Manager API", w["manager_url"], w["api_user"]), ("Indexer", w["indexer_url"], w["indexer_user"]))
+        urls_html = "".join(
+            f'<span class="text-secondary">{name}</span>'
+            f'<span class="mono-ellipsis" title="Signs in as {escape(who)}">{escape(url or "-")}</span>'
+            for name, url, who in rows)
+        type_attrs = (f'data-manager-url="{escape(w["manager_url"])}" data-api-user="{escape(w["api_user"])}" '
+                      f'data-indexer-url="{escape(w["indexer_url"])}" data-indexer-user="{escape(w["indexer_user"])}" ')
+    else:
+        urls_html = (f'<span class="text-secondary">Elasticsearch</span>'
+                     f'<span class="mono-ellipsis">{escape(s.get("elasticsearch_url") or "-")}</span>'
+                     f'<span class="text-secondary">Kibana</span>'
+                     f'<span class="mono-ellipsis">{escape(s.get("kibana_url") or "-")}</span>')
+        type_attrs = (f'data-es-url="{escape(s.get("elasticsearch_url") or "")}" '
+                      f'data-kb-url="{escape(s.get("kibana_url") or "")}" ')
     status_pill = _status_pill_html(s, target_id=f"siem-status-{sid}")
     tenant_chips = _tenant_chips_html(s.get("_clients", []))
     logging_block = _siem_logging_block_html(s)
     menu = _card_menu(
         "SIEM", _test_attrs("siems", sid, f"siem-status-{sid}"),
         f'data-click="mgmt.siemEdit" data-id="{sid}" data-label="{lbl_esc}" data-type="{stype_esc}" '
-        f'data-es-url="{escape(s.get("elasticsearch_url") or "")}" data-kb-url="{escape(s.get("kibana_url") or "")}" '
-        f'data-tls-verify="{"true" if s.get("tls_verify") else "false"}"',
+        f'{type_attrs}data-tls-verify="{"true" if s.get("tls_verify") else "false"}"',
         f'hx-delete="/api/management/siems/{sid}" hx-target="#mgmt-integrations" hx-swap="innerHTML" '
         f'hx-confirm="Delete SIEM \'{lbl_esc}\'? This will unlink it from all clients."')
 
@@ -2734,12 +2829,7 @@ def _siem_card(s: dict) -> str:
             {menu}
         </div>
         <div class="system-card__desc mt-sm">
-            <div class="kv-grid">
-                <span class="text-secondary">Elasticsearch</span>
-                <span class="mono-ellipsis">{es_url}</span>
-                <span class="text-secondary">Kibana</span>
-                <span class="mono-ellipsis">{kb_url}</span>
-            </div>
+            <div class="kv-grid">{urls_html}</div>
         </div>
         {logging_block}
         <div id="siem-test-result-{sid}"></div>
@@ -2860,7 +2950,7 @@ def _render_users_tab(users: list, all_roles: list, clients: list,
 
     add_form = '''
     <details class="add-user-details mb-lg">
-        <summary class="btn btn-secondary btn-sm cursor-pointer">+ Add Local User</summary>
+        <summary class="btn btn-secondary btn-sm cursor-pointer">+ Add local user</summary>
         <p class="text-secondary fs-sm m-0 mt-sm">
             Roles are assigned per-tenant from the Client Detail page after creation.
         </p>
@@ -2883,7 +2973,7 @@ def _render_users_tab(users: list, all_roles: list, clients: list,
                 <input type="password" name="new_password" class="form-input" required minlength="8" placeholder="Min 8 chars" autocomplete="new-password">
             </div>
             <div class="span-all">
-                <button type="submit" class="btn btn-primary btn-sm">Create User</button>
+                <button type="submit" class="btn btn-primary btn-sm">Create user</button>
             </div>
         </form>
     </details>'''
@@ -3154,12 +3244,11 @@ async def remove_data_window(request: Request, client_id: str, db: DbDep, user: 
         df.set_window(conn, [siem_id], pattern, None, "", user.username)
     await run_in_threadpool(_refresh_monitoring, db, client_id)
     logger.info("Client %s: %s removed the data window of %s on %s", client_id, user.username, pattern, siem_id)
-    return _render_client_siems_partial(client_id, db, toast=f"{pattern}: new data is expected as for the client.")
+    return _render_client_settings_partial(client_id, db, "monitoring", toast=f"{pattern}: new data is expected as for the client.")
 
 
 def _render_client_siems_partial(client_id: str, db, toast: str = None) -> HTMLResponse:
     """Re-render the client SIEMs section using Jinja2 partial."""
-    from html import escape
     import os
     from jinja2 import Environment, FileSystemLoader
 
@@ -3214,10 +3303,8 @@ def _render_client_siems_partial(client_id: str, db, toast: str = None) -> HTMLR
     # §8.2 guarantee 1: a flat union across SIEMs leaks SIEM B's spaces into
     # SIEM A's picker, then the live-Kibana validator 404s the submission.
     # 4.1.5 → 4.1.9 used a flat ``known_kibana_spaces`` union; that is the
-    # bug. Per-SIEM map below; flat list retained as a defensive fallback for
-    # any partial template that still references it.
+    # bug, and no template has one any more.
     siem_spaces_by_id: dict = {}
-    known_kibana_spaces: list[str] = []
     try:
         for _si in (available_siems or []):
             _sid = _si.get("id") if isinstance(_si, dict) else getattr(_si, "id", None)
@@ -3259,9 +3346,6 @@ def _render_client_siems_partial(client_id: str, db, toast: str = None) -> HTMLR
             for sp in (siem_space_counts.get(str(_sid), {}) or {}):
                 collected.add(str(sp))
             siem_spaces_by_id[str(_sid)] = sorted(collected, key=str.lower)
-            for sp in siem_spaces_by_id[str(_sid)]:
-                if sp not in known_kibana_spaces:
-                    known_kibana_spaces.append(sp)
     except Exception as exc:
         logger.warning(f"_render_client_siems_partial: per-SIEM space build failed: {exc!r}")
 
@@ -3277,21 +3361,32 @@ def _render_client_siems_partial(client_id: str, db, toast: str = None) -> HTMLR
         siem_rule_counts_by_pair=siem_rule_counts_by_pair,
         siem_space_counts=siem_space_counts,
         siem_spaces_by_id=siem_spaces_by_id,
-        known_kibana_spaces=known_kibana_spaces,
         settings=_settings,
         destination_color_palette=DESTINATION_COLOR_PALETTE,
         next_free_color=next_free_color,
-        **client_data_windows_context(client_id, db),
     )
+    return HTMLResponse(html + _toast_oob(toast))
 
-    toast_html = ""
-    if toast:
-        toast_html = (
-            f'<div hx-swap-oob="afterbegin:#toast-container">'
-            f'<div class="toast toast-success">{escape(toast)}</div></div>'
-        )
 
-    return HTMLResponse(f"{html}{toast_html}")
+def _toast_oob(toast: str = None) -> str:
+    """A success toast to send beside a re-rendered section (out of band), or nothing."""
+    from html import escape
+    if not toast:
+        return ""
+    return f'<div hx-swap-oob="afterbegin:#toast-container"><div class="toast toast-success">{escape(toast)}</div></div>'
+
+
+def _render_client_settings_partial(client_id: str, db, part: str, toast: str = None) -> HTMLResponse:
+    """Re-render one of the sections of the client's Rule settings tab (#108): ``part`` is
+    "validation" (partials/client_validation.html) or "monitoring" (partials/client_monitoring.html)."""
+    import os
+    from jinja2 import Environment, FileSystemLoader
+    from app.config import get_settings
+    templates_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates")
+    env = Environment(loader=FileSystemLoader(templates_dir), autoescape=True)
+    html = env.get_template(f"partials/client_{part}.html").render(
+        client=db.get_client(client_id), settings=get_settings(), **client_data_windows_context(client_id, db))
+    return HTMLResponse(html + _toast_oob(toast))
 
 
 def _client_connector_rows(client_id: str, db) -> tuple[list, list]:
@@ -3334,7 +3429,7 @@ def _client_connector_rows(client_id: str, db) -> tuple[list, list]:
 
 
 def _render_client_connectors_partial(client_id: str, db, toast: str = None) -> HTMLResponse:
-    """Re-render the per-tenant ``Linked CTI Connectors`` section.
+    """Re-render the per-tenant ``Linked CTI connectors`` section.
 
     Like the other client sections' renderers, so the link / unlink
     endpoints can swap just the affected section instead of repainting
@@ -3464,20 +3559,20 @@ def _render_client_systems_partial(client_id: str, db, toast: str = None) -> HTM
     if available_systems:
         modal_body += (
             f'<hr class="divider-line">'
-            f'<form hx-post="/api/management/clients/{client_id}/systems" hx-target="#client-systems-section" hx-swap="innerHTML" class="stack gap-ms" hx-on::before-request="if(event.detail.elt===this) document.getElementById(\'edit-systems-modal\').style.display=\'none\'">'
+            f'<form hx-post="/api/management/clients/{client_id}/systems" hx-target="#client-systems-section" hx-swap="innerHTML" class="stack gap-ms" data-request-hides="edit-systems-modal">'
             f'<label class="form-label">Add system</label>'
             f'<select name="system_id" class="form-input" required><option value="" disabled selected>Select a system&hellip;</option>{sys_options}</select>'
-            f'<button type="submit" class="btn btn-primary btn-sm">{_icon("plus", "14")} Add System</button></form>'
+            f'<button type="submit" class="btn btn-primary btn-sm">{_icon("plus", "14")} Add system</button></form>'
         )
     if all_clients:
         modal_body += (
             f'<hr class="divider-line">'
-            f'<form hx-post="/api/management/clients/{client_id}/move-from" hx-target="#client-systems-section" hx-swap="innerHTML" class="stack gap-ms" hx-on::before-request="if(event.detail.elt===this) document.getElementById(\'edit-systems-modal\').style.display=\'none\'">'
+            f'<form hx-post="/api/management/clients/{client_id}/move-from" hx-target="#client-systems-section" hx-swap="innerHTML" class="stack gap-ms" data-request-hides="edit-systems-modal">'
             f'<label class="form-label">Move from Another Client</label>'
             f'<select name="source_client_id" class="form-input" required hx-get="/api/management/clients/{client_id}/move-from/systems" hx-target="#edit-move-from-system-select" hx-trigger="change" hx-include="this" hx-swap="innerHTML">'
             f'<option value="" disabled selected>Select source client&hellip;</option>{client_opts}</select>'
             f'<select name="system_id" id="edit-move-from-system-select" class="form-input" required><option value="" disabled selected>Select a source client first&hellip;</option></select>'
-            f'<button type="submit" class="btn btn-primary btn-sm">{_icon("arrow-right-left", "14")} Move Here</button></form>'
+            f'<button type="submit" class="btn btn-primary btn-sm">{_icon("arrow-right-left", "14")} Move here</button></form>'
         )
     modal_body += (
         f'<div class="flex justify-end">'
@@ -3488,7 +3583,7 @@ def _render_client_systems_partial(client_id: str, db, toast: str = None) -> HTM
         f'<div id="edit-systems-modal" class="modal-overlay" style="display:none;" hx-swap-oob="true" '
         f'data-click="backdrop.hide">'
         f'<div class="modal-content modal-md"><div class="modal-header">'
-        f'<h3 class="modal-title">Manage Systems — {escape(client["name"])}</h3>'
+        f'<h3 class="modal-title">Manage systems — {escape(client["name"])}</h3>'
         f'{_close_button('data-click="el.hide" data-target="edit-systems-modal"')}</div>'
         f'{modal_body}</div></div>'
     )
@@ -3560,20 +3655,20 @@ def _render_client_baselines_partial(client_id: str, db, user, toast: str = None
     if available_baselines:
         modal_body += (
             f'<hr class="divider-line">'
-            f'<form hx-post="/api/management/clients/{client_id}/baselines" hx-target="#client-baselines-section" hx-swap="innerHTML" class="stack gap-ms" hx-on::before-request="if(event.detail.elt===this) document.getElementById(\'edit-baselines-modal\').style.display=\'none\'">'
+            f'<form hx-post="/api/management/clients/{client_id}/baselines" hx-target="#client-baselines-section" hx-swap="innerHTML" class="stack gap-ms" data-request-hides="edit-baselines-modal">'
             f'<label class="form-label">Add baseline</label>'
             f'<select name="baseline_id" class="form-input" required><option value="" disabled selected>Select a baseline&hellip;</option>{bl_options}</select>'
-            f'<button type="submit" class="btn btn-primary btn-sm">{_icon("plus", "14")} Add Baseline</button></form>'
+            f'<button type="submit" class="btn btn-primary btn-sm">{_icon("plus", "14")} Add baseline</button></form>'
         )
     if other_clients:
         modal_body += (
             f'<hr class="divider-line">'
-            f'<form hx-post="/api/management/clients/{client_id}/clone-baseline" hx-target="#client-baselines-section" hx-swap="innerHTML" class="stack gap-ms" hx-on::before-request="if(event.detail.elt===this) document.getElementById(\'edit-baselines-modal\').style.display=\'none\'">'
+            f'<form hx-post="/api/management/clients/{client_id}/clone-baseline" hx-target="#client-baselines-section" hx-swap="innerHTML" class="stack gap-ms" data-request-hides="edit-baselines-modal">'
             f'<label class="form-label">Clone from Another Client</label>'
             f'<select name="source_client_id" class="form-input" required hx-get="/api/management/clients/{client_id}/clone-baseline/baselines" hx-target="#edit-clone-baseline-select" hx-trigger="change" hx-include="this" hx-swap="innerHTML">'
             f'<option value="" disabled selected>Select source client&hellip;</option>{client_opts}</select>'
             f'<select name="baseline_id" id="edit-clone-baseline-select" class="form-input" required><option value="" disabled selected>Select a source client first&hellip;</option></select>'
-            f'<button type="submit" class="btn btn-primary btn-sm">{_icon("copy", "14")} Clone Baseline</button></form>'
+            f'<button type="submit" class="btn btn-primary btn-sm">{_icon("copy", "14")} Clone baseline</button></form>'
         )
     modal_body += (
         f'<div class="flex justify-end">'
@@ -3584,7 +3679,7 @@ def _render_client_baselines_partial(client_id: str, db, user, toast: str = None
         f'<div id="edit-baselines-modal" class="modal-overlay" style="display:none;" hx-swap-oob="true" '
         f'data-click="backdrop.hide">'
         f'<div class="modal-content modal-md"><div class="modal-header">'
-        f'<h3 class="modal-title">Manage Baselines — {escape(client["name"])}</h3>'
+        f'<h3 class="modal-title">Manage baselines — {escape(client["name"])}</h3>'
         f'{_close_button('data-click="el.hide" data-target="edit-baselines-modal"')}</div>'
         f'{modal_body}</div></div>'
     )
@@ -4366,7 +4461,7 @@ def _render_vendor_fields_html(vendor, current_cfg: dict | None = None) -> str:
             )
         else:
             input_type = {
-                "password": "password",
+                "password": "password",  # nosec B105 # a form field's input type, not a password
                 "url": "url",
                 "number": "number",
             }.get(spec.type, "text")
@@ -4491,7 +4586,7 @@ def _integrations_html(request: Request, db, group: Optional[str] = None, banner
     groups = [
         {"key": "identity", "title": "Identity", "icon": "key", "what": "Keycloak, which TIDE signs people in with",
          "cards": [_keycloak_card(k) for k in keycloaks]},
-        {"key": "siem", "title": "SIEMs", "icon": "shield-check", "what": "Elastic, Splunk, Sentinel",
+        {"key": "siem", "title": "SIEMs", "icon": "shield-check", "what": "Elastic, Wazuh, Splunk, Sentinel",
          "cards": [_siem_card(s) for s in siems]},
         {"key": "intel", "title": "Threat intel", "icon": "target", "what": "OpenCTI, for the threat actors in Threat Landscape",
          "cards": [_connector_card(c, vendor_by_name) for c in connectors]},

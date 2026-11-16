@@ -1,5 +1,7 @@
 {% from "macros/metrics.html" import metric_card, metric_change, metric_change_tip %}
-{% set keys = metric_keys | default(none) %}{% set link = metric_link | default(none) %}
+{# A system's page shows four cards (six with Wazuh devices): Techniques on Covered, Unmapped and Not counted on
+   No coverage. A Dashboard section passes the ones it chose (dashboards.SOURCES). #}
+{% set keys = metric_keys | default(['covered', 'effective', 'no_coverage', 'known_gaps', 'vulnerabilities', 'hardening']) %}{% set link = metric_link | default(none) %}
 {#
   Metric strip for one system's baseline steps.
   Whole-system rollups, never the filtered page's counts — mirrors Rule Health.
@@ -10,24 +12,24 @@
 {% set scored = t.total - t.na %}
 {% set changes = changes | default({}) %}
 
-{% call metric_card('covered', keys, link, 'metric-card--tip' if changes.covered else '', tip=changes.covered is defined) %}
-    <p class="metric-value {% if coverage_undefined %}{% elif scored and (t.covered / scored) >= 0.8 %}success{% elif scored and (t.covered / scored) >= 0.4 %}warning{% else %}danger{% endif %}">
+{% call metric_card('covered', keys, link, 'metric-card--tip', tip=true) %}
+    <p class="metric-value {% if coverage_undefined %}{% elif scored and (t.covered / scored) >= 0.8 %}success{% elif scored and (t.covered / scored) >= 0.4 %}warning{% endif %}">
         {% if coverage_undefined %}—{% else %}{{ ((t.covered / scored * 100) | round | int) if scored else 0 }}%{% endif %}
     </p>
     <p class="metric-label">Covered</p>
-    <p class="metric-sub">{% if coverage_undefined %}no counted destinations{% else %}{{ t.covered }} of {{ scored }} scored{% endif %}</p>
+    <p class="metric-sub">{% if coverage_undefined %}no counted destinations{% else %}{{ t.covered }} of {{ scored }} technique{{ '' if scored == 1 else 's' }}{% endif %}</p>
     {{ metric_change(changes.covered) }}
-    {% if changes.covered %}<div class="metric-tip" role="tooltip">{{ metric_change_tip(changes.covered) }}</div>{% endif %}
+    <div class="metric-tip" role="tooltip">Techniques with coverage, of this system's baseline techniques{% if t.na %} that apply: {{ t.na }} {{ 'is' if t.na == 1 else 'are' }} marked not applicable{% endif %}{{ metric_change_tip(changes.covered) }}</div>
 {% endcall %}
 
 {# Effective (#79): covered, less the techniques covered only by rules that can't work now. Today's
    figure only: TIDE keeps no history of what Rule Monitoring found to compare it with. #}
 {% call metric_card('effective', keys, link, 'metric-card--tip', tip=true) %}
-    <p class="metric-value {% if coverage_undefined %}{% elif scored and (t.effective / scored) >= 0.8 %}success{% elif scored and (t.effective / scored) >= 0.4 %}warning{% else %}danger{% endif %}">
+    <p class="metric-value {% if coverage_undefined %}{% elif scored and (t.effective / scored) >= 0.8 %}success{% elif scored and (t.effective / scored) >= 0.4 %}warning{% endif %}">
         {% if coverage_undefined %}—{% else %}{{ ((t.effective / scored * 100) | round | int) if scored else 0 }}%{% endif %}
     </p>
     <p class="metric-label">Effective</p>
-    <p class="metric-sub">{% if coverage_undefined %}no counted destinations{% elif t.not_effective %}{{ t.not_effective }} not effective{% else %}{{ t.effective }} of {{ scored }} scored{% endif %}</p>
+    <p class="metric-sub">{% if coverage_undefined %}no counted destinations{% elif t.not_effective %}{{ t.not_effective }} not effective{% else %}{{ t.effective }} of {{ scored }} technique{{ '' if scored == 1 else 's' }}{% endif %}</p>
     <div class="metric-tip" role="tooltip">Covered by rules that can work now. Left out: techniques covered only by rules with a Rule Monitoring error, or a field they match on missing or empty{% if t.not_effective %} ({{ t.not_effective }}, partly covered ones included){% endif %}</div>
 {% endcall %}
 
@@ -39,14 +41,15 @@
 {% endcall %}
 
 {% call metric_card('no_coverage', keys, link, 'metric-card--tip', tip=true) %}
-    <p class="metric-value danger">{{ t.none }}</p>
+    <p class="metric-value {{ 'danger' if t.none_critical else 'warning' if t.none }}">{{ t.none }}</p>
     <p class="metric-label">No coverage</p>
+    <p class="metric-sub">{{ t.unmapped }} unmapped · {{ t.uncounted }} not counted</p>
     {{ metric_change(changes.no_coverage) }}
-    <div class="metric-tip" role="tooltip">Nothing catching this yet{{ metric_change_tip(changes.no_coverage) }}</div>
+    <div class="metric-tip" role="tooltip">Nothing catching this yet{% if t.none_critical %}; {{ t.none_critical }} {{ 'has' if t.none_critical == 1 else 'have' }} Critical priority{% endif %}. Unmapped: no rule chosen for them. Not counted: a rule is disabled, or only where this system isn't measured{{ metric_change_tip(changes.no_coverage) }}</div>
 {% endcall %}
 
 {% call metric_card('known_gaps', keys, link, 'metric-card--tip', tip=true) %}
-    <p class="metric-value warning">{{ t.gap }}</p>
+    <p class="metric-value {{ 'warning' if t.gap }}">{{ t.gap }}</p>
     <p class="metric-label">Known gaps</p>
     {% if t.partial %}<p class="metric-sub">{{ t.partial }} partly covered</p>{% endif %}
     {{ metric_change(changes.known_gaps) }}
@@ -66,3 +69,24 @@
     {{ metric_change(changes.not_counted) }}
     <div class="metric-tip" role="tooltip">Rule is disabled, or only where this system isn't measured{{ metric_change_tip(changes.not_counted) }}</div>
 {% endcall %}
+
+{# Wazuh devices (D15): their findings and CIS benchmark scores, only while the system has such devices
+   (wazuh_assets.system_figures). #}
+{% set wz = wazuh | default(none) %}
+{% if wz %}
+{% call metric_card('vulnerabilities', keys, link, 'metric-card--tip', tip=true) %}
+    <p class="metric-value {% if wz.kev %}danger{% elif wz.by_severity.Critical or wz.by_severity.High %}warning{% endif %}">{{ wz.vulnerabilities }}</p>
+    <p class="metric-label">Vulnerabilities</p>
+    <p class="metric-sub">{% if wz.kev %}{{ wz.kev }} known exploited{% else %}{{ wz.by_severity.Critical }} critical · {{ wz.by_severity.High }} high{% endif %}</p>
+    {{ metric_change(changes.vulnerabilities) }}
+    <div class="metric-tip" role="tooltip">Wazuh's findings on {{ wz.affected }} of the system's {{ wz.devices }} Wazuh device{{ 's' if wz.devices != 1 }}: {% for s, n in wz.by_severity.items() %}{{ n }} {{ s | lower }}{{ ', ' if not loop.last }}{% endfor %}{% if wz.kev %}; {{ wz.kev }} known exploited{% endif %}{{ metric_change_tip(changes.vulnerabilities) }}</div>
+{% endcall %}
+
+{% call metric_card('hardening', keys, link, 'metric-card--tip', tip=true) %}
+    <p class="metric-value {% if wz.hardening is none %}{% elif wz.hardening >= 80 %}success{% elif wz.hardening >= 40 %}warning{% else %}danger{% endif %}">{% if wz.hardening is none %}—{% else %}{{ wz.hardening }}%{% endif %}</p>
+    <p class="metric-label">Hardening</p>
+    <p class="metric-sub">{% if wz.hardening is none %}no benchmark yet{% else %}{{ wz.policies }} polic{{ 'y' if wz.policies == 1 else 'ies' }} on {{ wz.hardened }} device{{ 's' if wz.hardened != 1 }}{% endif %}</p>
+    {{ metric_change(changes.hardening) }}
+    <div class="metric-tip" role="tooltip">The average score of the CIS benchmark policies Wazuh ran on the system's devices{{ metric_change_tip(changes.hardening) }}</div>
+{% endcall %}
+{% endif %}

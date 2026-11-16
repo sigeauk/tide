@@ -3,7 +3,7 @@
   Context: rule (elastic_rules_index row), body (its [rule] table as Elastic packages it), builds
   (elastic_rules.stack_builds), deployed (where this client has it: rule_origins.deployments, with
   destination), commit, guide_html, setup_html, source, status_labels, covered_ttps, ttp_rule_counts,
-  can_deploy (Deploy opens the Create Rule form filled in with it, GET /api/elastic/rules/{id}/deploy-form).
+  can_deploy (Deploy opens the Create rule form filled in with it, GET /api/elastic/rules/{id}/deploy-form).
 #}
 {% from "macros/icons.html" import icon, icon_text %}
 {% from "components/mitre_pill.html" import mitre_pill %}
@@ -41,7 +41,7 @@
     {% set _shown = rule.version if rule.version is not none else none %}
     {% set _tip %}{% if _shown is none %}Elastic has not released this rule yet: it has no version number.{% else %}Shown here: version {{ _shown }}, the rule as Elastic's repository had it{% if commit.date %} on {{ commit.date }}{% endif %}.{% for b in builds %} Elastic {{ b.stack }} and later get it as version {{ b.version }}{% if b.changes %}, with {{ b.changes | join(' and ') }}{% endif %}.{% endfor %}{% if builds %} Both are the current rule: TIDE deploys and compares the one for each SIEM's Elastic version.{% endif %}{% endif %}{% endset %}
     <dl class="rm-facts">
-        <div class="lib-tip" data-tooltip="{{ _tip | trim }}" tabindex="0"><dt>Version</dt>
+        <div class="lib-tip" title="{{ _tip | trim }}" tabindex="0"><dt>Version</dt>
             <dd>{{ _shown if _shown is not none else 'Not released yet' }}{% for b in builds %}<span class="lib-fact-note"> · {{ b.version }} on Elastic {{ b.stack }}+</span>{% endfor %}</dd></div>
         {% if rule.language %}<div><dt>Language</dt><dd>{{ rule.language | rule_language_name }}</dd></div>{% endif %}
         {% if rule.risk_score is not none %}<div><dt>Risk score</dt><dd>{{ rule.risk_score }}</dd></div>{% endif %}
@@ -103,37 +103,37 @@
     </section>
 
     {% if guide_html %}
-    <details class="rm-fold lib-detail__fold">
+    <details data-fold="guide" class="rm-fold lib-detail__fold">
         <summary>Investigation guide</summary>
         <div class="rm-prose">{{ guide_html }}</div>
     </details>
     {% endif %}
     {% if setup_html %}
-    <details class="rm-fold lib-detail__fold">
+    <details data-fold="setup" class="rm-fold lib-detail__fold">
         <summary>Setup</summary>
         <div class="rm-prose">{{ setup_html }}</div>
     </details>
     {% endif %}
     {% if body.false_positives %}
-    <details class="rm-fold lib-detail__fold">
+    <details data-fold="false-positives" class="rm-fold lib-detail__fold">
         <summary>False positives<span class="rm-fold__count">{{ body.false_positives | length }}</span></summary>
         <ul class="rm-prose">{% for fp in body.false_positives %}<li>{{ fp }}</li>{% endfor %}</ul>
     </details>
     {% endif %}
     {% if body.references %}
-    <details class="rm-fold lib-detail__fold">
+    <details data-fold="references" class="rm-fold lib-detail__fold">
         <summary>References<span class="rm-fold__count">{{ body.references | length }}</span></summary>
         <ul class="rm-links">{% for ref in body.references %}<li><a href="{{ ref }}" target="_blank" rel="noopener noreferrer">{{ icon('external-link', '12') }} {{ ref }}</a></li>{% endfor %}</ul>
     </details>
     {% endif %}
     {% if rule.tags %}
-    <details class="rm-fold lib-detail__fold">
+    <details data-fold="tags" class="rm-fold lib-detail__fold">
         <summary>Tags<span class="rm-fold__count">{{ rule.tags | length }}</span></summary>
         <div class="rm-chips lib-detail__fold-body">{% for tag in rule.tags %}<span class="rm-chip">{{ tag }}</span>{% endfor %}</div>
     </details>
     {% endif %}
     {% if source %}
-    <details class="rm-fold lib-detail__fold">
+    <details data-fold="source" class="rm-fold lib-detail__fold">
         <summary>Source</summary>
         <p class="lib-detail__path" title="Where it is in Elastic's detection-rules repository">{{ rule.file_path }}</p>
         <pre class="query-display rm-query lib-detail__source">{{ source | highlight_source('toml') }}</pre>

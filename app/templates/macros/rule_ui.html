@@ -17,7 +17,7 @@
 {#- state is 'Linked' (this rule has at least one entry in its Linked panel), 'Deprecated',
    'SIEM offline' (its SIEM failed the check before the last sync; title carries the reason), or ''
    for a plain standalone rule, which renders nothing -- its destination name (the SIEM pill)
-   already says where it is. -#}
+   already says where it is. Linked is a chain, its word for screen readers and in its hover (#107). -#}
 {%- if state in ['Linked', 'Deprecated', 'SIEM offline'] -%}
 {%- set meta = {
     'Linked': 'Linked — see the Linked panel in the rule window for the other copy',
@@ -25,28 +25,74 @@
     'SIEM offline': 'SIEM offline — its SIEM could not be reached before the last sync'
 } -%}
 {%- set css_state = {'Linked': 'migrated', 'Deprecated': 'deprecated', 'SIEM offline': 'offline'}[state] -%}
-<span class="tide-lifecycle tide-lifecycle-{{ css_state }}" title="{{ title or meta[state] }}">{{ state }}</span>
+<span class="tide-lifecycle tide-lifecycle-{{ css_state }}" title="{{ title or meta[state] }}">
+{%- if state == 'Linked' %}{{ icon('link', '11') }}<span class="sr-only">Linked</span>{% else %}{{ state }}{% endif -%}
+</span>
 {%- endif -%}
+{%- endmacro %}
+
+{#- A Rule Monitoring severity's icon and words, wherever a rule's problems are shown: an error is a
+   red triangle, a warning an amber circle, information a blue i (#107). -#}
+{%- set SEVERITY_LOOK = {
+    'error': {'icon': 'triangle-alert', 'tone': 'danger', 'one': 'error', 'many': 'errors'},
+    'warning': {'icon': 'alert-circle', 'tone': 'warning', 'one': 'warning', 'many': 'warnings'},
+    'info': {'icon': 'info', 'tone': 'info', 'one': 'info', 'many': 'info'}
+} -%}
+
+{% macro severity_icon(severity, size='13') -%}
+{{ icon(SEVERITY_LOOK.get(severity, SEVERITY_LOOK.warning).icon, size) }}
 {%- endmacro %}
 
 {% macro problems_badge(p) -%}
 {#- What Rule Monitoring found on a rule, as its card and table row flag it (rule_issues.card_problems):
-   one pill, red with an error, amber with a warning, else blue (information), saying how many; grey on a disabled rule, whose problems
-   would stop it working only if it were switched on (unless TIDE's own are among them); hovered,
-   each of them. The rule window's Rule Monitoring section has them in full. Nothing when there are
-   none. -#}
+   a pill for each severity among them, its icon and how many (red errors, amber warnings, blue
+   information); grey on a disabled rule, whose problems would stop it working only if it were
+   switched on (unless TIDE's own are among them); hovered, each of them. The rule window's Rule
+   Monitoring section has them in full. Nothing when there are none. -#}
 {%- if p -%}
-<span class="status-pill status-{{ {'error': 'danger', 'warning': 'warning', 'info': 'info'}.get(p.severity, 'muted') }}"
-      title="Rule Monitoring{{ ' (the rule is disabled: these would stop it working if it were switched on)' if p.disabled }}: {{ p.lines | join('; ') }}. Open the rule for more.">{{ icon('triangle-alert', '11') }} <span class="status-pill__text">{{ p.count }} problem{{ 's' if p.count != 1 }}</span></span>
+{%- for pill in p.pills -%}
+{%- set look = SEVERITY_LOOK[pill.severity] -%}
+{%- set noun = look.one if pill.count == 1 else look.many -%}
+<span class="status-pill status-{{ look.tone if pill.tone != 'muted' else 'muted' }}" data-problems="{{ pill.severity }}"
+      title="Rule Monitoring found {{ pill.count }} {{ noun }}{{ ' (the rule is disabled: these would stop it working if it were switched on)' if p.disabled }}: {{ pill.lines | join('; ') }}. Open the rule for more.">{{ icon(look.icon, '11') }} <span class="status-pill__text">{{ pill.count }}<span class="sr-only"> {{ noun }}</span></span></span>
+{%- endfor -%}
 {%- endif -%}
 {%- endmacro %}
 
-{% macro upstream_badge(up, only_news=false) -%}
-{#- The Elastic or Sigma rule a rule came from (rule_origins.statuses): its source, and unless it is
-   up to date, its state. ``only_news`` shows it only when there is something to act on (an update
-   available, or retired upstream): the rule card. Nothing for the tenant's own rules. -#}
+{% macro gitlab_issue_line(i) -%}
+{{ i.project }}#{{ i.iid }}: {{ i.title }} ({{ {'opened': 'open', 'closed': 'closed'}.get(i.state, 'gone from GitLab') }}
+{%- if i.assignee %}, assigned to {{ i.assignee_name or i.assignee }}{% endif %}
+{%- if not i.for_rule %}, raised in Rule Monitoring for a cause the rule has{% endif %})
+{%- endmacro %}
+
+{% macro issues_badge(issues) -%}
+{#- The open GitLab issues about a rule, as its card and table row show them (gitlab_issues.about_rules
+   with open_only, #106): raised for it, or for a cause it has; its window lists those closed lately
+   too. The GitLab icon and how many, as the problems' pills count (#107): one is a link to it in
+   GitLab (data-stop-click: it doesn't open the rule window), its number in the hover; more open the
+   rule window like the rest of the card. GitLab's orange. Nothing when there are none. -#}
+{%- if issues -%}
+{%- set _cls = 'status-pill status-gitlab' -%}
+{%- if issues | length == 1 -%}
+{%- set i = issues[0] -%}
+<a class="{{ _cls }} rc-issue" href="{{ i.web_url }}" target="_blank" rel="noopener" data-stop-click
+   title="GitLab {{ gitlab_issue_line(i) }}. Opens it in GitLab.">{{ icon('gitlab', '11') }} <span class="status-pill__text">1<span class="sr-only"> GitLab issue</span></span></a>
+{%- else -%}
+<span class="{{ _cls }}" title="GitLab issues: {% for i in issues %}{{ gitlab_issue_line(i) }}{{ '; ' if not loop.last }}{% endfor %}. Open the rule to see them.">{{ icon('gitlab', '11') }} <span class="status-pill__text">{{ issues | length }}<span class="sr-only"> GitLab issues</span></span></span>
+{%- endif -%}
+{%- endif -%}
+{%- endmacro %}
+
+{% macro upstream_badge(up, only_news=false, words=false) -%}
+{#- The Elastic or Sigma rule a rule came from (rule_origins.statuses): its state as a symbol (an
+   update an arrow up, deprecated an archive box, up to date a tick, gone from TIDE a cross; #107),
+   then its source. The state's words are in the hover, and also on the badge with ``words`` (the
+   table's Upstream column, unless up to date). ``only_news`` shows it only when there is something
+   to act on (an update available, or retired upstream): the rule card. Nothing for the tenant's own
+   rules. -#}
 {%- if up and (not only_news or up.state in ['update', 'retired']) -%}
 {%- set cls = {'update': 'info', 'current': 'success', 'retired': 'warning', 'removed': 'muted'}[up.state] -%}
-<span class="status-pill status-{{ cls }} upstream-badge" title="{{ ("One of Elastic's prebuilt rules, installed by Kibana. " if up.prebuilt else '') ~ up.title }}">{{ up.source }}{% if up.state != 'current' %} · {{ up.label }}{% endif %}</span>
+{%- set symbol = {'update': 'circle-arrow-up', 'current': 'circle-check', 'retired': 'archive', 'removed': 'circle-x'}[up.state] -%}
+<span class="status-pill status-{{ cls }} upstream-badge" title="{{ up.label }}. {{ ("One of Elastic's prebuilt rules, installed by Kibana. " if up.prebuilt else '') ~ up.title }}">{{ icon(symbol, '11') }} {{ up.source }}{% if words and up.state != 'current' %} · {{ up.label }}{% endif %}</span>
 {%- endif -%}
 {%- endmacro %}

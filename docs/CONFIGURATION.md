@@ -50,6 +50,7 @@ Only needed if you use Keycloak. See [Single sign-on with Keycloak](#single-sign
 | `BACKUP_PATH` | The host folder backups are saved in (default `backups/` next to `docker-compose.yml`). Another disk is better: a backup on the same disk as `data/` won't survive that disk failing. See [Scheduled backups](OPERATIONS.md#scheduled-backups). |
 | `RULE_LOG_PATH` | A host folder that receives a copy of each daily rule-log export. They are always written to `data/log/rules/` as well. See [Rule-log export](OPERATIONS.md#rule-log-export). |
 | `ELASTIC_APM_ENABLED` and the other `ELASTIC_APM_*` settings | Send TIDE's own performance traces to an Elastic APM server. `.env.example` turns this on; set `ELASTIC_APM_ENABLED=false` if you have no APM server. |
+| `CSP_MODE` | `report-only` makes browsers only report what TIDE's Content-Security-Policy refuses, in **Settings → Diagnostics**, instead of blocking it. Use it only while something the policy blocks stops TIDE working, until a release fixes it. Default `enforce`. |
 | `AUTH_DISABLED` | `true` turns sign-in off entirely. Only for isolated testing; never on a live install. |
 
 Your SIEMs, OpenCTI, GitLab and Keycloak instances are not set in `.env`. They are added in TIDE itself: see [Integrations](#integrations).
@@ -74,11 +75,11 @@ Every SIEM, OpenCTI connector, GitLab and Keycloak entry in TIDE has its own **V
 
 A GitLab's box also covers every project linked to it on a client's page.
 
-Use **Test Connection** on the integration's form to try a setting before saving it.
+Use **Test connection** on the integration's form to try a setting before saving it.
 
 ### When a certificate is refused
 
-TIDE checks certificates as strictly as current browsers do. **Test Connection** says why a certificate was refused:
+TIDE checks certificates as strictly as current browsers do. **Test connection** says why a certificate was refused:
 
 | Message | What to do |
 |---------|------------|
@@ -142,7 +143,7 @@ Each person can hold one or more roles on each client, and different roles on di
 | **Engineer** | Reads dashboards, coverage and reports. |
 | **Support** | Opens **Diagnostics** for that client only. Granted and removed by super admins only. |
 
-What each role may read and change is set per client in its **Role Templates**, on the client's page in Management.
+What each role may read and change is set per client in its **Role Templates**, on the **Users** tab of the client's page in Management.
 
 ### Platform Admin (super admin)
 
@@ -166,9 +167,26 @@ Integrations are added in TIDE. Super admins add them under **Settings → Manag
 
 | Integration | Group | Used for |
 |-------------|-------|----------|
-| **SIEM** (Elastic) | SIEMs | Reading and writing detection rules. Splunk and Sentinel SIEMs can be recorded but don't sync yet. |
+| **SIEM** (Elastic, Wazuh) | SIEMs | Elastic: reading and writing detection rules. Wazuh: reading its rules and their alerts, never writing (see [Wazuh](#wazuh)). Splunk and Sentinel SIEMs can be recorded but don't sync yet. |
 | **OpenCTI** | Threat intel | The threat actors (intrusion sets) Threat Landscape adds to ATT&CK's. |
 | **GitLab** | Source control | The GitLab whose projects clients link, for rule backup and issues (see [Link GitLab projects](CLIENTS.md#link-gitlab-projects)). It has no token of its own: each project has its own. |
 | **Keycloak** | Identity | Single sign-on: TIDE signs people in with it (see [Single sign-on with Keycloak](#single-sign-on-with-keycloak)). There is one. |
 
 A client's admins then link the SIEM spaces and connectors their client should use from the client's page. Credentials are stored encrypted with the key in `data/credentials.key`; see [Backups](OPERATIONS.md#backups-and-upgrades).
+
+### Wazuh
+
+TIDE reads Wazuh 4.8 and later, and never writes to it. It signs in to two places, each as a read-only user of its own: the manager's API (port 55000) and the indexer (port 9200).
+
+**The API user** needs a role with these four policies (Wazuh refuses a policy with the same actions and resources as one it already has, so use its own where they exist, whatever they're called):
+
+| Actions | Resources |
+|---------|-----------|
+| `rules:read` | `rule:file:*` |
+| `agent:read` | `agent:id:*` |
+| `group:read` | `group:id:*` |
+| `sca:read` | `agent:id:*` |
+
+**The indexer user** needs a role with the cluster permission `cluster_composite_ops_ro`, and `read` on the index patterns `wazuh-alerts-*` and `wazuh-states-vulnerabilities-*`. Map the user to it.
+
+**Test connection** signs in as each user, reads Wazuh's version (refusing one older than 4.8), tries each permission and each index, and says what's missing, for example *The API user can't read SCA results: allow it sca:read on agent:id:\**. It also lists the manager's agent groups, which clients link (see [Link destinations to a client](CLIENTS.md#link-destinations-to-a-client)).

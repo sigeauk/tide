@@ -51,13 +51,13 @@
 <div class="cve-detect-footer">
   <button name="Add Detection Rule" class="btn btn-sm btn-secondary" id="add-det-btn"
           data-click="detection.addOpen">
-    {{ icon('plus','14') }} Add Detection Rule
+    {{ icon('plus','14') }} Add detection rule
   </button>
   <form name="Submit Detect" id="add-det-form" class="flex-col gap-sm mt-sm"
         hx-post="/api/inventory/cve/{{ cve_id }}/detect"
         hx-target="#detection-section-inner"
         hx-swap="outerHTML"
-        hx-on::after-request="this.reset();document.getElementById('add-det-btn').style.display='inline-flex';" style="display:none">
+        data-done-reset data-done-shows="add-det-btn:inline-flex" style="display:none">
 
     {# All SIEM rules dropdown #}
     {% if all_siem_rules %}

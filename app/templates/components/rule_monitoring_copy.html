@@ -10,9 +10,13 @@
   query, posted back so the issue holds exactly what is shown). Assign to loads the chosen project's
   members (partials/rule_monitoring_assignees.html), Nobody chosen. Raise issue, beside Close,
   submits the form (form="rmon-gitlab-form"); it and Add as a comment answer into #rmon-gitlab-result.
+  For a rule (``rule``, from Rule Health, #106): the Markdown is the rule and its problems, Description
+  is what you write above it (in the issue, and in a comment), and from its window (``from_window``)
+  Back to rule (``back_url``) opens the window again, with the issue raised.
 #}
 {% from "macros/icons.html" import icon, icon_text %}
 {% from "macros/modal.html" import close_button, empty_state %}
+{% set leave = (('data-click="modal.load" data-url="' | safe) ~ (back_url | e) ~ ('"' | safe)) if from_window and back_url else ('data-click="modal.remove"' | safe) %}
 {% macro selection_fields() -%}
 {% for name, value in gitlab.selection %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
 {%- endmacro %}
@@ -20,11 +24,12 @@
     <div class="modal-content modal-md" data-stop-click role="dialog" aria-modal="true" aria-labelledby="rmon-copy-title">
         <div class="modal-header">
             <h3 class="modal-title" id="rmon-copy-title">Raise issue</h3>
-            {{ close_button() }}
+            {{ close_button(leave | safe, 'Back to rule' if from_window else 'Close') }}
         </div>
         {% if text %}
         <p class="text-secondary mb-md">Markdown for
-            {%- if every %} the {{ issues }} {{ 'issue' if issues == 1 else 'issues' }} shown
+            {%- if rule %} <strong>{{ rule.name }}</strong>{% if causes %} and its {{ causes }} {{ 'problem' if causes == 1 else 'problems' }}{% endif %}
+            {%- elif every %} the {{ issues }} {{ 'issue' if issues == 1 else 'issues' }} shown
             {%- elif issue %} {{ issue }}, {{ causes }} {{ 'cause' if causes == 1 else 'causes' }}
             {%- else %} this cause{% endif %}, to raise in GitLab or paste into a ticket or a chat.</p>
         {% if audiences %}
@@ -55,7 +60,7 @@
                     {% else %}<span class="badge badge-warning badge--xs">Gone from GitLab</span>{% endif %}
                     {% if r.usable %}
                     <form hx-post="/api/rule-monitoring/gitlab-comment" hx-target="#rmon-gitlab-result" hx-swap="innerHTML"
-                          hx-disabled-elt="find button" class="rmon-gitlab__comment">
+                          hx-disabled-elt="find button" class="rmon-gitlab__comment"{% if rule %} hx-include="#rmon-gitlab-note"{% endif %}>
                         {{ selection_fields() }}<input type="hidden" name="raised_id" value="{{ r.id }}">
                         <button name="Add GitLab Comment" type="submit" class="btn btn-secondary btn-xs"
                                 title="Comment on it with the Markdown above: what TIDE finds now">{{ icon_text('plus', 'Add as a comment', '12') }}</button>
@@ -73,6 +78,14 @@
                     <label class="form-label" for="rmon-gitlab-issue-title">Title</label>
                     <input type="text" name="title" id="rmon-gitlab-issue-title" class="form-input" maxlength="255" value="{{ gitlab.title }}" required>
                 </div>
+                {% if rule %}
+                <div>
+                    <label class="form-label" for="rmon-gitlab-note">Description</label>
+                    <textarea name="note" id="rmon-gitlab-note" class="form-input" rows="3" maxlength="5000"
+                              placeholder="What needs doing, for example: too noisy since the October change, please tune it."></textarea>
+                    <p class="text-muted fs-sm">TIDE adds the rule and its problems, as above, below what you write.</p>
+                </div>
+                {% endif %}
                 <div class="rmon-gitlab__pair">
                     <div>
                         <label class="form-label" for="rmon-gitlab-project">Project</label>
@@ -105,15 +118,15 @@
         </section>
         {% endif %}
         <div class="modal-actions">
-            <button name="Close" type="button" class="btn btn-secondary" data-click="modal.remove">Close</button>
+            <button name="{{ 'Back To Rule' if from_window else 'Close' }}" type="button" class="btn btn-secondary" {{ leave | safe }}>{{ 'Back to rule' if from_window else 'Close' }}</button>
             {% if gitlab and gitlab.projects %}
             <button name="Raise GitLab Issue" type="submit" form="rmon-gitlab-form" id="rmon-gitlab-raise" class="btn btn-primary">{{ icon_text('gitlab', gitlab.raised and 'Raise another issue' or 'Raise issue', '14') }}</button>
             {% endif %}
         </div>
         {% else %}
-        {% call empty_state() %}<p>Nothing to raise: no cause matches the filters.</p>{% endcall %}
+        {% call empty_state() %}<p>Nothing to raise: {{ 'TIDE no longer has this rule.' if rule_asked else 'no cause matches the filters.' }}</p>{% endcall %}
         <div class="modal-actions">
-            <button name="Close" type="button" class="btn btn-secondary" data-click="modal.remove">Close</button>
+            <button name="{{ 'Back To Rule' if from_window else 'Close' }}" type="button" class="btn btn-secondary" {{ leave | safe }}>{{ 'Back to rule' if from_window else 'Close' }}</button>
         </div>
         {% endif %}
     </div>

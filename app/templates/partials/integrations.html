@@ -32,7 +32,7 @@
 </div>
 {% if group == 'type' %}
 {% for g in groups %}
-<details class="sys-group sys-group--outer" open data-integration-group="{{ g.key }}">
+<details class="sys-group sys-group--outer" data-fold="integrations-{{ g.key }}" open data-integration-group="{{ g.key }}">
     <summary class="sys-group__head">
         <span class="sys-group__chev">{{ icon('chevron-down', '14') }}</span>
         <span class="sys-group__label">{{ icon(g.icon, '16') }} {{ g.title }}</span>

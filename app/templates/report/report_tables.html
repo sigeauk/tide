@@ -1,0 +1,36 @@
+{#
+  Every PDF report's tables (system, threat, CVE and baseline reports, and the Rule Health section
+  they share), included in each report's <head> after its own styles. A dark header that repeats on
+  each page a table runs onto, rules between rows only, every other row shaded, and badges kept whole.
+  A table that sets its columns' widths (a <colgroup> of col.w-N) is laid out by them (table.cols).
+#}
+<style>
+table {
+    width: 100%; border-collapse: collapse; border: 0; margin-bottom: 5mm;
+    font-size: 7.5pt; table-layout: auto; page-break-inside: auto;
+}
+table.cols { table-layout: fixed; }
+thead { display: table-header-group; }
+tfoot { display: table-footer-group; }
+tr { break-inside: avoid; page-break-inside: avoid; }
+thead tr { background: #1E293B; }   /* under the cells, so no seam shows between them */
+th {
+    background: #1E293B; color: #F8FAFC; border: 0;
+    font-size: 9pt; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase;
+    line-height: 1.25; padding: 8px 10px; text-align: left; vertical-align: bottom;
+}
+td {
+    border: 0; border-bottom: 1px solid #E2E8F0; padding: 8px 10px; vertical-align: top;
+    line-height: 1.4; overflow-wrap: break-word; word-wrap: break-word;
+}
+tbody tr:nth-child(even) td { background: #F8FAFC; }
+th.num, td.num, th.c, td.c { text-align: center; }
+.badge, .prio, .mitre-pill, .rhs-sev { white-space: nowrap; }
+
+col.w-4 { width: 4%; }   col.w-6 { width: 6%; }   col.w-8 { width: 8%; }   col.w-9 { width: 9%; }
+col.w-10 { width: 10%; } col.w-11 { width: 11%; } col.w-12 { width: 12%; } col.w-13 { width: 13%; }
+col.w-14 { width: 14%; } col.w-15 { width: 15%; } col.w-16 { width: 16%; } col.w-18 { width: 18%; }
+col.w-20 { width: 20%; } col.w-22 { width: 22%; } col.w-24 { width: 24%; } col.w-25 { width: 25%; }
+col.w-26 { width: 26%; } col.w-28 { width: 28%; } col.w-30 { width: 30%; } col.w-32 { width: 32%; }
+col.w-34 { width: 34%; } col.w-36 { width: 36%; } col.w-40 { width: 40%; } col.w-50 { width: 50%; }
+</style>

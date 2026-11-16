@@ -1,14 +1,16 @@
 {#
   A technique's window body (components/mitre_window.html): Details, Coverage and NIST · Description,
-  Sub-techniques and the groups that use it (with how) · Software, Campaigns, Mitigations and Sigma
-  rules. A sub-technique, parent, group, software or campaign opens its own window where it has one.
+  How to detect (ATT&CK's detection strategy, components/attack_detection.html), Sub-techniques and the
+  groups that use it (with how) · Software, Campaigns, Mitigations and Sigma rules. A sub-technique,
+  parent, group, software or campaign opens its own window where it has one.
   Your rules are the baseline technique window's rule cards (window_ui.html: rule_card).
   Context: detail (get_mitre_technique_detail), coverage, rules, rule_cards, enabled_rules, sigma_rules,
-  nist_capabilities, technique_groups, covered_ttps, ttp_rule_counts, window_kinds, source context.
+  nist_capabilities, technique_groups, detection, covered_ttps, ttp_rule_counts, window_kinds, source context.
 #}
 {% from "macros/icons.html" import icon, tactic_icon %}
 {% from "components/mitre_pill.html" import mitre_pill %}
 {% from "components/mitre_ui.html" import panel, related_section, technique_list %}
+{% from "components/attack_detection.html" import how_to_detect %}
 
 {% set tid = (detail.id or '') | upper %}
 
@@ -19,7 +21,7 @@
 
 <div class="rm-body">
   <section class="rm-col rm-col--history" data-col="left" aria-label="Left column">
-    {% call panel('details', 'Details') %}
+    {% call panel('details', 'Details', open=false) %}
       <dl class="rm-facts">
         <div><dt>ID</dt><dd>{{ detail.id }}</dd></div>
         <div><dt>Type</dt><dd>{{ 'Sub-technique' if detail.is_subtechnique else 'Technique' }}</dd></div>
@@ -36,7 +38,7 @@
       {% endif %}
     {% endcall %}
 
-    {% call panel('rules', 'Your rules', rules | length) %}
+    {% call panel('rules', 'Your rules', rules | length, open=false) %}
       <dl class="rm-facts">
         <div><dt>Enabled</dt><dd>{{ enabled_rules }}</dd></div>
         <div><dt>Disabled</dt><dd>{{ rules | length - enabled_rules }}</dd></div>
@@ -47,7 +49,7 @@
       {% endif %}
     {% endcall %}
 
-    {% call panel('nist', 'NIST 800-53', nist_capabilities | length) %}
+    {% call panel('nist', 'NIST 800-53', nist_capabilities | length, open=false) %}
       {% if nist_capabilities %}
       <ul class="rm-mitre mw-related">
         {% for c in nist_capabilities %}
@@ -69,21 +71,25 @@
       <div class="md-content">{{ (detail.description or 'No description available.') | md }}</div>
     {% endcall %}
 
+    {% call panel('detect', 'How to detect', detection | map(attribute='analytics') | map('length') | sum) %}
+      {{ how_to_detect(detection) }}
+    {% endcall %}
+
     {% if detail.subtechniques %}
-    {% call panel('subtechniques', 'Sub-techniques', detail.subtechniques | length) %}
+    {% call panel('subtechniques', 'Sub-techniques', detail.subtechniques | length, open=false) %}
       {{ technique_list(detail.subtechniques, source_domain, covered_ttps, ttp_rule_counts, scroll=true) }}
     {% endcall %}
     {% endif %}
 
-    {{ related_section('groups', 'Groups that use it', technique_groups, 'groups', source_domain, window_kinds, summary_field='use', empty='No group is known to use this technique.') }}
+    {{ related_section('groups', 'Groups that use it', technique_groups, 'groups', source_domain, window_kinds, summary_field='use', empty='No group is known to use this technique.', open=false) }}
   </section>
 
   <aside class="rm-col rm-col--actions" data-col="right" aria-label="Right column">
-    {{ related_section('software', 'Software', detail.software, 'software', source_domain, window_kinds, empty='No software recorded.') }}
-    {{ related_section('campaigns', 'Campaigns', detail.campaigns, 'campaigns', source_domain, window_kinds, empty='No campaigns recorded.') }}
-    {{ related_section('mitigations', 'Mitigations', detail.mitigations, 'mitigations', source_domain, window_kinds, empty='No mitigations recorded.') }}
+    {{ related_section('software', 'Software', detail.software, 'software', source_domain, window_kinds, empty='No software recorded.', open=false) }}
+    {{ related_section('campaigns', 'Campaigns', detail.campaigns, 'campaigns', source_domain, window_kinds, empty='No campaigns recorded.', open=false) }}
+    {{ related_section('mitigations', 'Mitigations', detail.mitigations, 'mitigations', source_domain, window_kinds, empty='No mitigations recorded.', open=false) }}
 
-    {% call panel('sigma', 'Sigma rules', sigma_rules | length) %}
+    {% call panel('sigma', 'Sigma rules', sigma_rules | length, open=false) %}
       {% if sigma_rules %}
       <ul class="rm-mitre mw-related">
         {% for s in sigma_rules[:15] %}

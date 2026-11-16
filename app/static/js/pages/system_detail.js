@@ -18,6 +18,9 @@
         params.set('format', $('modal-format').value);
         params.set('classification', $('modal-classification').value);
         params.set('include_devices', $('modal-include-devices').checked ? '1' : '0');
+        // Vulnerabilities and hardening (D14): offered only when the system has Wazuh devices, on by default.
+        var wazuh = $('modal-include-wazuh');
+        params.set('include_wazuh', wazuh && !wazuh.checked ? '0' : '1');
         var chosen = Array.prototype.filter.call(document.querySelectorAll('.modal-baseline'), function (cb) { return cb.checked; });
         params.set('include_baselines', chosen.length ? '1' : '0');
         chosen.forEach(function (cb) { params.append('baseline_id', cb.value); });

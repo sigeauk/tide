@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon %}
 
-{% block title %}{{ host.name }} — TIDE{% endblock %}
+{% block title %}{{ host.name }} | Systems | TIDE{% endblock %}
 
 {% from "components/ui/breadcrumb.html" import breadcrumb %}
 {% from "macros/modal.html" import close_button %}
@@ -49,15 +49,22 @@
             </div>
         </div>
 
+        {% if wazuh_vulns is not none %}
+        {% include "partials/host_wazuh_vulnerabilities.html" %}
+        {% endif %}
+        {% if hardening %}
+        {% include "partials/host_hardening.html" %}
+        {% endif %}
+
         <!-- CVE Matches Section -->
         <div class="min-w-0 overflow-hidden">
             <div class="flex items-center justify-between mb-ms">
                 <h2 class="section-title fs-title">
-                    {{ icon('triangle-alert', '18') }} CVE Matches
+                    {{ icon('triangle-alert', '18') }} CVE matches
                 </h2>
                 {% if vulns %}
                 <a name="View All" href="/cve-overview" class="btn btn-secondary btn-sm">
-                    View All {{ icon('external-link', '12') }}
+                    View all {{ icon('external-link', '12') }}
                 </a>
                 {% endif %}
             </div>
@@ -74,14 +81,14 @@
      data-click="backdrop.hide">
     <div class="modal-content modal-md">
         <div class="modal-header">
-            <h3 class="modal-title">{{ icon('pencil','16') }} Edit Device</h3>
+            <h3 class="modal-title">{{ icon('pencil','16') }} Edit device</h3>
             {{ close_button('name="Close Modal"
                     data-click="el.hide" data-target="edit-host-modal"') }}
         </div>
         <form name="Update Hosts" hx-put="/api/inventory/hosts/{{ host.id }}"
               hx-target="#host-header"
               hx-swap="outerHTML"
-              hx-on::after-request="document.getElementById('edit-host-modal').style.display='none'"
+              data-done-hides="edit-host-modal"
               class="stack gap-md">
             <div>
                 <label class="form-label">Device name <span class="req">*</span></label>
@@ -110,7 +117,7 @@
             <div class="modal-actions">
                 <button name="Cancel" type="button" class="btn btn-secondary"
                         data-click="el.hide" data-target="edit-host-modal">Cancel</button>
-                <button name="Save Changes" type="submit" class="btn btn-primary">{{ icon('save','14') }} Save Changes</button>
+                <button name="Save Changes" type="submit" class="btn btn-primary">{{ icon('save','14') }} Save changes</button>
             </div>
         </form>
     </div>
@@ -121,12 +128,12 @@
      data-click="backdrop.hide">
     <div class="modal-content modal-md">
         <h3 class="mt-0 mx-0 mb-md fs-title fw-600">
-            Add Package — {{ host.name }}
+            Add package — {{ host.name }}
         </h3>
         <form name="Submit Software" hx-post="/api/inventory/hosts/{{ host.id }}/software"
               hx-target="#software-section"
               hx-swap="innerHTML"
-              hx-on::after-request="document.getElementById('add-sw-modal').style.display='none';this.reset()"
+              data-done-hides="add-sw-modal" data-done-reset
               class="stack gap-ms">
             <div>
                 <label class="form-label">
@@ -149,7 +156,7 @@
             <div class="modal-actions mt-sm">
                 <button name="Cancel" type="button" class="btn btn-secondary"
                         data-click="el.hide" data-target="add-sw-modal">Cancel</button>
-                <button name="Add Package" type="submit" class="btn btn-primary">Add Package</button>
+                <button name="Add Package" type="submit" class="btn btn-primary">Add package</button>
             </div>
         </form>
     </div>

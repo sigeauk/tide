@@ -46,7 +46,7 @@
         var b = bar();
         if (!b) return;
         var tSort = $('sys-tactic-sort'), shown = b.querySelectorAll('input[name="tactic"]:checked');
-        var tLabel = shown.length === 1 ? shown[0].value : (shown.length ? shown.length + ' tactics' : 'All');
+        var tLabel = shown.length === 1 ? shown[0].value : (shown.length ? shown.length + ' tactics' : 'Any');
         $('sys-tactic-label').textContent = tLabel + (tSort.value === 'off' ? '' : ' · ' + tSort.options[tSort.selectedIndex].text);
         var nSort = $('sys-sort-name');
         $('sys-name-label').textContent = nSort.value ? nSort.options[nSort.selectedIndex].text : 'Name';

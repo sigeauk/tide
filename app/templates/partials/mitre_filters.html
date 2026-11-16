@@ -28,7 +28,7 @@
 
     {% set sort_opts = [] %}
     {% for key, (label, default_dir, _key) in spec.sorts.items() %}{% set _ = sort_opts.append((key, label, 'data-default-dir="' ~ default_dir ~ '"')) %}{% endfor %}
-    {{ filter_choice('cat-sort', 'sort', 'Sort', sort_opts, f.sort or spec.default_sort, attrs='data-cat-pref') }}
+    {{ filter_choice('cat-sort', 'sort', 'Sort by', sort_opts, f.sort or spec.default_sort, attrs='data-cat-pref') }}
     <input type="hidden" id="cat-dir" name="dir" value="{{ f.dir }}" data-cat-pref>
 
     {% if spec.groupings %}

@@ -70,14 +70,14 @@
             <div class="dash-settings__fields">
                 <label class="dash-field">SIEM
                     <select class="form-input form-select" data-dash-filter="space">
-                        <option value="">All SIEMs</option>
+                        <option value="">Any</option>
                         {% for value, label in filter_options.scopes %}<option value="{{ value }}"{% if f.space == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
                         {% if f.space and f.space not in (filter_options.scopes | map('first') | list) %}<option value="{{ f.space }}" selected>No longer linked</option>{% endif %}
                     </select>
                 </label>
                 <label class="dash-field">Status
                     <select class="form-input form-select" data-dash-filter="enabled">
-                        <option value="">All</option>
+                        <option value="">Any</option>
                         <option value="true"{% if f.enabled == 'true' %} selected{% endif %}>Enabled</option>
                         <option value="false"{% if f.enabled == 'false' %} selected{% endif %}>Disabled</option>
                     </select>
@@ -110,7 +110,7 @@
             <div class="dash-settings__fields">
                 <label class="dash-field">SIEM
                     <select class="form-input form-select" data-dash-filter="scope">
-                        <option value="">All SIEMs</option>
+                        <option value="">Any</option>
                         {% for value, label in filter_options.scopes %}<option value="{{ value }}"{% if f.scope == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
                         {% if f.scope and f.scope not in (filter_options.scopes | map('first') | list) %}<option value="{{ f.scope }}" selected>No longer linked</option>{% endif %}
                     </select>

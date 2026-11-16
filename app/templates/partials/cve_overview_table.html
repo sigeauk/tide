@@ -1,9 +1,11 @@
 
-{# Partial: cve_overview_table.html
+{# Partial: cve_overview_table.html, CVE Overview's filter bar and its first 50 cards.
    Context:
-     cves          (List[CveMatch])  — ALL CVE entries, matched first
+     cves          (List[CveMatch])  — ALL CVE entries
      matched_count (int)
      systems       (List[System])    — for system filter dropdown
+     view          (api.inventory.cve_overview_view) — the cards shown, and how many match
+   The filter bar asks the server for the cards (cve_overview.js, /api/inventory/cve-overview-cards).
 #}
 {% from "macros/icons.html" import icon %}
 {% from "macros/filters.html" import filter_dropdown, filter_choice %}
@@ -11,7 +13,7 @@
 
 {% if cves %}
 
-{# ── Filter bar: search, systems, coverage, matched, sort (cve_overview.js filters the cards) ── #}
+{# ── Filter bar: search, systems, coverage, matched, sort (cve_overview.js asks for the cards) ── #}
 <div class="filters-bar cve-filters">
     <div class="filter-group grow">
         <label class="form-label" for="kev-search">Search</label>
@@ -20,7 +22,7 @@
     </div>
 
     {% if systems %}
-    {% call filter_dropdown('sys-filter', 'System', 'All systems') %}
+    {% call filter_dropdown('sys-filter', 'System', 'Any') %}
         {% for s in systems %}
         <label class="rh-checkbox-row">
             <input name="System Filter Checkbox" type="checkbox" class="sys-filter-cb" value="{{ s.id }}" data-change="cves.filter" checked>
@@ -34,7 +36,7 @@
     {% endcall %}
     {% endif %}
 
-    {% call filter_dropdown('cov-filter', 'Coverage', 'All coverage') %}
+    {% call filter_dropdown('cov-filter', 'Coverage', 'Any') %}
         {% for value, text in [('detected', 'Has rules'), ('nocover', 'No rules'), ('available', 'Available'), ('unaffected', 'Unaffected')] %}
         <label class="rh-checkbox-row">
             <input name="{{ value }}" type="checkbox" class="cov-filter-cb" value="{{ value }}" data-change="cves.filter" checked>
@@ -49,145 +51,22 @@
 
     {{ filter_choice('filter-matched', 'matched', 'Show', [('', 'All CVEs'), ('matched', 'Matched only')], '', attrs='data-change="cves.filter"') }}
 
-    {{ filter_choice('sort-field', 'sort', 'Sort by', [('cve_id', 'CVE ID'), ('name', 'Vulnerability'), ('vendor', 'Vendor'), ('date_added', 'Date added'),
-                     ('due_date', 'Due date'), ('matched', 'Matched first')], 'cve_id', attrs='data-change="cves.sort"') }}
-
-    <div class="filter-group">
-        <label class="form-label" for="sort-dir-btn">Order</label>
-        <button name="Sort Direction" id="sort-dir-btn" type="button" class="btn btn-secondary" data-click="cves.sortDir" title="Toggle sort direction" aria-label="Toggle sort direction">
-            <span id="sort-dir-icon">{{ icon('chevron-down', '14') }}</span>
-        </button>
-    </div>
+    {# Sort by names the order too, as Threat Landscape's does: "field:direction" (cve_overview.js) #}
+    {{ filter_choice('sort-field', 'sort', 'Sort by', [('cve_id:desc', 'CVE ID (newest)'), ('cve_id:asc', 'CVE ID (oldest)'),
+                     ('name:asc', 'Vulnerability (A → Z)'), ('vendor:asc', 'Vendor (A → Z)'), ('date_added:desc', 'Date added (newest)'),
+                     ('due_date:asc', 'Due date (soonest)'), ('matched:desc', 'Matched first')], 'cve_id:desc', attrs='data-change="cves.sort"') }}
 
     <div class="filter-group self-end">
         <span class="fs-md text-muted">
-            <span id="cve-visible-count">{{ cves | length }}</span> / {{ cves | length }} entries
+            <span id="cve-visible-count">{{ view.shown }}</span> / {{ cves | length }} entries
             &nbsp;·&nbsp; {{ matched_count }} matched
         </span>
     </div>
 </div>
 
-{# ── CVE card list ─────────────────────────────────────────────────────── #}
+{# ── CVE card list: 50 at a time, the next as its end scrolls into view (cve_overview_cards.html) ── #}
 <div class="cve-list py-ms px-md" id="cve-card-list">
-{% for cve in cves %}
-{% set matched = cve.affected_hosts | length > 0 %}
-{% set has_rules = cve.detections | length > 0 %}
-
-{# Build system_ids string for data-systems attribute #}
-{% set ns = namespace(sys_ids=[], sys_seen=[]) %}
-{% for h in cve.affected_hosts %}
-  {% if h.system_id not in ns.sys_seen %}
-    {% set ns.sys_seen = ns.sys_seen + [h.system_id] %}
-    {% set ns.sys_ids = ns.sys_ids + [h.system_id] %}
-  {% endif %}
-{% endfor %}
-
-{# Determine coverage status for border colour and filtering #}
-{% if not matched and has_rules %}
-  {% set coverage_class = 'cve-card-item--available' %}
-  {% set coverage_status = 'available' %}
-{% elif not matched %}
-  {% set coverage_class = 'cve-card-item--unaffected' %}
-  {% set coverage_status = 'unaffected' %}
-{% elif matched and has_rules %}
-  {# Check actual applied coverage across affected hosts #}
-  {% set ns_cov = namespace(covered=0) %}
-  {% for h in cve.affected_hosts %}
-    {% if h.coverage_status == 'amber' %}{% set ns_cov.covered = ns_cov.covered + 1 %}{% endif %}
-  {% endfor %}
-  {% if ns_cov.covered >= cve.affected_hosts | length %}
-    {% set coverage_class = 'cve-card-item--detected' %}
-    {% set coverage_status = 'detected' %}
-  {% elif ns_cov.covered > 0 %}
-    {% set coverage_class = 'cve-card-item--partial' %}
-    {% set coverage_status = 'partial' %}
-  {% else %}
-    {% set coverage_class = 'cve-card-item--nocover' %}
-    {% set coverage_status = 'nocover' %}
-  {% endif %}
-{% else %}
-  {% set coverage_class = 'cve-card-item--nocover' %}
-  {% set coverage_status = 'nocover' %}
-{% endif %}
-
-<div class="cve-card-item {{ coverage_class }}"
-     data-matched="{{ '1' if matched else '0' }}"
-     data-systems="{{ ns.sys_ids | join(',') }}"
-     data-coverage="{{ coverage_status }}"
-     data-cve-id="{{ cve.cve_id }}"
-    data-name="{{ cve.cve_id | lower }}"
-     data-vendor="{{ cve.vendor_project }}"
-     data-date-added="{{ cve.date_added }}"
-     data-due-date="{{ cve.due_date }}">
-
-    {# Left: CVE ID #}
-    <div class="cve-card-item__id">
-        <a  name="Cve" href="/cve/{{ cve.cve_id }}"
-           class="{% if coverage_status == 'detected' %}cve-detected{% elif coverage_status == 'partial' %}cve-partial{% elif matched %}cve-matched{% else %}cve-unmatched{% endif %}">
-            {{ cve.cve_id }}
-        </a>
-        {% if cve.known_ransomware %}
-        <span class="badge badge-danger fs-2xs py-2xs px-sm">
-            {{ icon('zap','10') }} Ransomware
-        </span>
-        {% endif %}
-    </div>
-
-    {# Body: name + description + meta #}
-    <div class="cve-card-item__body">
-        <div class="cve-card-item__name" title="{{ cve.vulnerability_name }}">{{ cve.vulnerability_name }}</div>
-        {% if cve.short_description %}
-        <div class="cve-card-item__desc">{{ cve.short_description }}</div>
-        {% endif %}
-        <div class="cve-card-item__meta">
-            <span>{{ icon('box','11') }} {{ cve.vendor_project }} / {{ cve.product }}</span>
-            <span>{{ icon('calendar','11') }} Added: {{ cve.date_added }}</span>
-            <span>{{ icon('clock','11') }} Due: {{ cve.due_date }}</span>
-        </div>
-    </div>
-
-    {# Right: systems + detection #}
-    <div class="cve-card-item__right">
-        {# Affected system/host count pills #}
-        {% if cve.affected_hosts %}
-        <div class="cve-card-item__systems">
-            {% set ns_sys = namespace(ids=[]) %}
-            {% for h in cve.affected_hosts %}{% if h.system_id not in ns_sys.ids %}{% set ns_sys.ids = ns_sys.ids + [h.system_id] %}{% endif %}{% endfor %}
-            {% if coverage_status == 'detected' %}
-            <span class="status-pill status-chip status-chip--success" title="Affects {{ ns_sys.ids | length }} system(s) / {{ cve.affected_hosts | length }} host(s)">
-                {{ icon('triangle-alert','10') }} {{ ns_sys.ids | length }} System{{ 's' if ns_sys.ids | length != 1 }} / {{ cve.affected_hosts | length }} Host{{ 's' if cve.affected_hosts | length != 1 }}
-            </span>
-            {% elif coverage_status == 'partial' %}
-            <span class="status-pill status-chip status-chip--warning" title="Affects {{ ns_sys.ids | length }} system(s) / {{ cve.affected_hosts | length }} host(s)">
-                {{ icon('triangle-alert','10') }} {{ ns_sys.ids | length }} System{{ 's' if ns_sys.ids | length != 1 }} / {{ cve.affected_hosts | length }} Host{{ 's' if cve.affected_hosts | length != 1 }}
-            </span>
-            {% else %}
-            <span class="status-pill status-chip status-chip--danger" title="Affects {{ ns_sys.ids | length }} system(s) / {{ cve.affected_hosts | length }} host(s)">
-                {{ icon('triangle-alert','10') }} {{ ns_sys.ids | length }} System{{ 's' if ns_sys.ids | length != 1 }} / {{ cve.affected_hosts | length }} Host{{ 's' if cve.affected_hosts | length != 1 }}
-            </span>
-            {% endif %}
-        </div>
-        {% endif %}
-
-        {# Detection badge #}
-        <div class="cve-card-item__badges">
-            {% if coverage_status == 'detected' %}
-                <span class="status-pill status-chip status-chip--success" title="All hosts monitored">
-                    {{ icon('shield','10') }} Monitored
-                </span>
-            {% elif coverage_status == 'partial' %}
-                <span class="status-pill status-chip status-chip--warning" title="{{ cve.detections | length }} rule{{ 's' if cve.detections | length != 1 }} — partial coverage">
-                    {{ icon('shield','10') }} Partial
-                </span>
-            {% elif matched %}
-                <span class="status-pill status-chip status-chip--danger" title="No detection rules recorded">
-                    {{ icon('shield-off','10') }} No rules
-                </span>
-            {% endif %}
-        </div>
-    </div>
-</div>
-{% endfor %}
+{% include "partials/cve_overview_cards.html" %}
 </div>
 
 

@@ -63,3 +63,40 @@ def tactic_name(raw: Optional[str]) -> Optional[str]:
     defense_evasion), name in any case, or a common abbreviation. A legacy name stays as it is
     ("Defense Evasion"). None if it isn't one."""
     return _LOOKUP.get(_key(raw or ""))
+
+
+# ── a rule's ATT&CK mapping (its "threat"), as Kibana and Elastic write it ─────
+
+ATTACK_URL = "https://attack.mitre.org"
+
+
+def tactic_url(tactic_id: str) -> str:
+    """ATT&CK's page for a tactic: ``https://attack.mitre.org/tactics/TA0002/``."""
+    return f"{ATTACK_URL}/tactics/{str(tactic_id).upper()}/"
+
+
+def technique_url(technique_id: str) -> str:
+    """ATT&CK's page for a technique or sub-technique: ``…/techniques/T1059/``, ``…/techniques/T1059/001/``."""
+    return f"{ATTACK_URL}/techniques/{str(technique_id).upper().replace('.', '/')}/"
+
+
+def tactic_entry(tactic_id: str, name: str) -> Dict[str, str]:
+    """A threat entry's ``tactic``."""
+    return {"id": str(tactic_id).upper(), "name": name, "reference": tactic_url(tactic_id)}
+
+
+def technique_entries(technique_ids: List[str], name_of=None) -> List[Dict]:
+    """A threat entry's ``technique`` list for ``technique_ids``, in their order: a sub-technique
+    (T1059.001) nested under its technique (T1059), which it brings with it, as Kibana and Elastic
+    keep them. ``name_of(id)`` gives each one's name (else its id)."""
+    name = (lambda tid: (name_of(tid) if name_of else None) or tid)
+    out: Dict[str, Dict] = {}
+    for raw in technique_ids:
+        tid = str(raw or "").strip().upper()
+        if not tid:
+            continue
+        parent = tid.split(".", 1)[0]
+        entry = out.setdefault(parent, {"id": parent, "name": name(parent), "reference": technique_url(parent)})
+        if tid != parent and all(sub["id"] != tid for sub in entry.get("subtechnique", [])):
+            entry.setdefault("subtechnique", []).append({"id": tid, "name": name(tid), "reference": technique_url(tid)})
+    return list(out.values())

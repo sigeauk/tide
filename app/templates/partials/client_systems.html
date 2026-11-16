@@ -3,17 +3,11 @@
 #}
 {% from "macros/icons.html" import icon %}
 {% from "macros/modal.html" import empty_state %}
-{% from "macros/menu.html" import manage_menu %}
+{% from "components/window_ui.html" import section_head %}
 
-<div  name="Systems Edit" class="client-section-toggle" data-click="section.toggle" data-body="systems-body" data-chev="systems-chev">
-    <span class="client-list-item__icon">{{ icon('monitor', '14') }}</span>
-    <h2 class="client-section-toggle__title">Systems</h2>
-    <span class="badge badge-neutral badge--xs">{{ system_summaries | length if system_summaries is defined else client_systems | length }}</span>
-    {{ manage_menu('Systems', 'Manage systems', 'edit-systems-modal', 'Add, move or remove systems') }}
-    <span id="systems-chev" class="client-section-toggle__chevron" style="transform:rotate(90deg);">{{ icon('chevron-right', '16') }}</span>
-</div>
+{{ section_head('Systems', 'monitor', system_summaries | length if system_summaries is defined else client_systems | length, 'Manage systems', 'edit-systems-modal', 'Add, move or remove systems') }}
 
-<div id="systems-body">
+<div class="sys-section__body">
 {% set items = system_summaries if system_summaries is defined else [] %}
 {% if items %}
 <div class="client-list">

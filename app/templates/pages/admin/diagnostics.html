@@ -3,7 +3,7 @@
 {% from "macros/diagnostics_ui.html" import check_list %}
 {% from "macros/sync_ui.html" import sync_state, sync_when, sync_took, sync_what, sync_retry, sync_steps_failed %}
 {% from "components/ui/loading_state.html" import loading_state %}
-{% block title %}Diagnostics - TIDE{% endblock %}
+{% block title %}Diagnostics | Settings | TIDE{% endblock %}
 
 {#
   Diagnostics (super admins, and Support for one client): a snapshot of the install and each client,
@@ -18,14 +18,14 @@
 {%- elif n >= 1048576 -%}{{ '%.0f' | format(n / 1048576) }} MB{%- else -%}{{ '%.0f' | format(n / 1024) }} KB{%- endif -%}
 {%- endmacro %}
 
-{% block settings_subtitle %}{% if full %}A snapshot of this install and its clients, and checks that look for known problems.{% else %}A snapshot of {{ clients[0].name }}, and checks that look for known problems in its data.{% endif %} Checks and look-ups only read data.{% endblock %}
+{% block settings_subtitle %}{% if full %}A snapshot of this install and its clients, and read-only checks that find known problems.{% else %}A snapshot of {{ clients[0].name }}, and read-only checks that find known problems in its data.{% endif %}{% endblock %}
 
 {% block settings_tab_content %}
 
 {% set behind = snap.schema.database < snap.schema.release %}
 {% set dest_count = snap.clients | map(attribute='destinations') | map('length') | sum %}
 {% set offline = snap.clients | map(attribute='destinations') | sum(start=[]) | selectattr('reachable', 'sameas', false) | list | length %}
-<div class="metrics-grid">
+<div class="metrics-grid metrics-grid--6">
     <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value">{{ snap.version }}</p>
         <p class="metric-label">TIDE version</p>
@@ -67,7 +67,7 @@
     </div>
 </div>
 
-<details class="mgmt-section" open>
+<details data-fold="checks" class="mgmt-section" open>
     <summary class="mgmt-section__summary">
         {{ icon('shield-check', '18') }}
         <span class="mgmt-section__title">Checks</span>
@@ -93,7 +93,7 @@
     </div>
 </details>
 
-<details class="mgmt-section" open>
+<details data-fold="lookup" class="mgmt-section" open>
     <summary class="mgmt-section__summary">
         {{ icon('search', '18') }}
         <span class="mgmt-section__title">Look up</span>
@@ -119,7 +119,7 @@
 </details>
 
 {% if full %}
-<details class="mgmt-section" open>
+<details data-fold="access" class="mgmt-section" open>
     <summary class="mgmt-section__summary">
         {{ icon('shield', '18') }}
         <span class="mgmt-section__title">Access</span>
@@ -132,7 +132,7 @@
 </details>
 {% endif %}
 
-<details class="mgmt-section" open>
+<details data-fold="clients" class="mgmt-section" open>
     <summary class="mgmt-section__summary">
         {{ icon('database', '18') }}
         <span class="mgmt-section__title">Clients</span>
@@ -174,7 +174,7 @@
     </div>
 </details>
 
-<details class="mgmt-section" open>
+<details data-fold="sync" class="mgmt-section" open>
     <summary class="mgmt-section__summary">
         {{ icon('refresh-cw', '18') }}
         <span class="mgmt-section__title">Sync activity</span>
@@ -196,7 +196,7 @@
                 <td>{{ r.total_count if r.status in ('success', 'partial') else '—' }}</td>
                 <td class="diag-nowrap">{{ sync_took(r) }}</td>
                 <td>{{ r.error or '' }}{% set steps = sync_steps_failed(r) %}{% if steps %}{{ ' ' if r.error }}{{ steps }}{% endif %}</td>
-                <td class="diag-nowrap">{% if r.client_id == active_client %}{{ sync_retry(r, target='closest td', swap='innerHTML') }}{% endif %}</td>
+                <td class="diag-nowrap">{% if r.client_id == active_client_id %}{{ sync_retry(r, target='closest td', swap='innerHTML') }}{% endif %}</td>
             </tr>
             {% endfor %}
             </tbody>
@@ -207,7 +207,7 @@
     </div>
 </details>
 
-<details class="mgmt-section" open>
+<details data-fold="fixes" class="mgmt-section" open>
     <summary class="mgmt-section__summary">
         {{ icon('zap', '18') }}
         <span class="mgmt-section__title">Fixes</span>
@@ -249,7 +249,7 @@
     </div>
 </details>
 
-<details class="mgmt-section" open>
+<details data-fold="errors" class="mgmt-section" open>
     <summary class="mgmt-section__summary">
         {{ icon('triangle-alert', '18') }}
         <span class="mgmt-section__title">Recent errors</span>
@@ -279,7 +279,7 @@
 
 {% if full %}
 {# The read-only DuckDB console, loaded when the page opens (app/api/management.py, _render_query_tab). #}
-<details class="mgmt-section" id="diag-query-section">
+<details data-fold="query" class="mgmt-section" id="diag-query-section">
     <summary class="mgmt-section__summary">
         {{ icon('database', '18') }}
         <span class="mgmt-section__title">Query</span>

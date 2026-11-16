@@ -8,7 +8,7 @@ Architecture:
 """
 
 from pydantic import BaseModel, Field
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Any
 from datetime import date, datetime
 
 
@@ -32,6 +32,8 @@ class System(BaseModel):
     name: str
     description: Optional[str] = None
     classification: Optional[str] = None
+    # ATT&CK platforms a person added (Edit system), beside those its devices show (attack_detection).
+    platforms: List[str] = Field(default_factory=list)
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -46,6 +48,7 @@ class SystemUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     classification: Optional[str] = None
+    platforms: Optional[List[str]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -61,7 +64,7 @@ class Host(BaseModel):
     os: Optional[str] = None
     hardware_vendor: Optional[str] = None
     model: Optional[str] = None
-    source: str = "manual"              # "manual" | "nessus"
+    source: str = "manual"              # "manual" | "nessus" | "wazuh" (its agent is in host_agents)
     created_at: Optional[datetime] = None
 
 
@@ -81,6 +84,7 @@ class HostSummary(BaseModel):
     vuln_count: int
     detected_count: int = 0             # CVEs that have at least one detection rule
     software_names: List[str] = Field(default_factory=list)  # for context-aware search
+    wazuh: Optional[Dict[str, Any]] = None  # a Wazuh device's agent and findings (wazuh_assets.host_counts)
 
 
 # ---------------------------------------------------------------------------

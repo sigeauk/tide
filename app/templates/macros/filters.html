@@ -11,6 +11,8 @@
 
   wrap: "filter-group" in a filters bar, "browser-filter" in a rule library's browser,
   "sigma-select-group" in a rule library's settings row.
+
+  more_filters holds the filters a list uses less behind one Filters fold, saying how many are set.
 #}
 {% from "macros/icons.html" import icon %}
 
@@ -75,10 +77,23 @@
 {%- endmacro %}
 
 {# Any number of choices; none ticked shows all_text. #}
-{% macro filter_multi(id, name, label, options, selected=[], all_text='All', counts=none, input_attrs='', titles=none, wrap='filter-group') -%}
+{% macro filter_multi(id, name, label, options, selected=[], all_text='Any', counts=none, input_attrs='', titles=none, wrap='filter-group') -%}
 {% set picked = [] %}
 {% for value, text in options %}{% if value in selected %}{% set _ = picked.append(text) %}{% endif %}{% endfor %}
 {% call filter_dropdown(id, label, picked | join(', ') or all_text, 'multi', wrap, all_text) %}
 {{ check_rows(name, options, selected, counts, input_attrs, titles) }}
 {% endcall %}
+{%- endmacro %}
+
+{# The filters a list uses less (a rule library's browser: all but its search and MITRE technique;
+   Rule Health's bar: all but Search, SIEM and Status; Rule Monitoring's: all but Search and SIEM),
+   folded under one Filters button that says how many are set (``active``; app.js keeps it up to date
+   as they change). A choice set to its default (data-filter-default on its select) isn't counted, nor
+   one that only orders or groups the list (data-filter-order). A fold, so it stays open or closed as
+   it was left (data-fold). In a filters bar it takes a line of its own, laid out as the bar. UX.md 9.5. #}
+{% macro more_filters(fold, active=0) -%}
+<details class="filters-more" data-fold="{{ fold }}">
+    <summary class="filters-more__btn">{{ icon('chevron-right', '14', 'filters-more__chev') }}{{ icon('filter', '13') }}<span>Filters</span><span class="rm-fold__count" data-filters-count{% if not active %} hidden{% endif %}>{{ active }}</span></summary>
+    <div class="filters-more__body">{{ caller() }}</div>
+</details>
 {%- endmacro %}

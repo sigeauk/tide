@@ -892,6 +892,9 @@ def _move_rule_sync(db, user_id: str, username: str, client_id: str, rule_id: st
     )
     if not source_siem_row or not target_siem_row:
         return 400, "Source or target destination is not linked to this client.", rule.name, None, None
+    from app.services.siem_kinds import is_elastic
+    if not (is_elastic(source_siem_row) and is_elastic(target_siem_row)):
+        return 400, "Rules move and copy between Elastic destinations only.", rule.name, None, None
     if (source_siem_id, str(source_space).lower()) == (target_siem_id, str(target_space).lower()):
         return 400, "Choose a different destination to move to.", rule.name, None, None
 

@@ -32,7 +32,8 @@ FIGURES: Dict[str, Dict[str, Figure]] = {
                     "quality": Figure(digits=1)},
     "system": {"covered": Figure(unit="%"), "techniques": Figure(better=""),
                "no_coverage": Figure(better="down"), "known_gaps": Figure(better="down"),
-               "unmapped": Figure(better="down"), "not_counted": Figure(better="down")},
+               "unmapped": Figure(better="down"), "not_counted": Figure(better="down"),
+               "vulnerabilities": Figure(better="down"), "hardening": Figure(unit="%")},
     "baselines": {"rules_mapped": Figure(), "uncovered": Figure(better="down"), "fully_covered": Figure()},
 }
 # Rule Monitoring compares differently: its cards say how many began and how many were fixed in the
@@ -43,13 +44,14 @@ FLOWS: Dict[str, Tuple[str, ...]] = {"rule_monitoring": ("rules", "errors", "war
 COMPARE_FILTERS: Dict[str, Tuple[str, ...]] = {"rule_health": ("space",), "system": ("system_id",),
                                                "rule_monitoring": ("scope", "severity", "fixer", "issue", "rules")}
 _COVERAGE_NOTE = "TIDE has the history to work this out from its 6.0 upgrade on, for the systems you have now."
-NOTES = {"rule_health": "Total Rules, Enabled and Avg Quality show how much they have changed since then, and "
+NOTES = {"rule_health": "Total rules, Enabled and Avg quality show how much they have changed since then, and "
                         "Validated how many rules were validated and how many lapsed in that time, when the "
                         "section has no filter other than SIEM.",
-         "system": "Each card shows how much it has changed since then. " + _COVERAGE_NOTE,
-         "baselines": "Rules Mapped, Uncovered and Fully Covered show how much they have changed since then. "
+         "system": "Each card shows how much it has changed since then. " + _COVERAGE_NOTE
+                   + " Vulnerabilities and Hardening, for a system with Wazuh devices, from its 7.0 upgrade on.",
+         "baselines": "Rules mapped, Uncovered and Fully covered show how much they have changed since then. "
                       + _COVERAGE_NOTE,
-         "rule_monitoring": "Rules Needing Action, Errors, Warnings and Things to Fix show how many began and how "
+         "rule_monitoring": "Rules needing action, Errors, Warnings and Things to fix show how many began and how "
                             "many were fixed since then, as syncs found them, when the section has no Search. "
                             "TIDE has the history to work this out from its 6.3.2 upgrade on, and the 14 days before."}
 COMPARE = (("", "None"), ("1", "Yesterday"), ("7", "7 days ago"), ("30", "30 days ago"), ("90", "90 days ago"))
@@ -103,7 +105,7 @@ def flow_lines(moved: dict, days: int) -> Dict[str, dict]:
 
 
 def rule_health_then(db, client_id: str, rules: List, scope: Optional[str], at: datetime) -> Dict[str, Optional[float]]:
-    """Total Rules, Enabled, Validated and Avg Quality as they stood at ``at``, for the rules a
+    """Total rules, Enabled, Validated and Avg quality as they stood at ``at``, for the rules a
     Rule Health section counts now (``rules``, filtered to ``scope``, "<siem_id>|<space>", or
     not) that existed then, and those it counted then that have gone since: deleted or, under a
     SIEM filter, deprecated (a SIEM filter counts only what is there now).
@@ -553,7 +555,7 @@ def baseline_figures(rows: List[dict]) -> Dict[str, int]:
 
 
 def baselines_then(db, client_id: str, systems: List[str], at: datetime, now: Dict[str, int]) -> Dict[str, int]:
-    """A Baselines section's Rules Mapped, Uncovered and Fully Covered as they stood at ``at``,
+    """A Baselines section's Rules mapped, Uncovered and Fully covered as they stood at ``at``,
     across ``systems`` (those there are now), each replayed as ``techniques_then`` does. Each is
     left out unless replaying to now gives today's figure (``now``)."""
     moment = datetime.now()

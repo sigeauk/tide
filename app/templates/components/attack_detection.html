@@ -1,0 +1,85 @@
+{#
+  How to detect: MITRE ATT&CK's detection strategy for a technique (app.services.attack_detection), as
+  the MITRE technique window and the baseline technique window show it. Each analytic is one platform's
+  way to detect it: what to look for, the log sources it reads (the data component in the tip) and what
+  to tune (each knob's meaning in its tip). ``detection`` is attack_detection.for_platforms(): on a system,
+  the analytics for its other platforms fold away under Other platforms.
+#}
+{% from "components/mitre_pill.html" import mitre_pill %}
+{% from "components/window_ui.html" import collapse_ctl, drag_ctl %}
+
+{% macro analytic(a) -%}
+<div class="rm-item rm-item--ref">
+    <div class="rm-item__main">
+        <div class="rm-item__name">{{ a.platforms | join(', ') or 'Any platform' }}</div>
+        {% if a.description %}<p class="rm-item__text">{{ a.description }}</p>{% endif %}
+        {% if a.log_sources %}
+        <ul class="ad-logs" aria-label="Log sources">
+            {% for ls in a.log_sources %}
+            <li><span class="rm-chip rm-chip--mono"{% if ls.component %} title="Data component: {{ ls.component }}"{% endif %}>{{ ls.name }}</span>{% if ls.channel %}<span class="ad-logs__channel">{{ ls.channel }}</span>{% endif %}</li>
+            {% endfor %}
+        </ul>
+        {% endif %}
+        {% if a.tuning %}
+        <div class="rm-chips"><span class="rm-chips__label">Tune</span>
+            {% for t in a.tuning %}<span class="rm-chip" title="{{ t.description }}">{{ t.field }}</span>{% endfor %}
+        </div>
+        {% endif %}
+    </div>
+</div>
+{%- endmacro %}
+
+{# The strategies, one after another. show_technique: each heads with its technique's pill (a baseline
+   technique can carry several ATT&CK techniques). #}
+{% macro how_to_detect(detection, show_technique=false, empty='MITRE ATT&CK has no detection strategy for this technique.') -%}
+{% if detection %}
+{% for s in detection %}
+<div class="ad-strategy">
+    <div class="ad-strategy__head">
+        {% if show_technique %}{{ mitre_pill(s.technique_id, neutral=true, clickable=true, size='sm', close_modal=true) }}{% endif %}
+        <span class="rm-chip rm-chip--mono" title="MITRE ATT&amp;CK detection strategy">{{ s.id }}</span>
+        <span class="ad-strategy__name">{{ s.name }}</span>
+    </div>
+    {% if s.analytics %}
+    <div class="rm-items">{% for a in s.analytics %}{{ analytic(a) }}{% endfor %}</div>
+    {% else %}
+    <p class="rm-empty">None for this system's platforms.</p>
+    {% endif %}
+    {% if s.other %}
+    {% set names = s.other | map(attribute='platforms') | sum(start=[]) | unique | join(', ') %}
+    <details data-fold="logsources-other" class="rm-fold ad-other">
+        <summary title="{{ names }}"><span>Other platforms</span> <span class="rm-fold__count">{{ s.other | length }}</span></summary>
+        <div class="rm-about rm-items">{% for a in s.other %}{{ analytic(a) }}{% endfor %}</div>
+    </details>
+    {% endif %}
+</div>
+{% endfor %}
+{% else %}
+<p class="rm-empty">{{ empty }}</p>
+{% endif %}
+{%- endmacro %}
+
+{# The baseline technique window's section (a system's, or a template's: on_system false shows every
+   platform). platforms: the system's (attack_detection.system_platforms names); new: a blank window. #}
+{% macro detect_section(detection, technique_ids, platforms=[], on_system=false, new=none) -%}
+<div class="rm-panel" data-fold="tw-detect" data-section="detect" data-section-label="How to detect">
+    <div class="rm-panel__head">
+        {{ collapse_ctl('How to detect') }}
+        <h3 class="rm-panel__title">How to detect <span class="rm-fold__count">{{ detection | map(attribute='analytics') | map('length') | sum }}</span></h3>
+        {% if not new %}{{ drag_ctl('How to detect') }}{% endif %}
+    </div>
+    {% if new %}
+    <p class="rm-empty">Shown from its ATT&amp;CK techniques once it is created.</p>
+    {% else %}
+    {% if on_system and platforms %}
+    <div class="rm-chips ad-platforms"><span class="rm-chips__label">This system</span>
+        {% for p in platforms %}<span class="rm-chip">{{ p }}</span>{% endfor %}</div>
+    {% elif on_system and technique_ids %}
+    <p class="rm-empty ad-platforms">TIDE doesn't know this system's platforms, so every platform shows. Give its devices an operating system, or add platforms in Edit system.</p>
+    {% endif %}
+    {{ how_to_detect(detection, show_technique=true,
+                     empty='MITRE ATT&CK has no detection strategy for its techniques.' if technique_ids
+                           else 'Give it ATT&CK techniques under MITRE ATT&CK to see how MITRE detects them.') }}
+    {% endif %}
+</div>
+{%- endmacro %}

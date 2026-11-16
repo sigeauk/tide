@@ -14,23 +14,18 @@
 <div class="metric-card metric-card--tip" tabindex="0">
     <p class="metric-value">{{ t.total }}</p>
     <p class="metric-label">Techniques</p>
-    <div class="metric-tip" role="tooltip">Across every template</div>
-</div>
-
-<div class="metric-card metric-card--tip" tabindex="0">
-    <p class="metric-value">{{ t.tactics }}</p>
-    <p class="metric-label">Tactics</p>
-    <div class="metric-tip" role="tooltip">Kill-chain phases covered</div>
-</div>
-
-<div class="metric-card metric-card--tip" tabindex="0">
-    <p class="metric-value {% if t.unmapped %}warning{% endif %}">{{ t.unmapped }}</p>
-    <p class="metric-label">No ATT&amp;CK</p>
-    <div class="metric-tip" role="tooltip">Techniques with no ATT&amp;CK id yet</div>
+    <p class="metric-sub">across {{ t.tactics }} tactic{{ '' if t.tactics == 1 else 's' }}</p>
+    <div class="metric-tip" role="tooltip">Across every template. Beneath: the kill-chain phases they cover</div>
 </div>
 
 <div class="metric-card metric-card--tip" tabindex="0">
     <p class="metric-value">{{ system_baselines }}</p>
     <p class="metric-label">System baselines</p>
     <div class="metric-tip" role="tooltip">Copies systems keep of their own</div>
+</div>
+
+<div class="metric-card metric-card--tip" tabindex="0">
+    <p class="metric-value {% if t.unmapped %}warning{% endif %}">{{ t.unmapped }}</p>
+    <p class="metric-label">No ATT&amp;CK</p>
+    <div class="metric-tip" role="tooltip">Techniques with no ATT&amp;CK id yet</div>
 </div>

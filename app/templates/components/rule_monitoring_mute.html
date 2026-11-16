@@ -5,7 +5,8 @@
   cause, the cause only. A cause stays muted until it affects more rules than ``rules``, as it does now.
   Context: issue, cause, space, title (the issue's), label (the cause, or its destination),
   cause_siem_ids (comma-separated: the SIEM records of one cluster), rules, cause_muted; from a row also
-  rule_id, siem_id, name, where. Muting closes the dialog and refreshes the list (rmonChanged).
+  rule_id, siem_id, name, where. Muting closes the dialog and refreshes the list (rmonChanged); opened
+  over a rule's window (``from_window``, #106), it brings the window back instead, as it is now.
 #}
 {% from "macros/modal.html" import close_button %}
 {% set until_cause = ('Until it affects more rules than the ' ~ rules ~ ' it does now (disabled ones count).') if rules else 'Until you unmute it.' %}
@@ -15,7 +16,8 @@
             <h3 class="modal-title" id="rmon-mute-title">{{ 'Mute' if rule_id else 'Mute cause' }}</h3>
             {{ close_button('data-click="modal.remove"', 'Cancel') }}
         </div>
-        <form name="Mute" hx-post="/api/rule-monitoring/mute" hx-target="#modal-container" hx-swap="innerHTML">
+        <form name="Mute" hx-post="/api/rule-monitoring/mute" hx-target="#modal-container" hx-swap="innerHTML"
+              {%- if from_window %} hx-headers='{"X-Return-Modal": "rule"}'{% endif %}>
             <input type="hidden" name="issue" value="{{ issue }}">
             <input type="hidden" name="cause" value="{{ cause }}">
             <input type="hidden" name="space" value="{{ space }}">

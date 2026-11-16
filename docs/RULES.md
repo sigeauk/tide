@@ -4,13 +4,15 @@ How to keep your detection rules healthy: syncing them from your SIEMs, reading 
 
 ## Where rules come from
 
-TIDE reads your detection rules from each **SIEM destination** linked to the client: one space of one Elastic SIEM, with a name and colour your administrator chose (for example *DM3-Prod*). The same rule can live at several destinations; each copy is its own rule in TIDE, shown with its destination's tag.
+TIDE reads your detection rules from each **SIEM destination** linked to the client: one space of one Elastic SIEM, or one agent group of a Wazuh manager, with a name and colour your administrator chose (for example *DM3-Prod*). The same rule can live at several destinations; each copy is its own rule in TIDE, shown with its destination's tag.
 
-TIDE gives each rule a **score** (0 to 100) for how well it is likely to work: whether its fields exist in the SIEM, how it is written, whether it has an investigation guide and ATT&CK techniques, and so on. Your administrator decides how many points each check is worth for the client. A check that doesn't fit the rule isn't counted: a machine learning rule has no query or timestamp override to judge. For an indicator match rule, the fields checked include its indicator mapping: each field in its own indexes, and each indicator field in its indicator indexes.
+From Wazuh, TIDE reads the rules that carry an ATT&CK technique and your own rules (those in Wazuh's `etc/rules`); a destination with **Include every Wazuh rule** holds all of Wazuh's rules. Wazuh's rules name the techniques of an older ATT&CK release; where ATT&CK has since renumbered one, TIDE counts the current id and the rule's window says so under **About this rule**. TIDE only reads Wazuh: its rules are changed in Wazuh, and each sync brings the changes into TIDE, recorded in each rule's history.
+
+TIDE gives each rule a **score** (0 to 100) for how well it is likely to work: whether its fields exist in the SIEM, how it is written, whether it has an investigation guide and ATT&CK techniques, and so on. Your administrator decides how many points each check is worth for the client. A check that doesn't fit the rule isn't counted: a machine learning rule has no query or timestamp override to judge, and a Wazuh rule is scored only on its ATT&CK techniques, author, description and whether it is enabled. For an indicator match rule, the fields checked include its indicator mapping: each field in its own indexes, and each indicator field in its indicator indexes.
 
 ## Rule Health
 
-**Rule Health** lists every rule of the client, with figures across the top: **Total Rules**, **Enabled**, **Validated**, **Avg Quality**, **Severity** and **Last Synced**.
+**Rule Health** lists every rule of the client, with figures across the top: **Enabled** (beneath: of how many rules), **Validated** (beneath: how many are due soon, expired or never validated), **Avg quality** (beneath: how many score high, medium, low or critical) and **Last synced**.
 
 ### Sync rules from your SIEMs
 
@@ -21,28 +23,30 @@ TIDE doesn't fetch rules by itself: sync when you want the latest.
 - **Sync** reads every destination linked to the client. Hover over it to sync one destination only, for example **Sync *DM3-Prod* only**.
 - **Sync with mappings** also asks each SIEM which fields its indices hold, so the field checks in each rule's score are up to date. It takes longer; use it after index changes.
 
-**Last Synced** shows when the rules were last synced. If a sync failed, only partly finished, was interrupted, or read the rules but then had a step fail, it says why and offers **Retry**.
+**Last synced** shows when the rules were last synced. If a sync failed, only partly finished, was interrupted, or read the rules but then had a step fail, it says why and offers **Retry**.
 
 A SIEM that can't be reached is skipped: its rules keep showing, marked **SIEM offline**, until a sync reaches it again.
 
 ### Find rules
 
-Filter by **Search** (name, author, ID or ATT&CK technique), **SIEM**, **Status** (enabled or disabled), **State**, **Upstream**, **Type**, **Language**, **Score** (with a range) and **Validate** (with a date range), and sort by score, validation date or **Name**. The number beside each choice is how many rules you would see by picking it, with your other filters as they are.
+Filter by **Search** (name, author, ID or ATT&CK technique), **SIEM** and **Status** (enabled or disabled; the page opens on **Enabled** unless a link names a filter). The other filters are under **Filters**, which says how many are set and stays open or closed as you left it: **State**, **Upstream**, **Type**, **Language**, **Score** (with a range) and **Validate** (with a date range), and sorting by score, validation date or **Name**. The number beside each choice is how many rules you would see by picking it, with your other filters as they are.
 
-**Type** is the rule's type, as Kibana names it: **Custom query**, **Saved query**, **EQL**, **ES|QL**, **Threshold**, **New terms**, **Indicator match** or **Machine learning**. **Language** is its query language: **KQL**, **Lucene**, **EQL** or **ES|QL**. Threshold, new terms and indicator match rules have a language too, so *Indicator match* with *Lucene* finds the indicator match rules written in Lucene. A machine learning rule has no language.
+**Type** is the rule's type, as Kibana names it: **Custom query**, **Saved query**, **EQL**, **ES|QL**, **Threshold**, **New terms**, **Indicator match** or **Machine learning**, or **Wazuh rule** for Wazuh's. **Language** is its query language: **KQL**, **Lucene**, **EQL** or **ES|QL**, or **Wazuh XML**. Threshold, new terms and indicator match rules have a language too, so *Indicator match* with *Lucene* finds the indicator match rules written in Lucene. A machine learning rule has no language.
 
 Under **Validate**, **Show** narrows the rules by where their validation stands, as the **Validated** figure counts them: **Validated**, **Due soon**, **Expired** or **Never validated**. Sorting by validation date always puts rules never validated last, so tick **Never validated** to see them; tick **Expired** as well for every rule that needs validating. A date range narrows the validated rules only: with **Never validated** ticked, rules with no date still show.
 
 **State** is the badge each rule shows:
 
 - **Unlinked**: found at the last sync, with no rule linked to it.
-- **Linked**: found at the last sync, with a rule linked to it: a copy in another destination, or a duplicate in its own.
+- **Linked**: found at the last sync, with a rule linked to it: a copy in another destination, or a duplicate in its own. Its badge is a chain.
 - **SIEM offline**: its SIEM couldn't be reached at the last sync; shown from TIDE's last copy.
 - **Deprecated**: no longer found in the SIEM.
 
 Tick **Unlinked** and **Linked** together for every rule found at the last sync.
 
-A rule that [Rule Monitoring](#rule-monitoring) has found problems with shows how many on its card (in the table, under **State**): red when one is an error, amber when one is a warning, blue when they are only information (Info), and grey on a disabled rule, whose problems would stop it working only if it were switched on. Problems with a disabled rule's rule id still show red or amber, as they matter whether it runs or not. Hover over it to see them; the rule window's **Rule Monitoring** section has each in full. Muted problems aren't counted.
+A rule that [Rule Monitoring](#rule-monitoring) has found problems with shows how many of each kind on its card (in the table, under **State**): errors beside a red triangle, warnings beside an amber circle, and information (Info) beside a blue *i*. On a disabled rule they are grey, as they would stop it working only if it were switched on; problems with its rule id keep their colour, as they matter whether it runs or not. Hover over one to see them; the rule window's **Rule Monitoring** section has each in full. Muted problems aren't counted.
+
+A rule with open GitLab issues about it, raised for the rule itself or raised in Rule Monitoring for a cause it has, shows how many beside the GitLab logo, in GitLab's orange. Hover for each one's number, title and assignee. Click it to open the issue in GitLab, or the rule's window when there are several. Once an issue is closed in GitLab it leaves the card; the rule's window still lists it for a week.
 
 Under **Linked to**, pick a SIEM to narrow **Linked** to the rules linked to a copy there; picking one ticks **Linked** for you. For example, choose your production destination in **SIEM**, then your staging one under **Linked to**, to see the production rules that have a copy in staging.
 
@@ -52,11 +56,13 @@ The page's **⋮** menu switches between **Show as cards** and **Show as table**
 
 **Rule Monitoring** lists the rules that need action, grouped by what causes it, so a problem many rules share is one thing to fix. It is as of each destination's last sync: every sync reads what Kibana says about each rule's last run, checks the rules against the SIEM's indexes and fields, and asks the SIEM for the newest event in each index pattern they search. A rule you delete in TIDE, or move to another destination, leaves the list straight away; one deleted in Kibana leaves it at the next sync, or when you choose **Sync this rule** in its window.
 
-- **What it finds:** an index pattern that matches no index, an index pattern whose data has stopped arriving (**No recent events in the index pattern**: an error when none of the rule's index patterns has recent events, so it can't raise alerts, and a warning when its other patterns still do), indexes missing the rule's timestamp override field (such as `event.ingested`), fields no index has or that have conflicting types, fields the indexes map but none of the last 7 days' events fills (**Field mapped but has no data**, checked once a day, or when you choose **Sync this rule**), rules raising more alerts than the client allows (**Too many alerts**, from the alerts each sync counts), enabled rules that have raised none for a long while (**No alerts for a long time**: by default none in 90 days for a rule enabled at least 30, and not listed when a problem with its data or query already explains it), rules whose alerts jumped (**Alerts spiked**: today or yesterday over three times the rule's usual day of the two weeks before, and at least 50, naming the last change TIDE recorded to the rule in that time); see [Set how long a validation lasts](CLIENTS.md#set-how-long-a-validation-lasts) for the client's thresholds), spaces whose alerts TIDE couldn't read (**Alerts couldn't be read**: the SIEM's API key needs read access to them), queries Kibana can't parse or Elasticsearch refuses, missing privileges, missed runs, searches getting slow before runs are missed (**Searches getting slow**: the median of the last 10 runs' search times at half the time between runs or more, or at 1 s or more and over twice what it was two weeks before, from the search times each sync records), schedules that leave part of each interval unsearched or too little look-back for late events, events arriving later than a rule looks back (**Events arrive later than the rule looks back**: measured at each sync on the last hour's events, for rules that search by when events happened; one searching by `event.ingested` isn't affected), rules with more exception items than the client allows (**Many exceptions**, default over 10 across its own and shared lists), exception items whose every condition is a wildcard-only value, so they except every event with those fields (**Exception matches almost anything**), exception items added in the last 7 days (**Exception added recently**, as Info; each sync also records exception items added, removed or changed in the history of every rule using the list), rules sharing a rule id, the same detection deployed twice in one space (**Same detection deployed twice**: enabled rules with the same type, query, index patterns and the settings that decide what matches, such as a threshold, under different names or rule ids; the query is the cause, and copies linked to each other with **Add link** aren't listed), custom rules using one of Elastic's rule ids, custom rules linked to an Elastic rule they don't match, rules whose Elastic or Sigma original was updated and not reviewed (**Upstream update not reviewed**: by default after 30 days; a rule linked by hand, still to compare, isn't listed; Elastic's prebuilt rules with updates are one finding for each destination instead, as Info, under **Elastic's prebuilt rules have updates**, since Kibana updates them itself in Rules › Rule updates), rules whose original Elastic or SigmaHQ has deprecated (**Retired upstream**), and, when the client turns it on, enabled rules never validated, whose validation has expired under the client's validation policy, or that were edited since they were validated (**Validation expired or out of date**, as Info), changes TIDE made in Kibana but couldn't finish recording (a new rule id, a move, a restore), SIEMs that didn't answer, syncs that couldn't read every rule, a step of the last sync that failed (such as cleaning up score history), and destinations not synced for 7 days. Anything else Kibana reports goes under **Other Kibana errors**, in Kibana's words.
+- **What it finds:** an index pattern that matches no index, an index pattern whose data has stopped arriving (**No recent events in the index pattern**: an error when none of the rule's index patterns has recent events, so it can't raise alerts, and a warning when its other patterns still do), indexes missing the rule's timestamp override field (such as `event.ingested`), fields no index has or that have conflicting types, fields the indexes map but none of the last 7 days' events fills (**Field mapped but has no data**, checked once a day, or when you choose **Sync this rule**), rules raising more alerts than the client allows (**Too many alerts**, from the alerts each sync counts), enabled rules that have raised none for a long while (**No alerts for a long time**: by default none in 90 days for a rule enabled at least 30, and not listed when a problem with its data or query already explains it), rules whose alerts jumped (**Alerts spiked**: today or yesterday over three times the rule's usual day of the two weeks before, and at least 50, naming the last change TIDE recorded to the rule in that time); see [Set how long a validation lasts](CLIENTS.md#set-how-long-a-validation-lasts) for the client's thresholds), spaces whose alerts TIDE couldn't read (**Alerts couldn't be read**: the SIEM's API key needs read access to them), queries Kibana can't parse or Elasticsearch refuses, queries Elastic's own validator can't parse or whose values don't fit their fields' types (**Query fails Elastic's validation**: custom rules are checked at each sync when their query, index patterns or the fields of their indexes changed; an error, or a warning when Kibana has run the query as it stands without error, so the rule still counts as effective; see [Checked with Elastic's validator](#checked-with-elastics-validator)), fields in none of Elastic's schemas that TIDE hasn't seen in the rule's indexes (**Field in no Elastic schema**, its field the cause; a field already listed under **Field not in the index mappings** isn't listed again), missing privileges, missed runs, searches getting slow before runs are missed (**Searches getting slow**: the median of the last 10 runs' search times at half the time between runs or more, or at 1 s or more and over twice what it was two weeks before, from the search times each sync records), schedules that leave part of each interval unsearched or too little look-back for late events, events arriving later than a rule looks back (**Events arrive later than the rule looks back**: measured at each sync on the last hour's events, for rules that search by when events happened; one searching by `event.ingested` isn't affected), rules with more exception items than the client allows (**Many exceptions**, default over 10 across its own and shared lists), exception items whose every condition is a wildcard-only value, so they except every event with those fields (**Exception matches almost anything**), exception items added in the last 7 days (**Exception added recently**, as Info; each sync also records exception items added, removed or changed in the history of every rule using the list), rules sharing a rule id, the same detection deployed twice in one space (**Same detection deployed twice**: enabled rules with the same type, query, index patterns and the settings that decide what matches, such as a threshold, under different names or rule ids; the query is the cause, and copies linked to each other with **Add link** aren't listed), custom rules using one of Elastic's rule ids, custom rules linked to an Elastic rule they don't match, rules whose Elastic or Sigma original was updated and not reviewed (**Upstream update not reviewed**: by default after 30 days; a rule linked by hand, still to compare, isn't listed; Elastic's prebuilt rules with updates are one finding for each destination instead, as Info, under **Elastic's prebuilt rules have updates**, since Kibana updates them itself in Rules › Rule updates), rules whose original Elastic or SigmaHQ has deprecated (**Retired upstream**), and, when the client turns it on, enabled rules never validated, whose validation has expired under the client's validation policy, or that were edited since they were validated (**Validation expired or out of date**, as Info), changes TIDE made in Kibana but couldn't finish recording (a new rule id, a move, a restore), SIEMs that didn't answer, syncs that couldn't read every rule, a step of the last sync that failed (such as cleaning up score history), and destinations not synced for 7 days. Anything else Kibana reports goes under **Other Kibana errors**, in Kibana's words.
+- **Wazuh destinations:** **Wazuh agents disconnected** lists a destination whose agents haven't reported to the manager within the client's **Expect new data every (hours)** window, naming them: an error when none has, as the destination is blind, and a warning when some still report. **Wazuh read incomplete** says the last sync read the destination's rules but couldn't read all of its agents, vulnerability findings or benchmark results, so its devices are as the last complete read left them. **Too many alerts** and **Alerts spiked** apply to every Wazuh rule; **No alerts for a long time** only to your own Wazuh rules, never to Wazuh's stock ruleset, most of which never fires. Kibana's own checks (runs, indexes, fields, exceptions) don't apply to Wazuh rules.
 - **Who fixes** says who acts: **Engineer** (the indexes, pipelines and the SIEM itself), **Author** (the rule's query and schedule) or **TIDE** (something TIDE can fix, or a sync).
 - Each issue opens to its causes, such as an index pattern or a field in a data stream, with how many rules each affects and for how long. Open a cause for its rules; click a rule to open its window. **Previous** and **Next** in the window step through the rules listed, each rule once though it may be listed under several issues, so you can work through a list without going back to it.
+- **Search** and **SIEM** sit across the top; the other filters are under **Filters**, which says how many are set and stays open or closed as you left it.
 - Filter by **Search**, **SIEM**, **Severity**, **Who fixes** and **Issue**; the number beside each choice is how many rules (or whole destinations) you would see by picking it, with your other filters as they are. **Rules** shows enabled rules, or **Include disabled** for what would fail if they were switched on. **Show** lists what is open, or what was fixed in the last 14 days. **Group by** lists by **Issue**, **Who fixes**, **SIEM / destination** or **Rule**. The page keeps your filters when it reloads, and each group stays open or closed as you left it.
-- The cards count the rules needing action (beneath: how many of the enabled rules, and any disabled ones counted because of a rule id problem TIDE can fix), errors, warnings and **Info** (rules with only something worth knowing, such as an expired validation; and how many began in the last 7 days, once Rule Monitoring has a week of history; until then, the day it began), the **Things to Fix** (beneath: the rules they are on, and who fixes them), what was **Resolved** in the last 14 days (beneath: the rules it was on), and when the client was **Last Synced**. **Things to Fix** and **Resolved** count causes: a missing index or field once, however many rules it affects, and a problem without a cause, such as one with a rule's id or its link to Elastic's rule, once per destination.
+- The cards count the **Rules needing action** (beneath: how many have errors, how many warnings only and how many only information, such as an expired validation; then how many of the enabled rules, and any disabled ones counted because of a rule id problem TIDE can fix; hover over it to see how many of each began in the last 7 days, once Rule Monitoring has a week of history, or until then the day it began), the **Things to fix** (beneath: the rules they are on, and who fixes them), what was **Resolved** in the last 14 days (beneath: the rules it was on), and when the client was **Last synced**. **Things to fix** and **Resolved** count causes: a missing index or field once, however many rules it affects, and a problem without a cause, such as one with a rule's id or its link to Elastic's rule, once per destination.
 - The page's **⋮** menu holds **Sync**, as on Rule Health; what a sync finds fixed moves to **Resolved recently**.
 
 ### Act on a cause
@@ -78,7 +84,7 @@ Open a cause for its actions. Anyone who can edit Rule Health can use them.
 
 ## The rule window
 
-Click a rule to open its window. The header shows its score, destination, state, whether it came from Elastic's or the Sigma rules, severity and author, with **Validate** and the date it was last validated at the top right, and the rest of its actions in the **⋮** menu: **Edit**, **Sync this rule**, **Move**, **Duplicate**, **Compare**, **View in Kibana**, **Delete rule**, and **Restore** for a deprecated rule.
+Click a rule to open its window. The header shows its score, destination, state, whether it came from Elastic's or the Sigma rules, severity and author, with **Validate** and the date it was last validated at the top right, and the rest of its actions in the **⋮** menu: **Edit**, **Sync this rule**, **Raise issue…**, **Move**, **Duplicate**, **Compare**, **View in Kibana**, **Delete rule**, and **Restore** for a deprecated rule.
 
 | Section | What it holds |
 |---|---|
@@ -86,7 +92,8 @@ Click a rule to open its window. The header shows its score, destination, state,
 | **Rule logic** | Its query, highlighted |
 | **Exceptions** | The items of each exception list it uses (its own, shared lists, Endpoint exceptions), as the last sync or **Sync this rule** read them: each item's conditions, who added it and when; one matching almost anything is marked, and one past its expiry no longer applies |
 | **Investigation guide** | Its guide for analysts, formatted |
-| **Rule Monitoring** | What [Rule Monitoring](#rule-monitoring) has found on it, when it has found something: each problem, its cause, what was found, who fixes it and for how long, and any that are muted; then a link to act on them there |
+| **Rule Monitoring** | What [Rule Monitoring](#rule-monitoring) has found on it, when it has found something: each problem, its cause, what was found, who fixes it and for how long, and any that are muted. The bell at the end of each, **Mute rule…**, mutes it as on Rule Monitoring, and **Unmute rule** unmutes one muted on its own; **Raise issue** raises one for the rule (see [Raise an issue for a rule](#raise-an-issue-for-a-rule)); a link opens Rule Monitoring on it |
+| **GitLab issues** | The GitLab issues about it, when it has some: raised for it, or in Rule Monitoring for a cause it has, while open and for a week after they close, with their state and assignee as GitLab had them at the last sync, or the last **Sync this rule** |
 | **Last run** | How its last run in Kibana went, how often it runs, how far back it looks, its search time at each run TIDE recorded (with the median and its share of the time between runs), and **Test** |
 | **Score breakdown** | Each check, with the points earned out of its maximum; hover a check for how it is judged |
 | **Rule score over time** | Its score each day |
@@ -98,6 +105,23 @@ Click a rule to open its window. The header shows its score, destination, state,
 | **Linked** | The rules linked to it: its copies at other destinations, and duplicates linked to it |
 | **Upstream** | Whether Elastic or Sigma has a newer version of the rule it came from |
 | **References**, **Rule ID** | Its references, and its IDs |
+
+### A Wazuh rule's window
+
+A Wazuh rule's window shows what Wazuh has: in **About this rule** its **Level**, **File**, groups and compliance tags (such as PCI DSS and GDPR), and in **Rule logic** its XML, read from Wazuh as the window opens and highlighted as a query is (with **Copy**), then the rule it follows (click its number to open it), how often that must match and in how long, and the fields it matches. Its **Alerts** are those of the destination's agents; Wazuh alerts have no open, acknowledged or closed state.
+
+Its rules are changed in Wazuh, so the window has no **Edit**, **Move**, **Duplicate**, **Compare**, **Last run**, **Upstream** or **Linked**, and offers **Delete rule** only once Wazuh no longer has the rule. **Sync this rule** reads its whole destination from Wazuh again, which gives its rules all at once.
+
+### Raise an issue for a rule
+
+**Raise issue…** in the rule window's **⋮** menu, or **Raise issue** in its **Rule Monitoring** section, opens the same dialog Rule Monitoring uses (see [Act on a cause](#act-on-a-cause)), for this rule: the Markdown is the rule (its name, rule id, destination and a link to it in Kibana), then each of its Rule Monitoring problems that isn't muted. A rule with no problems can have an issue too, for anything else, such as tuning it.
+
+- Write what needs doing under **Description**: it goes above the rule in the issue. The title starts as the rule's name.
+- Pick the project, optionally **Assign to** one of its members, and **Raise issue**. The issue then shows on the rule's card and in its window's **GitLab issues** section.
+- The dialog lists the issues already about the rule; **Add as a comment** adds your description and the rule as TIDE finds it now to one of them instead of raising another.
+- **Back to rule** returns to the rule's window.
+
+To raise one for each of several rules, use bulk edit's **Raise issue** (see [Bulk edit](#bulk-edit)).
 
 ### Validate a rule
 
@@ -114,11 +138,11 @@ In **Last run**, choose a time window in **Test against last** and click **Test*
 Who can: anyone who can edit Rule Health.
 
 1. In the rule window, choose **⋮ › Edit**.
-2. Change what you need. The form is in folding sections: **Define Rule** (rule type, query language, index patterns, query, and a threshold, new terms or indicator match rule's own settings), **About Rule** (name, severity, risk score, description, author, tags, timestamp override, MITRE ATT&CK techniques, highlighted fields, investigation guide), **Schedule** (how often it runs, how far back it looks) and **Action** (whether it is enabled).
+2. Change what you need. The form is in folding sections: **Define rule** (rule type, query language, index patterns, query, and a threshold, new terms or indicator match rule's own settings), **About rule** (name, severity, risk score, description, author, tags, timestamp override, MITRE ATT&CK techniques, highlighted fields, investigation guide), **Schedule** (how often it runs, how far back it looks) and **Action** (whether it is enabled).
 3. Give a **Reason for change**. Every edit needs one; it is kept in the rule's History.
 4. Click **Save**.
 
-Only what you change is sent to Kibana, onto the rule as Kibana holds it at that moment. If someone changed the same field in Kibana since TIDE last synced it, nothing is saved: the form says which field, and TIDE loads Kibana's version so you can check it and make your change again. Editing a rule changes only that copy, never a rule linked to it.
+Only what you change is sent to Kibana, onto the rule as Kibana holds it at that moment. If someone changed the same field in Kibana since TIDE last synced it, nothing is saved: the form says which field, and TIDE loads Kibana's version so you can check it and make your change again. A changed query is checked first (see [Checked with Elastic's validator](#checked-with-elastics-validator)). Editing a rule changes only that copy, never a rule linked to it.
 
 A rule keeps its **Rule type** once it is made, as in Kibana, except that a custom query, EQL and ES|QL rule can become one of the others by changing its type (Kibana makes it again, keeping its history in TIDE). Filters set in Kibana are shown under the query and kept as they are.
 
@@ -128,17 +152,26 @@ Editing one of Elastic's prebuilt rules keeps it as Elastic's rule, so TIDE stil
 
 ### Create a rule
 
-Use the page's **⋮ › Create rule**. Choose the **Target SIEM / space**, a **Rule name**, the **Rule type** (**Custom query**, **EQL**, **ES|QL**, **Threshold**, **New terms** or **Indicator match**), the **Query language** and query, then fill in the rest as when editing, and click **Create Rule**. Rules converted from Sigma or deployed from Elastic's library open this same form, filled in (see [Sigma, Elastic & Hunting](LIBRARIES.md)).
+Use the page's **⋮ › Create rule**. Choose the **Target SIEM / space**, a **Rule name**, the **Rule type** (**Custom query**, **EQL**, **ES|QL**, **Threshold**, **New terms** or **Indicator match**), the **Query language** and query, then fill in the rest as when editing, and click **Create rule**. Rules converted from Sigma or deployed from Elastic's library open this same form, filled in (see [Sigma, Elastic & Hunting](LIBRARIES.md)).
+
+### Checked with Elastic's validator
+
+Before a rule is created, deployed, or saved with a changed query, TIDE checks its query with Elastic's own validator, the one Elastic checks its prebuilt rules with, against the fields of the destination's indexes:
+
+- A query it can't parse, or with a value or comparison that doesn't fit its field's type, is named, saying where Elastic stops and why, and the rule is written anyway. When the client's page has **Stop saves Elastic's validator refuses** ticked (see [Rule Monitoring's settings](CLIENTS.md)), such a rule isn't written to Kibana, and the form says why.
+- A field that is in none of Elastic's schemas (ECS, its integrations' and Endpoint's) and that TIDE hasn't seen in the rule's indexes is named, and the rule is saved anyway: it may be misspelled, or come from data the SIEM doesn't have yet.
+
+An edit that doesn't change the query, its language, type or index patterns isn't checked. Rules changed in Kibana are checked at the next sync, and Rule Monitoring lists what Elastic finds. Elastic's conventions for its own rules, such as how rule ids and tags are written, aren't checked.
 
 ### Threshold and new terms rules
 
-A **Threshold** rule alerts when its query matches a number of events or more. In **Define Rule**:
+A **Threshold** rule alerts when its query matches a number of events or more. In **Define rule**:
 
 - **Group by**: up to three fields (**Add field**), so the threshold counts each of their values on its own. Optional.
 - **Threshold**: how many events. It starts at Kibana's 100.
 - **Count**: a field and a number of **Unique values**, to alert only when the events have that many different values of the field or more. Optional.
 
-A **New terms** rule alerts on a value it hasn't seen before. In **Define Rule**:
+A **New terms** rule alerts on a value it hasn't seen before. In **Define rule**:
 
 - **Fields**: one to three fields (**Add field**). With more than one, it is their combination of values that is new.
 - **History window size**: how far back a value counts as seen, as a number and s, m, h or d, such as *7d*.
@@ -147,12 +180,12 @@ As you type a field, TIDE suggests the fields it has checked in the rule's index
 
 ### Indicator match rules
 
-An indicator match rule alerts when a field of your events matches a field of your threat indicators. Choose **Indicator match** as the **Rule type**, then, in **Define Rule**, beside the index patterns and query of your events:
+An indicator match rule alerts when a field of your events matches a field of your threat indicators. Choose **Indicator match** as the **Rule type**, then, in **Define rule**, beside the index patterns and query of your events:
 
 - **Indicator index patterns**: the indexes holding your indicators, such as `logs-ti_*`.
 - **Indicator index query** and **Indicator query language**: which indicators to use. It starts as Kibana's, the last 30 days.
 - **Indicator mapping**: a field of your events, and the indicator index field it matches. **AND** adds a field that must match as well; **OR** adds another group, any one of which is enough. As you type, TIDE suggests the fields it has checked in those indexes; you can type any other.
-- **Indicator prefix override**, under **About Rule**: where the matched indicator goes in the alert. Blank is Kibana's own, `threat.indicator`.
+- **Indicator prefix override**, under **About rule**: where the matched indicator goes in the alert. Blank is Kibana's own, `threat.indicator`.
 
 The rule window's **Rule logic** shows these settings below the query. Filters on either query, set in Kibana, are shown and kept as they are. Kibana 9 can also map a field that *does not match*; TIDE shows such an entry and keeps it, but doesn't add one.
 
@@ -221,7 +254,7 @@ With every section ticked and none combined, Merge copies the whole rule over.
 TIDE remembers which of Elastic's or the Sigma rules each of your rules came from, including Elastic's prebuilt rules installed by Kibana. When TIDE is upgraded with newer versions, the rules they changed are flagged.
 
 - The **Upstream** filter on Rule Health shows **Elastic update available**, **Sigma update available**, **Up to date**, **Deprecated by Elastic**, **Deprecated by Sigma**, **No longer in TIDE's Elastic or Sigma rules** and **Your own rules**.
-- The rule window's header shows **Elastic** or **Sigma** for a rule that came from either.
+- The rule window's header shows **Elastic** or **Sigma** for a rule that came from either, after a symbol for where it stands: an arrow up for an update, an archive box when deprecated, a tick when up to date. Rule cards show it only for an update or a deprecation; hover for the details.
 - The rule window's **Upstream** section says what changed, and **⋮ › Compare with *Elastic*** (or *Sigma*) shows your rule beside the new version.
 
 To take an update:
@@ -288,10 +321,12 @@ Only the copy takes a new rule id: Elastic's rule always keeps Elastic's. If Kib
 
 1. On Rule Health, choose **⋮ › Bulk edit**.
 2. Tick the rules, or tick the box at the top to select every rule the filters show.
-3. Choose **Move**, **Enable**, **Disable**, **Validate**, **Sync**, **Give own rule id** or **Delete**. Move asks for a **Target destination**, and how to treat the rules' validation.
+3. Choose **Move**, **Enable**, **Disable**, **Validate**, **Sync**, **Give own rule id**, **Raise issue** or **Delete**. Move asks for a **Target destination**, and how to treat the rules' validation.
    - **Give own rule id** gives each selected custom rule that uses one of Elastic's rule ids a rule id of its own, as the rule window does. Selected rules that don't need one are left out, and the dialog says how many.
    - **Sync** reads each rule again from its SIEM, as **Sync this rule** does. A rule its SIEM no longer has is marked **Deprecated**, keeping its history, and is listed when the sync ends: a quick way to find which of a few rules is no longer in Kibana.
+   - **Raise issue** raises a GitLab issue for each rule, titled with its name, as its window's **Raise issue…** does: pick the project, optionally **Assign to** and labels, and write a **Description** that goes above each rule. Rules that already have an open issue raised for them are left out, and the dialog says how many; up to 50 issues are raised at a time.
    - **Delete** removes the rules from TIDE. Tick **Also delete them from Elastic** to delete them in their SIEM too, which asks once more; otherwise a rule still in Elastic comes back at the next sync.
+   - Wazuh rules are changed in Wazuh: **Move**, **Enable**, **Disable** and **Delete** leave them out, and the dialog says how many. **Sync** reads each Wazuh destination once.
 4. Progress shows each rule by name, with any that failed and why. A Move that meets a rule already at the target moves the rest first, then asks about each that clashed.
 
 **Exit bulk edit** returns to the list.

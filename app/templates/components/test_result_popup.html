@@ -3,7 +3,7 @@
 <div  name="Test Results: ... Close" class="modal-overlay" data-click="el.remove">
     <div  name="Test Results: ... Close" class="modal-content modal-lg" data-stop-click>
         <div class="modal-header">
-            <h2 class="modal-title">Test Results: {{ rule.name[:60] }}{% if rule.name|length > 60 %}...{% endif %}</h2>
+            <h2 class="modal-title">Test results: {{ rule.name[:60] }}{% if rule.name|length > 60 %}...{% endif %}</h2>
             <button  name="Close Modal" class="btn btn-secondary btn-sm" data-click="modal.remove">
                 {{ icon('x','12') }} Close
             </button>
@@ -22,7 +22,7 @@
                     <div class="metric-compact-value {% if hit_count > 0 %}text-success{% else %}text-warning{% endif %} test-result-hits__value">
                         {{ hit_count }}
                     </div>
-                    <div class="metric-compact-label">Documents Matched</div>
+                    <div class="metric-compact-label">Documents matched</div>
                 </div>
                 <div class="fs-base text-muted">
                     <p>Query language: <strong>{{ rule.language | rule_language_name }}</strong></p>
@@ -69,7 +69,7 @@
         <!-- Sample Results -->
         {% if samples and samples | length > 0 %}
         <div class="modal-section">
-            <h3 class="modal-section-subtitle">Sample Results <span class="rm-fold__count">{{ samples | length }}</span></h3>
+            <h3 class="modal-section-subtitle">Sample results <span class="rm-fold__count">{{ samples | length }}</span></h3>
             <div class="mapping-table-wrapper">
                 <table class="mapping-table">
                     <thead>

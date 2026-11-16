@@ -183,10 +183,12 @@ _TAG = re.compile(r"<[^>]+>")
 
 # Each page's ? (macros/help.html): the guide's (page, section) on that page, by the page's name.
 HELP = {
+    "home": ("getting-started", "home"),
     "dashboard": ("getting-started", "dashboards"),
     "systems": ("systems", "the-systems-page"),
     "system": ("systems", "a-systems-page"),
     "baselines": ("systems", "baseline-templates"),
+    "detection-backlog": ("systems", "detection-backlog"),
     "cves": ("systems", "devices-and-cves"),
     "rule-health": ("rules", "rule-health"),
     "rule-monitoring": ("rules", "rule-monitoring"),
@@ -199,6 +201,8 @@ HELP = {
     "nist": ("threats", "nist-800-53"),
     "clients": ("clients", "the-order-to-set-things-up"),
     "client": ("clients", "link-destinations-to-a-client"),
+    "diagnostics": ("operations", "diagnostics"),
+    "profile": ("getting-started", "your-profile"),
 }
 
 

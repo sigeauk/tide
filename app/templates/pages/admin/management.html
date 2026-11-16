@@ -2,14 +2,14 @@
 {% from "macros/icons.html" import icon %}
 {% from "macros/modal.html" import close_button %}
 {% from "components/ui/loading_state.html" import loading_state %}
-{% block title %}Management - TIDE{% endblock %}
+{% block title %}Management | Settings | TIDE{% endblock %}
 
 {% block head %}
 <link rel="stylesheet" href="/static/css/vendor/codemirror.min.css">
 <link rel="stylesheet" href="/static/css/vendor/codemirror-material-darker.min.css">
 {% endblock %}
 
-{% block settings_subtitle %}Tenants, users, integrations, Sigma assets and classifications.{% endblock %}
+{% block settings_subtitle %}TIDE's clients, users, integrations, Sigma assets and classifications.{% endblock %}
 
 {% block settings_tab_content %}
 {# Each integration's own "Verify TLS certificate" box, off by default (app/services/tls.py). #}
@@ -22,15 +22,15 @@
 </div>
 {% endmacro %}
 {# ------------------------------------------------------------------ #}
-{# Tenants & Users \u2014 two sub-tabs (Clients / Users). The legacy        #}
+{# Tenants & users \u2014 two sub-tabs (Clients / Users). The legacy        #}
 {# "permissions" tab now lives in its own top-level "Role Templates"  #}
 {# section below; legacy ?tab=permissions falls back to Clients.      #}
 {# ------------------------------------------------------------------ #}
 {% set tu_tab = active_tab if active_tab in ('clients', 'users') else 'clients' %}
-<details class="mgmt-section" open>
+<details data-fold="tenants" class="mgmt-section" open>
     <summary class="mgmt-section__summary">
         {{ icon('users', '18') }}
-        <span class="mgmt-section__title">Tenants &amp; Users</span>
+        <span class="mgmt-section__title">Tenants &amp; users</span>
         <span class="mgmt-section__hint">Clients and global user directory</span>
     </summary>
     <div class="mgmt-section__body">
@@ -56,7 +56,7 @@
 </details>
 
 {% if user and user.is_superadmin %}
-<details class="mgmt-section">
+<details data-fold="data" class="mgmt-section">
     <summary class="mgmt-section__summary">
         {{ icon('database', '18') }}
         <span class="mgmt-section__title">Data export &amp; import</span>
@@ -67,7 +67,7 @@
     </div>
 </details>
 
-<details class="mgmt-section" id="mgmt-backups-section">
+<details data-fold="backups" class="mgmt-section" id="mgmt-backups-section">
     <summary class="mgmt-section__summary">
         {{ icon('save', '18') }}
         <span class="mgmt-section__title">Backups</span>
@@ -78,7 +78,7 @@
     </div>
 </details>
 
-<details class="mgmt-section" id="mgmt-maintenance-section">
+<details data-fold="maintenance" class="mgmt-section" id="mgmt-maintenance-section">
     <summary class="mgmt-section__summary">
         {{ icon('clock', '18') }}
         <span class="mgmt-section__title">Maintenance window</span>
@@ -92,13 +92,13 @@
 
 {# Role Templates have been moved to the Client Detail page \u2014 they are now
    tenant-scoped and edited from /clients/{id}. Use the active-tenant link on
-   the Tenants & Users tab to manage role permissions for a specific client. #}
+   the Tenants & users tab to manage role permissions for a specific client. #}
 
 {# ------------------------------------------------------------------ #}
 {# Integrations — every SIEM, OpenCTI, GitLab and Keycloak in one     #}
 {# list (partials/integrations.html), with Group by and Add integration. #}
 {# ------------------------------------------------------------------ #}
-<details class="mgmt-section" open>
+<details data-fold="integrations" class="mgmt-section" open>
     <summary class="mgmt-section__summary">
         {{ icon('link', '18') }}
         <span class="mgmt-section__title">Integrations</span>
@@ -112,7 +112,7 @@
         </div>
         {% else %}
         {# SIEMs, connectors, GitLab and Keycloak serve the whole install and hold its credentials. #}
-        <details class="mgmt-subsection">
+        <details data-fold="integrations-setup" class="mgmt-subsection">
             <summary class="mgmt-subsection__summary">
                 {{ icon('shield-check', '16') }}
                 <span class="mgmt-subsection__title">SIEMs, connectors, GitLab and Keycloak</span>
@@ -131,13 +131,13 @@
 </details>
 
 {# ------------------------------------------------------------------ #}
-{# Sigma Assets and Classifications sections are rendered in a later  #}
+{# Sigma assets and Classifications sections are rendered in a later  #}
 {# phase — placeholders kept here so the IA is visible to the user.   #}
 {# ------------------------------------------------------------------ #}
-<details class="mgmt-section" id="mgmt-sigma-section">
+<details data-fold="sigma" class="mgmt-section" id="mgmt-sigma-section">
     <summary class="mgmt-section__summary">
         {{ icon('file-code', '18') }}
-        <span class="mgmt-section__title">Sigma Assets</span>
+        <span class="mgmt-section__title">Sigma assets</span>
         <span class="mgmt-section__hint">Pipelines &amp; templates (assign per tenant)</span>
     </summary>
     <div class="mgmt-section__body">
@@ -148,9 +148,9 @@
             see only the assets assigned to that tenant.
         </p>
 
-        <details class="mgmt-subsection" open>
+        <details data-fold="sigma-pipelines" class="mgmt-subsection" open>
             <summary class="mgmt-subsection__summary">
-                <span class="mgmt-subsection__title">Custom Pipelines</span>
+                <span class="mgmt-subsection__title">Custom pipelines</span>
                 <span class="mgmt-subsection__hint">./data/sigma_pipelines/</span>
             </summary>
             <div class="mgmt-subsection__body">
@@ -161,7 +161,7 @@
                         </div>
                         <div class="asset-editor__buttons">
                             <button name="+ New Pipeline" type="button" class="btn btn-secondary btn-sm grow" data-click="mgmt.assetNew" data-asset="pipeline">
-                                + New Pipeline
+                                + New pipeline
                             </button>
                             <button name="Refresh" type="button" class="btn btn-secondary btn-sm asset-editor__refresh" data-click="mgmt.assetList" data-asset="pipeline" title="Refresh">
                                 &#8635;
@@ -191,9 +191,9 @@
             </div>
         </details>
 
-        <details class="mgmt-subsection">
+        <details data-fold="sigma-templates" class="mgmt-subsection">
             <summary class="mgmt-subsection__summary">
-                <span class="mgmt-subsection__title">Postprocessing Templates</span>
+                <span class="mgmt-subsection__title">Postprocessing templates</span>
                 <span class="mgmt-subsection__hint">./data/sigma_templates/</span>
             </summary>
             <div class="mgmt-subsection__body">
@@ -204,7 +204,7 @@
                         </div>
                         <div class="asset-editor__buttons">
                             <button name="+ New Template" type="button" class="btn btn-secondary btn-sm grow" data-click="mgmt.assetNew" data-asset="template">
-                                + New Template
+                                + New template
                             </button>
                             <button name="Refresh" type="button" class="btn btn-secondary btn-sm asset-editor__refresh" data-click="mgmt.assetList" data-asset="template" title="Refresh">
                                 &#8635;
@@ -259,7 +259,7 @@
     </div>
 </div>
 
-<details class="mgmt-section">
+<details data-fold="classifications" class="mgmt-section">
     <summary class="mgmt-section__summary">
         {{ icon('tag', '18') }}
         <span class="mgmt-section__title">Classifications</span>
@@ -273,7 +273,7 @@
         </p>
 
         <form name="Submit Classifications" hx-post="/api/inventory/classifications" hx-target="#clf-list" hx-swap="innerHTML"
-              hx-on::after-request="if(event.detail.successful){this.reset();}"
+              data-done-reset="success"
               class="inline-form">
             <input type="text" name="name" class="form-input inline-form__name" placeholder="Classification name" required>
             <input type="color" name="color" value="#6b7280" title="Pick a colour" class="color-swatch-input">
@@ -294,7 +294,7 @@
      data-click="clients.backdrop">
     <div class="modal-content modal-md">
         <div class="modal-header">
-            <h3 class="modal-title" id="client-modal-title">New Client</h3>
+            <h3 class="modal-title" id="client-modal-title">New client</h3>
             {{ close_button('name="Close Modal"
                     data-click="clients.close"') }}
         </div>
@@ -341,6 +341,7 @@
                     <label for="siem-form-type" class="form-label">Type</label>
                     <select id="siem-form-type" name="siem_type" class="form-input" data-change="mgmt.siemType">
                         <option value="elastic">Elastic</option>
+                        <option value="wazuh">Wazuh</option>
                         <option value="splunk">Splunk</option>
                         <option value="sentinel">Sentinel</option>
                     </select>
@@ -362,6 +363,41 @@
                         <label for="siem-form-token" class="form-label">API key / token</label>
                         <input type="password" id="siem-form-token" name="api_token" class="form-input" placeholder="Leave blank to keep existing" autocomplete="new-password">
                     </div>
+                </div>
+            </div>
+
+            <!-- Wazuh-specific fields: read-only users on the manager's API and on the indexer -->
+            <div id="siem-fields-wazuh" style="display:none;">
+                <div class="form-stack">
+                    <div>
+                        <label for="siem-form-wazuh-manager-url" class="form-label">Manager API URL</label>
+                        <input type="text" id="siem-form-wazuh-manager-url" class="form-input" placeholder="https://wazuh-manager:55000">
+                    </div>
+                    <div class="form-grid-2">
+                        <div>
+                            <label for="siem-form-wazuh-api-user" class="form-label">API user</label>
+                            <input type="text" id="siem-form-wazuh-api-user" class="form-input" autocomplete="off" placeholder="tide-read">
+                        </div>
+                        <div>
+                            <label for="siem-form-wazuh-api-password" class="form-label">API password</label>
+                            <input type="password" id="siem-form-wazuh-api-password" class="form-input" placeholder="Leave blank to keep existing" autocomplete="new-password">
+                        </div>
+                    </div>
+                    <div>
+                        <label for="siem-form-wazuh-indexer-url" class="form-label">Indexer URL</label>
+                        <input type="text" id="siem-form-wazuh-indexer-url" class="form-input" placeholder="https://wazuh-indexer:9200">
+                    </div>
+                    <div class="form-grid-2">
+                        <div>
+                            <label for="siem-form-wazuh-indexer-user" class="form-label">Indexer user</label>
+                            <input type="text" id="siem-form-wazuh-indexer-user" class="form-input" autocomplete="off" placeholder="tide-read">
+                        </div>
+                        <div>
+                            <label for="siem-form-wazuh-indexer-password" class="form-label">Indexer password</label>
+                            <input type="password" id="siem-form-wazuh-indexer-password" class="form-input" placeholder="Leave blank to keep existing" autocomplete="new-password">
+                        </div>
+                    </div>
+                    <p class="form-hint">TIDE only reads from Wazuh: give both users read-only roles (Configuration guide, <strong>Wazuh</strong>).</p>
                 </div>
             </div>
 
@@ -397,7 +433,7 @@
             <div id="siem-test-result" class="form-result"></div>
             <div class="form-footer">
                 <button name="Test Connection" type="button" class="btn btn-secondary btn-sm" data-click="mgmt.siemTest"
-                        id="siem-test-btn">Test Connection</button>
+                        id="siem-test-btn">Test connection</button>
                 <div class="modal-actions">
                     <button name="Cancel" type="button" class="btn btn-secondary" data-click="mgmt.siemClose">Cancel</button>
                     <button name="Create" type="submit" class="btn btn-primary" id="siem-form-submit">Create</button>
@@ -412,7 +448,7 @@
      data-click="mgmt.gitlabBackdrop">
     <div class="modal-content modal-md">
         <div class="modal-header">
-            <h3 class="modal-title" id="gitlab-modal-title">New GitLab Instance</h3>
+            <h3 class="modal-title" id="gitlab-modal-title">New GitLab instance</h3>
             {{ close_button('name="Close Modal"
                     data-click="mgmt.gitlabClose"') }}
         </div>
@@ -494,7 +530,7 @@
             <div id="keycloak-test-result" class="form-result"></div>
             <div class="form-footer">
                 <button name="Test Connection" type="button" class="btn btn-secondary btn-sm" data-click="mgmt.keycloakTest"
-                        id="keycloak-test-btn">Test Connection</button>
+                        id="keycloak-test-btn">Test connection</button>
                 <div class="modal-actions">
                     <button name="Cancel" type="button" class="btn btn-secondary" data-click="mgmt.keycloakClose">Cancel</button>
                     <button name="Create" type="submit" class="btn btn-primary" id="keycloak-form-submit">Create</button>
@@ -509,7 +545,7 @@
      data-click="mgmt.connectorBackdrop">
     <div class="modal-content modal-md">
         <div class="modal-header">
-            <h3 class="modal-title" id="connector-modal-title">New Connector</h3>
+            <h3 class="modal-title" id="connector-modal-title">New connector</h3>
             {{ close_button('name="Close Modal"
                     data-click="mgmt.connectorClose"') }}
         </div>
@@ -546,7 +582,7 @@
      data-click="mgmt.importBackdrop">
     <div class="modal-content modal-lg">
         <div class="modal-header">
-            <h3 class="modal-title">Import Connectors</h3>
+            <h3 class="modal-title">Import connectors</h3>
             {{ close_button('name="Close Modal"
                     data-click="mgmt.importClose"') }}
         </div>

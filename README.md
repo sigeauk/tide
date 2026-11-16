@@ -94,7 +94,7 @@ docker compose ps
 ### 6. First sign-in
 
 1. Sign in with the administrator from step 4, then change its password: your name at the bottom of the sidebar → **Settings → Profile & Preferences → Sign-in**.
-2. **Add a SIEM:** Settings → Management → Integrations → **Add integration** → **SIEM**. Use **Test Connection** before saving.
+2. **Add a SIEM:** Settings → Management → Integrations → **Add integration** → **SIEM**. Use **Test connection** before saving.
 3. **Set up a client:** a **Primary Client** already exists. Add more under Management → Tenants & Users → Clients for each team or customer whose data must stay separate.
 4. **Link destinations:** open the client → **Linked SIEMs → Edit → Add SIEM**. Pick the SIEM and one of its Kibana spaces and give it a name such as "Prod". Add one for each space whose rules the client should see.
 5. **Add people:** create users, or assign single sign-on users, with their roles, in Management → Tenants & Users → Users.

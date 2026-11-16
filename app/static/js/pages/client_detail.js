@@ -1,7 +1,7 @@
 /*
- * A client's page (pages/admin/client_detail.html) and its sections: Edit client, Move a system to
- * another client, Linked SIEMs (partials/client_siems.html: a destination's edit popover, colour
- * swatches, the Add SIEM form's spaces, validation mode), GitLab Projects (partials/client_gitlab.html:
+ * A client's page (pages/admin/client_detail.html) and its sections: its tabs, Edit client, Move a
+ * system to another client, Linked SIEMs (partials/client_siems.html: a destination's edit popover,
+ * colour swatches, the Add SIEM form's spaces), validation mode (partials/client_validation.html), GitLab Projects (partials/client_gitlab.html:
  * the edit popover is the destinations' one; Link a project's fields follow what it is for).
  */
 (function () {
@@ -32,6 +32,19 @@
         } catch (ex) {
             showToast(TIDE.UNREACHABLE, 'error');
         }
+    }
+
+    // ── Tabs (#108): show the chosen tab's panel, and put it in the address so a reload or a link keeps it ──
+    function showTab(e, btn) {
+        var key = btn.dataset.tab;
+        btn.parentElement.querySelectorAll('.settings-tab').forEach(function (t) {
+            t.classList.toggle('active', t === btn);
+            t.setAttribute('aria-selected', t === btn ? 'true' : 'false');
+        });
+        document.querySelectorAll('[data-client-tab]').forEach(function (p) { p.hidden = p.dataset.clientTab !== key; });
+        var url = new URL(window.location.href);
+        url.searchParams.set('tab', key);
+        history.replaceState(history.state, '', url);
     }
 
     // ── Move a system (from the Manage Systems dialog) ──
@@ -89,8 +102,18 @@
         var siemType = opt ? opt.getAttribute('data-siem-type') : '';
         var siemId = opt ? opt.value : '';
         var field = $('siem-space-field'), input = $('add-siem-space-input'), hint = $('add-siem-space-hint');
-        field.style.display = siemType === 'elastic' ? '' : 'none';
-        if (siemType !== 'elastic' || !siemId) {
+        // A Wazuh destination's space is one of the manager's agent groups, or * for every agent.
+        var wazuh = siemType === 'wazuh', picks = siemType === 'elastic' || wazuh;
+        var words = wazuh
+            ? { loading: 'Loading agent groups from the manager…', none: ' Type the agent group, or * for every agent.',
+                found: 'Agent groups on this manager — click to use: ', failed: 'Could not load agent groups: the server did not answer. Type the agent group.' }
+            : { loading: 'Loading spaces from the SIEM…', none: ' Type the Kibana space ID.',
+                found: 'Spaces on this SIEM — click to use: ', failed: 'Could not load spaces from the server. Type the Kibana space ID.' };
+        field.style.display = picks ? '' : 'none';
+        field.querySelectorAll('[data-space-label]').forEach(function (l) { l.hidden = l.dataset.spaceLabel !== (wazuh ? 'wazuh' : 'elastic'); });
+        if (input) input.placeholder = wazuh ? '*' : 'default';
+        if ($('add-siem-index-field')) $('add-siem-index-field').hidden = wazuh;
+        if (!picks || !siemId) {
             if (input) { input.setAttribute('list', ''); input.value = ''; }
             if (hint) hint.textContent = '';
             return;
@@ -101,7 +124,7 @@
         var counts = ((countsEl && JSON.parse(countsEl.textContent)) || {})[siemId] || {};
         // Spaces are fetched from the SIEM on demand so the list is always fresh, and present
         // even when this page was rendered before the SIEM existed.
-        if (hint) hint.textContent = 'Loading spaces from the SIEM…';
+        if (hint) hint.textContent = words.loading;
         var requested = siemId;
         fetch('/api/management/siems/' + encodeURIComponent(siemId) + '/spaces', { credentials: 'same-origin' })
             .then(function (r) { return r.json().catch(function () { return {}; }); })
@@ -124,10 +147,10 @@
                 input.setAttribute('list', listId);
                 hint.textContent = '';
                 if (!spaces.length) {
-                    hint.textContent = ((data && data.message) || 'No spaces found.') + ' Type the Kibana space ID.';
+                    hint.textContent = ((data && data.message) || 'No spaces found.') + words.none;
                     return;
                 }
-                hint.appendChild(document.createTextNode('Spaces on this SIEM — click to use: '));
+                hint.appendChild(document.createTextNode(words.found));
                 spaces.forEach(function (sp) {
                     var b = document.createElement('button');
                     b.type = 'button';
@@ -138,7 +161,7 @@
                 });
             })
             .catch(function () {
-                if (hint) hint.textContent = 'Could not load spaces from the server. Type the Kibana space ID.';
+                if (hint) hint.textContent = words.failed;
             });
     }
 
@@ -151,7 +174,7 @@
         if (fields && backup) fields.hidden = !backup.checked;
     }
 
-    TIDE.actions('clientDetail', { submitEdit: submitEdit, moveSystem: moveSystem });
+    TIDE.actions('clientDetail', { submitEdit: submitEdit, moveSystem: moveSystem, tab: showTab });
     TIDE.actions('clientSiems', { toggleEdit: toggleEdit, pickColor: pickColor, validationMode: validationMode, addSiem: addSiemChange });
     TIDE.actions('clientGitlab', { uses: gitlabUses });
 })();

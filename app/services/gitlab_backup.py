@@ -17,9 +17,14 @@ file changes only when the rule does. Files are named by rule id, so a renamed r
 a renamed destination moves its folder, and a rule given its own rule id (rule history
 ``new_rule_id``) moves its file, each keeping its history.
 
-What GitLab holds is read each time (``gitlab.tree``: each file's blob id, git's own fingerprint of
-its content, which ``blob_id`` works out the same way), and only the difference is committed, in
-parts of ``CHUNK_ACTIONS`` files, each commit marked ``[skip ci]``. TIDE manages its files only:
+The exception lists are those the sync read (``rule_exceptions.kept_lists``); one it didn't read in
+full is read from Kibana then. What GitLab holds is each file's blob id, git's own fingerprint of its
+content, which ``blob_id`` works out the same way. A backup first asks for the branch's head: a folder
+TIDE knew at that very commit (``gitlab_backup_heads``) holds exactly what TIDE recorded there
+(``gitlab_backup_files``), so it isn't listed; any other is listed (``gitlab.tree``). A folder is known
+at the head TIDE compared it against, or at TIDE's own last commit when its commits follow straight on
+from that head (nobody committed in between); a failed backup forgets them all. Only the difference is
+committed, in parts of ``CHUNK_ACTIONS`` files, each commit marked ``[skip ci]``. TIDE manages its files only:
 the rules and exceptions folders of the destinations backed up, and the README. A file there that
 changed since TIDE wrote it (``gitlab_backup_files``, in the client's database) is put back to
 Kibana's version, and the overwrite is kept (who changed it, in which commit) for Rule Monitoring's
@@ -35,10 +40,11 @@ import logging
 import posixpath
 import re
 import threading
+import time
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
-from app.services import gitlab
+from app.services import gitlab, rule_exceptions
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +87,15 @@ DDL = (
         changed     INTEGER DEFAULT 0,
         deleted     INTEGER DEFAULT 0,
         overwritten INTEGER DEFAULT 0
+    )""",
+    # The branch's commit at which each folder (a destination's, or the README's path) held exactly
+    # what gitlab_backup_files says, on the project and branch ``ref`` names.
+    """CREATE TABLE IF NOT EXISTS gitlab_backup_heads (
+        link_id VARCHAR NOT NULL,
+        folder  VARCHAR NOT NULL,
+        ref     VARCHAR NOT NULL,
+        head    VARCHAR NOT NULL,
+        PRIMARY KEY (link_id, folder)
     )""",
 )
 
@@ -187,9 +202,11 @@ def _rules(conn, siem_id: str, space: str) -> List[Dict[str, Any]]:
     return out
 
 
-def _exception_lists(dest: Dict[str, Any], rules: List[Dict[str, Any]]) -> Tuple[Dict[str, str], Dict[str, List[str]]]:
+def _exception_lists(dest: Dict[str, Any], rules: List[Dict[str, Any]], kept: Dict[str, Tuple[Dict[str, Any], list]],
+                     stats: Dict[str, int]) -> Tuple[Dict[str, str], Dict[str, List[str]]]:
     """``({list_id: file}, {list_id: names of the rules using it})`` for the lists the destination's
-    rules use: those Kibana gave, and those it didn't."""
+    rules use: those the sync read (``kept``, ``rule_exceptions.kept_lists``) or Kibana gives now, and
+    those neither did. ``stats`` counts the lists and those read from Kibana."""
     from app import elastic_helper
     wanted: Dict[str, str] = {}
     used_by: Dict[str, List[str]] = {}
@@ -198,12 +215,16 @@ def _exception_lists(dest: Dict[str, Any], rules: List[Dict[str, Any]]) -> Tuple
             if ref.get("list_id"):
                 wanted.setdefault(ref["list_id"], ref.get("namespace_type") or "single")
                 used_by.setdefault(ref["list_id"], []).append(r["name"] or r["rule_id"])
-    if not wanted:
-        return {}, {}
+    files = {list_id: exception_json(*kept[list_id]) for list_id in wanted if list_id in kept}
+    live = {list_id: namespace for list_id, namespace in wanted.items() if list_id not in kept}
+    stats["lists"] = stats.get("lists", 0) + len(wanted)
+    stats["kibana"] = stats.get("kibana", 0) + len(live)
+    if not live:
+        return files, {}
     session = elastic_helper._make_session(dest.get("api_token_enc") or "", dest.get("kibana_url") or "")
     base, space = (dest.get("kibana_url") or "").rstrip("/"), str(dest.get("space") or "default")
-    files, missing = {}, {}
-    for list_id, namespace in sorted(wanted.items()):
+    missing = {}
+    for list_id, namespace in sorted(live.items()):
         try:
             meta = elastic_helper.get_exception_list(list_id, space, session, base, namespace_type=namespace)
             items = elastic_helper.get_exception_list_entries(list_id, space, session, base, namespace_type=namespace) \
@@ -307,6 +328,9 @@ def _run_held(db, client_id: str, link: Dict[str, Any], destinations, trigger: s
         logger.exception("Backup to GitLab failed for client %s", client_id)
         result = {"status": "failed", "message": f"{type(exc).__name__}: {str(exc)[:200]}"}
     with db.get_connection() as conn:
+        if result["status"] == "failed":
+            # Part of it may have been committed: the next backup lists every folder again.
+            conn.execute("DELETE FROM gitlab_backup_heads WHERE link_id = ?", [link["id"]])
         _record_run(conn, run_id, finished_at=datetime.now(), status=result["status"],
                     message=result.get("message", "")[:2000], notes=result.get("notes") or None,
                     commit_url=result.get("commit_url"),
@@ -318,18 +342,25 @@ def _run_held(db, client_id: str, link: Dict[str, Any], destinations, trigger: s
 
 
 def _backup(db, client_id: str, link: Dict[str, Any], chosen: Optional[Set[Tuple[str, str]]]) -> Dict[str, Any]:
-    project = gitlab.project_info(link)
+    clock = {"start": time.perf_counter()}
     branch = link.get("branch") or gitlab.DEFAULT_BRANCH
     base = f"{link['folder'].strip('/')}/" if link.get("folder") else ""
     # In its own folder the index is the folder's README (GitLab shows it there); at the top of the
     # project it is RULES.md, never the project's own README.
     readme_path = f"{base}README.md" if base else "RULES.md"
-    # A branch not there yet is made from the default branch: what that holds is what it starts with.
-    start = None
-    if not project.get("empty_repo") and not gitlab.branch_exists(link, branch):
-        start = project.get("default_branch")
+    # The branch's head: when nothing changed, the only request to GitLab. A branch not there yet is
+    # made from the default branch: what that holds is what it starts with.
+    head = gitlab.branch_head(link, branch)
+    start, empty = None, False
+    if head is None:
+        project = gitlab.project_info(link)
+        empty = bool(project.get("empty_repo"))
+        start = None if empty else project.get("default_branch")
     ref = start or branch
-    all_dests = db.get_client_siems(client_id) or []
+    where = f"{link.get('project_id')}:{branch}"
+    clock["head"] = time.perf_counter()
+    from app.services.siem_kinds import elastic_only
+    all_dests = elastic_only(db.get_client_siems(client_id))
     dirs = destination_dirs(all_dests)
     keys = [(d["id"], str(d.get("space") or "default")) for d in all_dests]
     skip = set(link.get("skip") or ())
@@ -340,13 +371,18 @@ def _backup(db, client_id: str, link: Dict[str, Any], chosen: Optional[Set[Tuple
     with db.get_connection() as conn:
         rules_by_dest = {k: _rules(conn, *k) for k in keys}
         conn.execute("DELETE FROM gitlab_backup_files WHERE link_id IS DISTINCT FROM ?", [link["id"]])
+        conn.execute("DELETE FROM gitlab_backup_heads WHERE link_id IS DISTINCT FROM ?", [link["id"]])
         state = {r[0]: {"blob": r[1], "siem_id": r[2], "space": r[3]} for r in conn.execute(
             "SELECT path, blob, siem_id, space FROM gitlab_backup_files").fetchall()}
+        known = dict(conn.execute("SELECT folder, head FROM gitlab_backup_heads WHERE link_id = ? AND ref = ?",
+                                  [link["id"], where]).fetchall())
         renamed = _renamed(conn)
+        kept = {k: rule_exceptions.kept_lists(conn, *k) for k in backed}
     desired: Dict[str, Tuple[str, Dict[str, Any]]] = {}
     keep: Set[str] = set()
     notes: List[str] = []
     roots: Set[str] = set()
+    lists: Dict[str, int] = {}
     for d, key in zip(all_dests, keys):
         if key not in backed:
             continue
@@ -361,8 +397,8 @@ def _backup(db, client_id: str, link: Dict[str, Any], chosen: Optional[Set[Tuple
             desired[f"{folder}/rules/{_safe(r['rule_id'])}.json"] = (
                 rule_json(r["raw"]), {"kind": "rule", "rule_id": r["rule_id"], "siem_id": key[0], "space": key[1],
                                       "name": r["name"], "by": r["raw"].get("updated_by")})
-        lists, missing = _exception_lists(d, rules)
-        for list_id, text in lists.items():
+        written, missing = _exception_lists(d, rules, kept.get(key) or {}, lists)
+        for list_id, text in written.items():
             desired[f"{folder}/exceptions/{_safe(list_id)}.json"] = (
                 text, {"kind": "exception", "siem_id": key[0], "space": key[1], "name": list_id})
         for list_id, users in missing.items():
@@ -379,14 +415,27 @@ def _backup(db, client_id: str, link: Dict[str, Any], chosen: Optional[Set[Tuple
                                             rules_by_dest.get((row["siem_id"], row["space"]))):
             roots.add(f"{base}{top}")
 
-    # What GitLab holds now.
+    clock["files"] = time.perf_counter()
+
+    # What GitLab holds now: what TIDE recorded, in a folder it knew at this very commit; else listed.
     held: Dict[str, str] = {}
-    if not project.get("empty_repo"):
+    listed = 0
+    if not empty:
         for root in sorted(roots):
-            held.update(gitlab.tree(link, root, ref))
-        top_files = gitlab.tree(link, base.rstrip("/"), ref, recursive=False)
-        if readme_path in top_files:
-            held[readme_path] = top_files[readme_path]
+            if head and known.get(root) == head:
+                held.update({p: s["blob"] for p, s in state.items() if p.startswith(f"{root}/")})
+            else:
+                held.update(gitlab.tree(link, root, ref))
+                listed += 1
+        if head and known.get(readme_path) == head:
+            if readme_path in state:
+                held[readme_path] = state[readme_path]["blob"]
+        else:
+            top_files = gitlab.tree(link, base.rstrip("/"), ref, recursive=False)
+            listed += 1
+            if readme_path in top_files:
+                held[readme_path] = top_files[readme_path]
+    clock["listed"] = time.perf_counter()
 
     def managed(path: str) -> bool:
         if not any(path.startswith(f"{root}/") for root in roots):
@@ -431,9 +480,14 @@ def _backup(db, client_id: str, link: Dict[str, Any], chosen: Optional[Set[Tuple
             moves[path] = (old, *creates.pop(path))
             deletes.pop(old)
     gone_from_state = [p for p in state if p not in held and p not in desired and managed(p)]
+    # Folders that won't hold exactly what TIDE recorded: an exception list kept as it was that GitLab has changed.
+    folders = (roots | {readme_path}) - {root for root in roots for p in keep
+                                         if p.startswith(f"{root}/") and held.get(p) != (state.get(p) or {}).get("blob")}
     if not (creates or updates or deletes or moves):
         with db.get_connection() as conn:
             _remember(conn, link["id"], settled, {}, gone_from_state, None)
+            _remember_heads(conn, link["id"], where, head, head, folders, known)
+        _perf(clock, link, len(roots) + 1, listed, lists, 0)
         return {"status": "nothing", "message": "The backup already matches Kibana.", "notes": notes,
                 "added": 0, "changed": 0, "deleted": 0, "overwritten": 0}
 
@@ -449,10 +503,13 @@ def _backup(db, client_id: str, link: Dict[str, Any], chosen: Optional[Set[Tuple
                + [{"action": "delete", "file_path": p} for p in deletes])
     names = sorted({d.get("name") or k[1] for d, k in zip(all_dests, keys) if k in backed})
     chunks = [actions[i:i + CHUNK_ACTIONS] for i in range(0, len(actions), CHUNK_ACTIONS)]
-    last = None
+    last, parent, straight = None, head, bool(head)
     for n, chunk in enumerate(chunks, 1):
         message = _message(names, creates, updates, moves, deletes, outside, chunk, n, len(chunks))
         last = gitlab.commit(link, branch, message, chunk, start_branch=start if n == 1 else None)
+        # Straight on from the head TIDE compared against, or someone committed in between.
+        straight = straight and last.get("parent_ids", [])[:1] == [parent]
+        parent = last.get("id")
         done = {a["file_path"] for a in chunk}
         with db.get_connection() as conn:
             _remember(conn, link["id"], {p: desired[p] for p in done if p in desired},
@@ -461,6 +518,8 @@ def _backup(db, client_id: str, link: Dict[str, Any], chosen: Optional[Set[Tuple
                       + [a["previous_path"] for a in chunk if a["action"] == "move"], last)
     with db.get_connection() as conn:
         _remember(conn, link["id"], settled, {}, gone_from_state, None)
+        _remember_heads(conn, link["id"], where, head, parent if straight else None, folders, known)
+    _perf(clock, link, len(roots) + 1, listed, lists, len(chunks))
     added, changed, deleted = len(creates), len(updates) + len(moves), len(deletes)
     summary = (f"Backed up to {link['project']}: {added} added, {changed} changed, {deleted} removed"
                f"{f', {len(overwritten)} changed in GitLab put back to Kibana' if overwritten else ''}"
@@ -520,6 +579,30 @@ def _remember(conn, link_id: str, files: Dict[str, Tuple[str, Dict[str, Any]]],
                          [change.get("author"), change.get("short_id"), change.get("web_url"), path])
     for path in gone:
         conn.execute("DELETE FROM gitlab_backup_files WHERE path = ?", [path])
+
+
+def _remember_heads(conn, link_id: str, where: str, seen: Optional[str], now: Optional[str], folders: Set[str],
+                    known: Dict[str, str]) -> None:
+    """After a backup that compared against commit ``seen``: at commit ``now`` (None: not known)
+    GitLab holds exactly what TIDE recorded in each of ``folders``, and in each other folder TIDE knew
+    at ``seen``, which its commits didn't touch."""
+    conn.execute("DELETE FROM gitlab_backup_heads WHERE link_id = ?", [link_id])
+    if not now:
+        return
+    still = {folder for folder, head in known.items() if seen and head == seen}
+    conn.executemany("INSERT INTO gitlab_backup_heads (link_id, folder, ref, head) VALUES (?, ?, ?, ?)",
+                     [[link_id, folder, where, now] for folder in sorted(set(folders) | still)])
+
+
+def _perf(clock: Dict[str, float], link: Dict[str, Any], folders: int, listed: int, lists: Dict[str, int],
+          commits: int) -> None:
+    """How long each step of the backup took, as the sync's other ``[perf]`` lines say it."""
+    ms = lambda a, b: f"{(clock[b] - clock[a]) * 1000:.0f}ms"  # noqa: E731
+    clock["end"] = time.perf_counter()
+    logger.info(f"[perf] GitLab backup to {link.get('project')}: branch head {ms('start', 'head')}; rules and "
+                f"{lists.get('lists', 0)} exception lists ({lists.get('kibana', 0)} read from Kibana) {ms('head', 'files')}; "
+                f"{listed} of {folders} folders listed {ms('files', 'listed')}; {commits} commits {ms('listed', 'end')}; "
+                f"total {ms('start', 'end')}")
 
 
 # ── when it runs ─────────────────────────────────────────────────────────

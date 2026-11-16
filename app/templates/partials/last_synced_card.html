@@ -1,12 +1,12 @@
 {#
-  The Last Synced card, the same on Rule Health, Rule Monitoring and a Dashboard's Rule Health
+  The Last synced card, the same on Rule Health, Rule Monitoring and a Dashboard's Rule Health
   section. Context: last_sync (rule_issues.freshness: at, stale, days), keys, link.
 #}
 {% from "macros/metrics.html" import metric_card %}
 {% set ls = last_sync | default({}) %}
 {% call metric_card('last_synced', keys | default(none), link | default(none), 'metric-card--tip', tip=true) %}
     <p class="metric-value{{ ' danger' if ls.stale }}">{{ ls.at.strftime('%d %b') if ls.at else '—' }}</p>
-    <p class="metric-label">Last Synced</p>
+    <p class="metric-label">Last synced</p>
     <p class="metric-sub">{% if ls.stale %}<span class="text-danger">{{ ls.stale }} stale</span>{% elif ls.at %}{{ ls.at.strftime('%H:%M') }}{% else %}Never{% endif %}</p>
     <div class="metric-tip" role="tooltip">
         {% if ls.at %}The newest sync of this client's destinations: {{ ls.at.strftime('%Y-%m-%d %H:%M') }}.{% else %}This client's destinations have never been synced.{% endif %}

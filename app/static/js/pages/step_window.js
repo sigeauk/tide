@@ -1,8 +1,8 @@
 /*
  * The baseline technique windows (components/step_modal.html; template_step_modal.html shares
  * Risks): Risks view / form, Add coverage (a rule, a gap or N/A, a dashboard / report / log),
- * relinking a mapping to another rule, a watch item's or mark's Update, and the rule picker's results
- * (partials/siem_rule_options.html).
+ * relinking a mapping to another rule, a watch item's or mark's Update, the rule picker's results
+ * (partials/siem_rule_options.html), and Hardening checks' Add hardening check picker.
  */
 (function () {
     'use strict';
@@ -23,14 +23,18 @@
         $('sm-relink-note').hidden = !btn;
     }
 
+    // A picker (rules, hardening checks): its search box focused, its first results loaded once.
+    function openPicker(input, picker) {
+        input.focus();
+        if (!picker.dataset.loaded) { picker.dataset.loaded = '1'; htmx.trigger(input, 'tideOpenPicker'); }
+    }
+
     // Add coverage: the type picks the form under it.
     function coverageKind(kind) {
         var shown = { rule: 'sm-cov-rule', gap: 'sm-cov-mark', na: 'sm-cov-mark' }[kind] || 'sm-cov-watch';
         document.querySelectorAll('#sm-add-coverage [data-cov-form]').forEach(function (el) { el.hidden = el.id !== shown; });
         if (kind === 'rule') {
-            var input = $('sm-rule-search'), picker = $('sm-cov-rule');
-            input.focus();
-            if (!picker.dataset.loaded) { picker.dataset.loaded = '1'; htmx.trigger(input, 'tideOpenPicker'); }
+            openPicker($('sm-rule-search'), $(shown));
         } else if (kind === 'gap' || kind === 'na') {
             $('sm-gap-type').value = kind;
             $('sm-gap-reason').focus();
@@ -80,6 +84,15 @@
             coverageKind('rule');
             htmx.trigger(input, 'tideOpenPicker');
         },
+        // Hardening checks' Add hardening check: its picker, in the section (unfolded first if folded).
+        hardeningAdd: function () {
+            var picker = $('sm-hardening-picker'), panel = picker.closest('.rm-panel');
+            if (panel.classList.contains('is-collapsed')) panel.querySelector('[data-rm-collapse]').click();
+            picker.hidden = false;
+            picker.scrollIntoView({ block: 'nearest' });
+            openPicker($('sm-hardening-search'), picker);
+        },
+        hardeningCancel: function () { $('sm-hardening-picker').hidden = true; },
         watchEdit: function (e, el) { editWatch(el, true); },
         watchCancel: function (e, el) { editWatch(el, false); },
         // A rule picked in the picker: posted with its destination -- the same rule at two

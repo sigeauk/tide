@@ -13,7 +13,7 @@
 <div name="Open {{ spec.singular }}" class="step-card cat-card step-card--{{ tone }}" id="{{ it.dom_id }}"
      data-rule-open role="button" tabindex="0" aria-label="Open {{ spec.singular | lower }}: {{ it.name }}"
      hx-get="{{ it.window_url }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
-     hx-trigger="click, keyup[key=='Enter']">
+     hx-trigger="tide-open" data-opens>
     <div class="rc-head">
         {{ coverage_ring(it.coverage) }}
         <div class="rc-heading">

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
@@ -18,6 +18,10 @@ from app.services import gitlab_issues, rule_issues
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/rule-monitoring", tags=["rule-monitoring"])
+
+
+# The one-choice filters' defaults; the bar's Filters fold counts a choice only when it isn't its default.
+DEFAULTS = {"rules": "enabled", "show": "open", "group": "issue"}
 
 
 def filters_from(params) -> Dict[str, Any]:
@@ -35,9 +39,9 @@ def filters_from(params) -> Dict[str, Any]:
         "severity": many("severity", {s for s, _ in rule_issues.SEVERITIES}),
         "fixer": rule_issues.fixer_values(params.getlist("fixer")),
         "issue": many("issue", set(rule_issues.KNOWN)),
-        "rules": one("rules", rule_issues.RULES, "enabled"),
-        "show": one("show", rule_issues.SHOW, "open"),
-        "group": one("group", rule_issues.GROUPS, "issue"),
+        "rules": one("rules", rule_issues.RULES, DEFAULTS["rules"]),
+        "show": one("show", rule_issues.SHOW, DEFAULTS["show"]),
+        "group": one("group", rule_issues.GROUPS, DEFAULTS["group"]),
     }
 
 
@@ -69,9 +73,9 @@ def page_context(db, client_id: str, params, user=None) -> Dict[str, Any]:
         node["gitlab_issues"] = sorted(found.values(), key=lambda i: i["created_at"], reverse=True)
     issues = sorted(rule_issues.KNOWN.values(), key=lambda i: i.title)
     return {
-        "filters": filters, **data,
+        "filters": filters, "filter_defaults": DEFAULTS, **data,
         "client_siems": destinations,
-        "scope_options": [("", "All SIEMs")] + [(f"{d['id']}|{d.get('space') or 'default'}", d.get("name") or d.get("space"))
+        "scope_options": [("", "Any")] + [(f"{d['id']}|{d.get('space') or 'default'}", d.get("name") or d.get("space"))
                                                 for d in destinations],
         "severity_options": list(rule_issues.SEVERITIES),
         "fixer_options": list(rule_issues.FIXERS.items()),
@@ -125,8 +129,17 @@ def _keys(nodes: List[Dict[str, Any]]) -> List[tuple]:
     return [(n["issue"], n["cause"], s, n["space"]) for n in nodes for s in n["siem_ids"]]
 
 
-def _changed(message: str) -> HTMLResponse:
-    """Close the dialog, say what happened, and refresh the list."""
+def _changed(message: str, request: Optional[Request] = None, db=None, client_id: str = "",
+             form=None) -> HTMLResponse:
+    """Close the dialog, say what happened, and refresh the list. Muted or unmuted from a rule's window
+    (``X-Return-Modal: rule``, #106): the window again, saying so, with its card behind it."""
+    if request is not None and request.headers.get("X-Return-Modal") == "rule" and _rule_of(form or {}):
+        rule_id, siem_id, space = _rule_of(form)
+        rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
+        if rule is not None:
+            from app.api.rules import _modal_with_card_oob
+            from app.config import get_settings
+            return _modal_with_card_oob(request, db, client_id, rule, space, siem_id, get_settings(), flash=message)
     return HTMLResponse("", headers={"HX-Trigger": json.dumps(
         {"rmonChanged": None, "showToast": {"message": message, "type": "success"}})})
 
@@ -158,7 +171,9 @@ def mute_form(request: Request, db: DbDep, user: RequireUser, client_id: ActiveC
         "cause_siem_ids": ",".join(k[2] for k in scope["keys"]), "rules": scope["rules"], "cause_muted": scope["muted"],
         "title": rule_issues.KNOWN[issue].title, "label": p.get("label") or cause or p.get("where") or "",
         "rule_id": rule[0] if rule else "", "siem_id": rule[1] if rule else "",
-        "name": p.get("name") or (rule[0] if rule else ""), "where": p.get("where") or ""})
+        "name": p.get("name") or (rule[0] if rule else ""), "where": p.get("where") or "",
+        # From a rule's window (#106): it opens over the window, and muting brings the window back.
+        "from_window": p.get("from") == "window"})
 
 
 @router.post("/mute", response_class=HTMLResponse)
@@ -176,7 +191,7 @@ async def mute(request: Request, db: DbDep, user: RequireUser, client_id: Active
             for key in keys:
                 rule_issues.mute_cause(conn, key, note, actor)
         logger.info("Rule Monitoring: %s muted the cause %s", actor, keys)
-        return _changed("Cause muted. It comes back if it starts affecting more rules.")
+        return _changed("Cause muted. It comes back if it starts affecting more rules.", request, db, client_id, form)
     key = rule_issues.mute_from(form)
     if not key:
         return HTMLResponse('<p class="inline-error">Could not mute it: that rule or issue is not known.</p>', status_code=400)
@@ -184,7 +199,7 @@ async def mute(request: Request, db: DbDep, user: RequireUser, client_id: Active
         rule_issues.mute(conn, key, note, actor)
     logger.info("Rule Monitoring: %s muted the rule %s", actor, key)
     return _changed("Rule muted for this problem until you unmute it." if key[3]
-                    else "Rule muted for every problem, now and later, until you unmute it.")
+                    else "Rule muted for every problem, now and later, until you unmute it.", request, db, client_id, form)
 
 
 @router.post("/unmute-cause", response_class=HTMLResponse)
@@ -203,13 +218,14 @@ async def unmute_cause(request: Request, db: DbDep, user: RequireUser, client_id
 @router.post("/unmute", response_class=HTMLResponse)
 async def unmute_rule(request: Request, db: DbDep, user: RequireUser, client_id: ActiveClient):
     """Unmute a rule's problem (or every problem it has, as it was muted): listed with the rest again."""
-    key = rule_issues.mute_from(await request.form())
+    form = await request.form()
+    key = rule_issues.mute_from(form)
     if not key:
         return HTMLResponse("", status_code=400)
     with db.get_connection() as conn:
         rule_issues.unmute(conn, key)
     logger.info("Rule Monitoring: %s unmuted the rule %s", user.label if user else "Unknown", key)
-    return _changed("Rule unmuted.")
+    return _changed("Rule unmuted.", request, db, client_id, form)
 
 
 def _pattern_siems(db, client_id: str, params) -> List[str]:
@@ -271,17 +287,30 @@ async def set_window(request: Request, db: DbDep, user: RequireUser, client_id: 
         else f"new data is expected every {df.hours_text(hours)}."))
 
 
+def _rule_of(params) -> Optional[Tuple[str, str, str]]:
+    """The rule Raise issue is for (``rule_id``, ``siem_id``, ``space``: from Rule Health, #106), or None."""
+    key = tuple(str(params.get(k) or "").strip() for k in ("rule_id", "siem_id", "space"))
+    return key if all(key) else None
+
+
 def _selection(db, client_id: str, params, user) -> Dict[str, Any]:
     """What Raise issue (and Raise in GitLab) is for: one cause (issue, cause, siem_id, space);
-    one issue as it is listed (``node``: its path, as JSON), every cause of it; or with ``all`` every
-    issue the filter bar shows that isn't muted. ``for``: who it is for, where either role may
-    fix an issue in it (``rule_issues.audiences``; the first by default). ``params`` is the dialog's
-    query string, or the same fields posted back. Returns its cause nodes, their Markdown and the
-    page's context."""
-    ctx = page_context(db, client_id, params, user)
-    every = params.get("all") == "1"
-    issue = None
-    if every:
+    one issue as it is listed (``node``: its path, as JSON), every cause of it; with ``all`` every
+    issue the filter bar shows that isn't muted; or one rule (``rule_id``, ``siem_id``, ``space``, from
+    Rule Health): the rule, then each cause it has that isn't muted, with its own finding only.
+    ``for``: who it is for, where either role may fix an issue in it (``rule_issues.audiences``; the
+    first by default). ``params`` is the dialog's query string, or the same fields posted back. Returns
+    its cause nodes, their Markdown and the page's context, and ``rule`` (the rule, or None)."""
+    from starlette.datastructures import QueryParams
+    rule_key = _rule_of(params)
+    ctx = page_context(db, client_id, QueryParams({"rules": "all", "scope": f"{rule_key[1]}|{rule_key[2]}"})
+                       if rule_key else params, user)
+    every = not rule_key and params.get("all") == "1"
+    issue, rule = None, None
+    if rule_key:
+        rule = db.get_rule_by_id(rule_key[0], rule_key[2], siem_id=rule_key[1], client_id=client_id)
+        nodes = rule_issues.for_rule(_causes(ctx["groups"], with_muted=False), rule_key) if rule else []
+    elif every:
         nodes = _causes(ctx["groups"], with_muted=False)
     elif params.get("node"):
         try:
@@ -303,13 +332,29 @@ def _selection(db, client_id: str, params, user) -> Dict[str, Any]:
     audiences = rule_issues.audiences(nodes)
     audience = params.get("for") if params.get("for") in audiences else (audiences[0] if audiences else "")
     text = rule_issues.markdown(nodes, labels, ctx["now"], patterns, audience) if nodes else ""
+    if rule:
+        from app.api.rules import _kibana_rule_url
+        where = next((d.get("name") or d.get("space") for d in ctx["client_siems"]
+                      if d["id"] == rule_key[1] and str(d.get("space") or "default") == rule_key[2]), rule_key[2])
+        text = (rule_issues.rule_markdown(rule.name, rule.rule_id, where, _kibana_rule_url(db, rule, client_id),
+                                          bool(rule.enabled)) + ("\n" + text if text else ""))
     return {"ctx": ctx, "nodes": nodes, "text": text, "every": every, "issue": issue["label"] if issue else "",
             "causes": len(nodes), "issues": len({n["issue"] for n in nodes}),
-            "audiences": [(a, rule_issues.FIXERS[a]) for a in audiences], "audience": audience}
+            "audiences": [(a, rule_issues.FIXERS[a]) for a in audiences], "audience": audience,
+            "rule": rule, "rule_key": rule_key if rule else None}
+
+
+def _about_rule(db, client_id: str, key: Tuple[str, str, str]) -> List[Dict[str, Any]]:
+    """The GitLab issues about one rule that Rule Health shows: raised for it, or for a cause it has."""
+    with db.get_connection() as conn:
+        found = rule_issues.rule_findings(conn, [key])
+        return gitlab_issues.about_rules(conn, rule_issues.cause_keys(found, [key])).get(key, [])
 
 
 def _title(sel: Dict[str, Any]) -> str:
-    """A GitLab issue's title for a selection: the cause's own heading, or what it covers."""
+    """A GitLab issue's title for a selection: the rule's name, the cause's own heading, or what it covers."""
+    if sel["rule"]:
+        return sel["rule"].name
     if sel["every"]:
         return f"Rule Monitoring: {sel['issues']} issues, {sel['causes']} causes"
     if sel["issue"]:
@@ -318,22 +363,32 @@ def _title(sel: Dict[str, Any]) -> str:
     return first.lstrip("#").replace("`", "").strip()
 
 
-def _raised(db, client_id: str, keys: List[tuple]) -> List[Dict[str, Any]]:
-    """The issues raised for any of ``keys``, as GitLab has them now (as they were, when GitLab
-    doesn't answer); ``usable``: one TIDE can comment on."""
-    with db.get_connection() as conn:
-        found = gitlab_issues.for_causes(conn, keys)
+def _raised(db, client_id: str, sel: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The issues raised for the selection (for any of its causes, or about its rule), as GitLab has
+    them now (as they were, when GitLab doesn't answer); ``usable``: one TIDE can comment on."""
+    if sel["rule"]:
+        found = _about_rule(db, client_id, sel["rule_key"])
+    else:
+        with db.get_connection() as conn:
+            found = gitlab_issues.for_causes(conn, _keys(sel["nodes"]))
     reached = gitlab_issues.refresh(db, client_id, found)
     for i in found:
         i["usable"] = i["id"] in reached and i["state"] != "deleted"
     return found
 
 
-def _footer(user, now) -> str:
+def _footer(user, now, sel: Dict[str, Any]) -> str:
     from app.config import get_settings
     who = user.label if user else "TIDE"
-    return (f"\n\n---\nRaised from TIDE's Rule Monitoring by {who} on {now:%Y-%m-%d %H:%M}: "
-            f"{get_settings().app_url.rstrip('/')}/rule-monitoring")
+    page, path = ("Rule Health", "rules") if sel["rule"] else ("Rule Monitoring", "rule-monitoring")
+    return (f"\n\n---\nRaised from TIDE's {page} by {who} on {now:%Y-%m-%d %H:%M}: "
+            f"{get_settings().app_url.rstrip('/')}/{path}")
+
+
+def _note(form) -> str:
+    """What the person raising an issue for a rule wrote (#106), to go above what TIDE writes."""
+    note = str(form.get("note") or "").strip()
+    return f"{note}\n\n" if note else ""
 
 
 @router.get("/copy", response_class=HTMLResponse)
@@ -346,17 +401,34 @@ def copy_markdown(request: Request, db: DbDep, user: RequireUser, client_id: Act
     if sel["audience"]:
         selection.append(("for", sel["audience"]))
     gitlab = {}
-    if sel["ctx"]["can_fix"] and sel["nodes"]:
-        gitlab = {"projects": gitlab_issues.usable_projects(db, client_id), "raised": _raised(db, client_id, _keys(sel["nodes"])),
+    if sel["ctx"]["can_fix"] and (sel["nodes"] or sel["rule"]):
+        gitlab = {"projects": gitlab_issues.usable_projects(db, client_id), "raised": _raised(db, client_id, sel),
                   "title": _title(sel), "labels": "TIDE", "selection": selection}
+    rule = sel["rule"]
     return request.app.state.templates.TemplateResponse(request, "components/rule_monitoring_copy.html", {
         **{k: sel[k] for k in ("text", "every", "issue", "causes", "issues", "audiences", "audience")},
-        "selection": [(k, v) for k, v in selection if k != "for"], "gitlab": gitlab})
+        "selection": [(k, v) for k, v in selection if k != "for"], "gitlab": gitlab,
+        # Raise issue for a rule (#106): from its window (``from=window``) it opens over the window,
+        # and Back to rule opens the window again, with what changed.
+        "rule": rule, "rule_asked": bool(_rule_of(request.query_params)),
+        "from_window": request.query_params.get("from") == "window",
+        "back_url": (f"/api/rules/{rule.rule_id}/history-modal?space={sel['rule_key'][2]}&siem_id={sel['rule_key'][1]}"
+                     if rule else "")})
 
 
-def _gitlab_done(request: Request, html: str, kind: str = "success") -> HTMLResponse:
-    """The dialog's GitLab part after raising or commenting: what happened; the list redraws."""
-    response = HTMLResponse(f'<div class="rmon-gitlab__result alert alert-{kind}">{html}</div>')
+def _gitlab_done(request: Request, html: str, kind: str = "success", sel: Optional[Dict[str, Any]] = None,
+                 db=None, client_id: str = "") -> HTMLResponse:
+    """The dialog's GitLab part after raising or commenting: what happened; the list redraws. For a
+    rule (#106), its card or table row behind the dialog too, out of band: the issue pill."""
+    extra = ""
+    if kind == "success" and sel and sel["rule"]:
+        from app.api.rules import card_oob_html
+        from app.config import get_settings
+        try:
+            extra = card_oob_html(request, db, client_id, sel["rule"], get_settings())
+        except Exception:  # noqa: BLE001 - the issue is raised; the card catches up when the page reloads
+            logger.warning("Could not redraw the rule's card after raising its issue", exc_info=True)
+    response = HTMLResponse(f'<div class="rmon-gitlab__result alert alert-{kind}">{html}</div>{extra}')
     if kind == "success":
         response.headers["HX-Trigger"] = json.dumps({"rmonChanged": None})
     return response
@@ -374,26 +446,32 @@ async def raise_gitlab_issue(request: Request, db: DbDep, user: RequireUser, cli
     if not sel["ctx"]["can_fix"]:
         return _gitlab_done(request, "You can't raise issues: it needs the right to change Rule Health.", "danger")
     link = next((p for p in gitlab_issues.usable_projects(db, client_id) if p["id"] == form.get("link_id")), None)
-    if not link or not sel["nodes"]:
+    if not link or not (sel["nodes"] or sel["rule"]):
         return _gitlab_done(request, "Nothing raised: choose one of the client's GitLab issues projects, and "
-                                     "something Rule Monitoring still lists.", "danger")
+                                     + ("a rule TIDE still has." if _rule_of(form) else "something Rule Monitoring still lists."),
+                            "danger")
     title = str(form.get("title") or "").strip() or _title(sel)
     labels = [s.strip() for s in str(form.get("labels") or "").split(",") if s.strip()]
     assignee = str(form.get("assignee_id") or "").strip()
     assignee_id = int(assignee) if assignee.isdigit() else None
     try:
         issue = await run_in_threadpool(gitlab.create_issue, link, title,
-                                        sel["text"] + _footer(user, sel["ctx"]["now"]), labels, assignee_id)
+                                        (_note(form) if sel["rule"] else "") + sel["text"] + _footer(user, sel["ctx"]["now"], sel),
+                                        labels, assignee_id)
     except gitlab.GitLabError as exc:
         return _gitlab_done(request, f"Nothing raised. {escape(str(exc))}", "danger")
     with db.get_connection() as conn:
-        gitlab_issues.record(conn, link, issue, title, _keys(sel["nodes"]), user.label if user else "TIDE")
-    logger.info("Rule Monitoring: %s raised GitLab issue %s#%s for %d cause(s)", user.label if user else "TIDE",
-                link["project"], issue["iid"], sel["causes"])
+        if sel["rule"]:      # a rule's issue is the rule's: Rule Monitoring's causes keep their own (#106)
+            gitlab_issues.record(conn, link, issue, title, [], user.label if user else "TIDE", rules=[sel["rule_key"]])
+        else:
+            gitlab_issues.record(conn, link, issue, title, _keys(sel["nodes"]), user.label if user else "TIDE")
+    logger.info("Rule Monitoring: %s raised GitLab issue %s#%s for %s", user.label if user else "TIDE",
+                link["project"], issue["iid"], f"the rule {sel['rule_key']}" if sel["rule"] else f"{sel['causes']} cause(s)")
     to = (f", assigned to {escape(issue['assignee_name'] or issue['assignee'])}" if issue.get("assignee")
           else ". GitLab didn't assign it: that person may no longer be able to see the project" if assignee_id else "")
     return _gitlab_done(request, f'Raised <a href="{escape(issue["web_url"] or "")}" target="_blank" rel="noopener">'
-                                 f'{escape(link["project"])}#{issue["iid"]}</a>: {escape(title)}{to}.')
+                                 f'{escape(link["project"])}#{issue["iid"]}</a>: {escape(title)}{to}.', sel=sel, db=db,
+                        client_id=client_id)
 
 
 @router.get("/gitlab-members", response_class=HTMLResponse)
@@ -429,10 +507,13 @@ async def comment_gitlab_issue(request: Request, db: DbDep, user: RequireUser, c
     with db.get_connection() as conn:
         raised = gitlab_issues.get(conn, str(form.get("raised_id") or ""))
     link = gitlab_issues.project_for(gitlab_issues.usable_projects(db, client_id), raised) if raised else None
-    if not raised or not link or not sel["nodes"] or not set(raised["causes"]) & set(_keys(sel["nodes"])):
+    about = {i["id"] for i in _about_rule(db, client_id, sel["rule_key"])} if sel["rule"] else set()
+    if not raised or not link or not (raised["id"] in about if sel["rule"] else
+                                      sel["nodes"] and set(raised["causes"]) & set(_keys(sel["nodes"]))):
         return _gitlab_done(request, "No comment added: that issue isn't one raised for this.", "danger")
-    text = (f"Still found by TIDE on {sel['ctx']['now']:%Y-%m-%d %H:%M}:\n\n{sel['text']}"
-            + _footer(user, sel["ctx"]["now"]))
+    found = "As TIDE finds the rule" if sel["rule"] else "Still found by TIDE"
+    text = ((_note(form) if sel["rule"] else "") + f"{found} on {sel['ctx']['now']:%Y-%m-%d %H:%M}:\n\n{sel['text']}"
+            + _footer(user, sel["ctx"]["now"], sel))
     try:
         await run_in_threadpool(gitlab.add_comment, link, raised["iid"], text)
     except gitlab.GitLabError as exc:

@@ -204,24 +204,40 @@ def _check_db() -> dict:
             tls_col = "tls_verify" if "tls_verify" in {
                 r[1] for r in c.execute("PRAGMA table_info('siem_inventory')").fetchall()
             } else "false"
+            siem_cols = {r[1] for r in c.execute("PRAGMA table_info('siem_inventory')").fetchall()}
+            type_col = "siem_type" if "siem_type" in siem_cols else "'elastic'"
+            extra_col = "extra_config" if "extra_config" in siem_cols else "NULL"
             rows = c.execute(
                 "SELECT id, label, kibana_url, elasticsearch_url, "
-                f"api_token_enc, is_active, coalesce({tls_col}, false) FROM siem_inventory"
+                f"api_token_enc, is_active, coalesce({tls_col}, false), {type_col}, {extra_col} FROM siem_inventory"
             ).fetchall()
             info["siems"] = []
             if not rows:
                 print("  siem_inventory: <EMPTY> -- no SIEMs configured")
             from app.services.credentials import reveal_or_none
-            for sid, label, kurl, eurl, tok, active, tls_verify in rows:
+            for sid, label, kurl, eurl, tok, active, tls_verify, siem_type, extra in rows:
                 tok = reveal_or_none(tok)
-                print(f"  SIEM {sid[:8]} '{label}' active={active} verify_tls={tls_verify}")
-                print(f"     kibana_url        = {kurl!r}")
-                print(f"     elasticsearch_url = {eurl!r}")
-                print(f"     api_token         = {_redact(tok)}")
+                siem_type = (siem_type or "elastic").lower()
+                print(f"  SIEM {sid[:8]} '{label}' type={siem_type} active={active} verify_tls={tls_verify}")
+                if siem_type == "wazuh":
+                    # A Wazuh SIEM keeps its Kibana columns empty; its addresses are in extra_config
+                    # (app.services.wazuh.addresses), its two passwords sealed there and in api_token_enc.
+                    try:
+                        from app.services import wazuh as _wazuh
+                        addresses = _wazuh.addresses({"extra_config": extra})
+                    except Exception as exc:  # noqa: BLE001 - a diagnostic never stops here
+                        addresses = {"error": str(exc)[:120]}
+                    for key, value in addresses.items():
+                        print(f"     {key:<17} = {value!r}")
+                    print(f"     api_password      = {_redact(tok)}")
+                else:
+                    print(f"     kibana_url        = {kurl!r}")
+                    print(f"     elasticsearch_url = {eurl!r}")
+                    print(f"     api_token         = {_redact(tok)}")
                 info["siems"].append(
                     {"id": sid, "label": label, "kibana_url": kurl,
                      "elasticsearch_url": eurl, "api_token": tok,
-                     "is_active": active, "tls_verify": bool(tls_verify)}
+                     "is_active": active, "tls_verify": bool(tls_verify), "siem_type": siem_type}
                 )
 
         if "clients" in tables:
@@ -286,6 +302,10 @@ def _check_kibana(siems: list, env: dict, mappings: list = None) -> None:
     targets = []
     # DB-driven SIEMs (4.0.13+ / 4.1.x)
     for s in siems:
+        if s.get("siem_type") == "wazuh":
+            print(f"  SIEM '{s['label']}' is Wazuh: read through its manager and indexer (app.services.wazuh), "
+                  "not Kibana. Test connection in Integrations checks it.")
+            continue
         if not s.get("kibana_url") or not s.get("api_token"):
             continue
         targets.append((
@@ -598,7 +618,7 @@ def _check_tenant_dbs(info: dict) -> None:
 def _verdict(env: dict, info: dict) -> None:
     _line("8. Verdict")
     siems = info.get("siems") or []
-    has_db_creds = any(s.get("kibana_url") and s.get("api_token") for s in siems)
+    has_db_creds = any((s.get("kibana_url") or s.get("siem_type") == "wazuh") and s.get("api_token") for s in siems)
     has_env_creds = bool(env.get("ELASTIC_URL")) and bool(env.get("ELASTIC_API_KEY"))
     rules = info.get("detection_rules_count", 0)
 
@@ -1022,6 +1042,11 @@ def _check_live_sync_trace(info: dict) -> None:
                 print("      [STOP] SIEM is inactive — sync skips inactive SIEMs.")
                 print("             Fix: enable SIEM in Management → SIEMs.")
                 any_fail = True
+                continue
+            if siem.get("siem_type") == "wazuh":
+                print("      [SKIP] Wazuh SIEM: the sync reads it through app.services.wazuh_sync (rules, alerts) and "
+                      "app.services.wazuh_assets (agents, vulnerabilities, SCA), not Kibana.")
+                print("             Test connection in Integrations checks its manager, indexer and permissions.")
                 continue
             if not kurl:
                 print("      [STOP] kibana_url is empty.")
@@ -1688,6 +1713,19 @@ def _check_rules_state() -> None:
             print(f"      {siem_labels.get(siem_id, siem_id[:8])} / {space}: {n:,} rules ({en or 0:,} enabled)")
         langs = _rows(conn, "SELECT coalesce(json_extract_string(raw_data, '$.language'), '?'), count(*) FROM detection_rules GROUP BY 1 ORDER BY 2 DESC") or []
         print("    languages: " + ", ".join(f"{l}={n:,}" for l, n in langs))
+        # Wazuh (7.0.0): the destinations' agents and reads, the devices made from them, their findings and SCA.
+        wazuh_tables = [t for t in ("wazuh_agents", "wazuh_destination_reads", "host_agents", "host_vulnerabilities",
+                                    "host_alert_counts", "host_sca_policies", "host_sca_checks", "host_sca_history")
+                        if t in _tables(conn)]
+        if wazuh_tables:
+            counts = ", ".join(f"{t}={_one(conn, f'SELECT count(*) FROM {t}') or 0:,}" for t in wazuh_tables)
+            print(f"    wazuh: {counts}")
+            for siem_id, space, read_at, agents, error in _rows(
+                    conn, "SELECT siem_id, space, read_at, agents, error FROM wazuh_destination_reads ORDER BY 1, 2") or []:
+                state = f"ERROR {error}" if error else f"{agents or 0} agent(s)"
+                print(f"      {siem_labels.get(siem_id, siem_id[:8])} / {space}: last read {_age(read_at)}, {state}")
+                if error:
+                    _warn(f"tenant '{name}': Wazuh destination {space} read incomplete: {error}")
 
         newest, oldest = _one(conn, "SELECT max(last_updated) FROM detection_rules"), _one(conn, "SELECT min(last_updated) FROM detection_rules")
         print(f"    last synced: {newest} ({_age(newest)}); oldest rule row {_age(oldest)}")

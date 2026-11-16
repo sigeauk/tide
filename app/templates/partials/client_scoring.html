@@ -1,15 +1,15 @@
-{# Partial: client_scoring.html — per-client rule scoring weights (Linked SIEMs section).
+{# Partial: client_scoring.html — a client's Rule scoring section (its Rule settings tab): the
+   per-client weights, a column per group of checks. It is the section's whole content, replaced by
+   its own forms (outerHTML of #client-scoring).
    Context: client, groups [{title, items:[{key,label,how,default,weight}]}], total, custom,
             updated_at, updated_by, message, error #}
 {% from "macros/icons.html" import icon %}
-{# Collapsed by default, open after a save / reset / error, and remembered per browser (app.js, data-remember). #}
-<details id="client-scoring" class="scoring-editor" data-remember="client-scoring"{% if message or error %} open data-keep-open{% endif %}>
-    <summary class="scoring-editor__head">
-        <h3 class="scoring-editor__title">{{ icon('bar-chart-2', '14') }} Rule scoring</h3>
-        {% if custom %}<span class="badge badge-info">Custom weights</span>{% else %}<span class="badge badge-muted">Default weights</span>{% endif %}
-        <span class="scoring-editor__chev">{{ icon('chevron-right', '16') }}</span>
-    </summary>
+{% from "components/window_ui.html" import section_head %}
+<div id="client-scoring">
+{{ section_head('Rule scoring', 'bar-chart-2') }}
+<div class="sys-section__body scoring-editor">
     <p class="scoring-editor__intro">
+        {% if custom %}<span class="badge badge-info">Custom weights</span>{% else %}<span class="badge badge-muted">Default weights</span>{% endif %}
         Choose how many points each check is worth for {{ client.name }}. A rule's score is the percentage of the
         points that apply which it earns, so the points don't have to add up to 100. Set a check to 0 to switch it off.
         Saving re-scores this client's rules straight away.
@@ -51,4 +51,5 @@
         <p class="scoring-editor__meta">Last changed {{ updated_at.strftime('%Y-%m-%d %H:%M') }}{% if updated_by %} by {{ updated_by }}{% endif %}.</p>
         {% endif %}
     </form>
-</details>
+</div>
+</div>

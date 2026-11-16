@@ -337,7 +337,7 @@ class AuthService:
 
                     response = client.post(kc.token_url, data=data)
                     if response.status_code == 200:
-                        logger.info(
+                        logger.info(  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure # the username and the client id, no password
                             "Keycloak password grant auth succeeded for '%s' via client '%s'",
                             username,
                             client_cfg["client_id"],
@@ -353,7 +353,7 @@ class AuthService:
                     except ValueError:
                         body = {}
 
-                    logger.warning(
+                    logger.warning(  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure # the username, the client id and Keycloak's error, no password
                         "Keycloak password grant auth failed for '%s' via client '%s': %s %s",
                         username,
                         client_cfg["client_id"],

@@ -7,6 +7,9 @@
   GET/POST /api/diagnostics/fix/... preview, apply and undo a fix (app.services.diagnostic_fixes)
   POST /api/diagnostics/clients/{id}/fixes   a client's Allow diagnostic fixes switch (super admins)
   POST /api/diagnostics/access      grant or revoke Platform Admin or Support (super admins)
+  GET/POST /api/diagnostics/orphans/... and /csp/...   an install check's own remedy (super admins):
+                                    Delete these files, and Clear this list (what browsers reported the
+                                    security policy blocked)
 
 Who sees what (``_scope``):
   - a super admin: every client, the TIDE setup checks, user look-ups and Access;
@@ -89,7 +92,7 @@ def page_diagnostics(request: Request, db: DbDep, user: CurrentUser, client_id: 
         "snap": diagnostics.snapshot(db, scope.clients, full=scope.full),
         "checks": scope.checks, "clients": scope.clients, "lookup_kinds": scope.lookup_kinds,
         **_fix_context(db, scope), **(_access_context(db, user, scope) if scope.full else {}),
-        "sync_runs": _sync_activity(scope), "active_client": client_id,
+        "sync_runs": _sync_activity(scope), "active_client_id": client_id,   # active_client is the switcher's client (base context)
     })
 
 
@@ -216,10 +219,10 @@ def _orphans_panel(request: Request, db, **ctx):
         "confirm_word": client_deletion.CONFIRM_ORPHANS, **ctx})
 
 
-def _super_admin_scope(db, user, client_id) -> Scope:
+def _super_admin_scope(db, user, client_id, does: str = "delete TIDE's database files") -> Scope:
     scope = _required(db, user, client_id)
     if not scope.full:
-        raise HTTPException(status_code=403, detail="Only a super admin can delete TIDE's database files.")
+        raise HTTPException(status_code=403, detail=f"Only a super admin can {does}.")
     return scope
 
 
@@ -241,6 +244,33 @@ def delete_orphans(request: Request, db: DbDep, user: RequireUser, client_id: Ac
     except client_deletion.DeleteRefused as exc:
         return _orphans_panel(request, db, mode="refused", message=str(exc))
     return _orphans_panel(request, db, mode="done", done=done)
+
+
+def _csp_panel(request: Request, **ctx):
+    """What the browser security policy blocked's Clear this list (app.services.csp): what it clears and
+    the button, or what was cleared."""
+    return request.app.state.templates.TemplateResponse(request, "partials/diagnostics_csp_clear.html", ctx)
+
+
+@router.get("/api/diagnostics/csp/preview", response_class=HTMLResponse)
+def preview_csp_clear(request: Request, db: DbDep, user: RequireUser, client_id: ActiveClient):
+    """How much Clear this list clears, and the button to clear it. Changes nothing."""
+    from app.services import csp
+    _super_admin_scope(db, user, client_id, "clear what browsers reported")
+    with db.get_shared_connection() as conn:
+        return _csp_panel(request, mode="preview", kept=csp.kept(conn))
+
+
+@router.post("/api/diagnostics/csp/clear", response_class=HTMLResponse)
+def clear_csp(request: Request, db: DbDep, user: RequireUser, client_id: ActiveClient):
+    """Clear what browsers reported the security policy blocked (super admins). Audit-logged."""
+    from app.services import csp
+    from app.services.log_context import audit_log
+    _super_admin_scope(db, user, client_id, "clear what browsers reported")
+    with db.get_shared_connection() as conn:
+        cleared = csp.forget(conn)
+    audit_log("csp_reports_cleared", actor_id=user.id, actor_username=user.username, **cleared)
+    return _csp_panel(request, mode="done", cleared=cleared)
 
 
 @router.post("/api/diagnostics/clients/{target_id}/fixes", response_class=HTMLResponse)

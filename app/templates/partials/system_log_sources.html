@@ -1,0 +1,40 @@
+{# Partial: system_log_sources.html -- a system's Log sources section (attack_detection.system_log_sources):
+   its platforms (from its devices' operating systems, or added in Edit system), then each log source
+   MITRE ATT&CK's analytics read for its baseline techniques on those platforms, most techniques first,
+   with the events to collect. Nothing here says whether the logs are collected.
+   Context: system_id, has_steps, platforms, unplaced, sources, considered, with_analytics, without_analytics, no_ids. #}
+{% if not has_steps %}
+<p class="rm-empty">Apply a baseline to see the log sources its techniques need.</p>
+{% else %}
+{% if platforms %}
+<div class="rm-chips ad-platforms"><span class="rm-chips__label">Platforms</span>
+    {% for p in platforms %}
+    {% set from_devices = ('From ' ~ p.devices ~ ' device' ~ ('s' if p.devices != 1 else '') ~ ': ' ~ p.device_names | join(', ')) if p.devices else '' %}
+    <span class="rm-chip" title="{{ from_devices }}{{ '. ' if from_devices and p.added }}{{ 'Added in Edit system' if p.added }}">{{ p.name }}</span>
+    {% endfor %}
+</div>
+{% endif %}
+{% if unplaced %}
+<p class="rm-empty ad-platforms" title="{{ unplaced | join(', ') }}">{{ unplaced | length }} device{{ 's have' if unplaced | length != 1 else ' has' }} no operating system TIDE recognises.</p>
+{% endif %}
+{% if not platforms %}
+<p class="rm-empty">TIDE doesn't know this system's platforms yet. Give its devices an operating system, or add platforms in Edit system.</p>
+{% elif sources %}
+<table class="rules-table host-vuln-table ad-table">
+    <thead><tr><th data-col="source">Log source</th><th data-col="platform">Platform</th><th>Events</th><th data-col="steps">Techniques</th></tr></thead>
+    <tbody>
+    {% for s in sources %}
+    <tr>
+        <td class="mono">{{ s.name }}</td>
+        <td>{{ s.platforms | join(', ') }}</td>
+        <td title="{{ s.channels | join('; ') }}">{% for c in s.channels[:3] %}{{ c | truncate(120, true, '…') }}{{ '; ' if not loop.last }}{% endfor %}{% if s.channels | length > 3 %} <span class="text-muted">+{{ s.channels | length - 3 }} more</span>{% endif %}</td>
+        <td title="{{ s.steps | map(attribute='title') | join(', ') }}">{{ s.steps | length }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+<p class="rm-empty mw-note">From MITRE ATT&amp;CK's detection strategies for {{ with_analytics }} of this system's {{ considered }} baseline techniques, those marked N/A left out.{% if without_analytics %} {{ without_analytics }} {{ 'have' if without_analytics != 1 else 'has' }} no MITRE analytic for its platforms.{% endif %}{% if no_ids %} {{ no_ids }} {{ 'have' if no_ids != 1 else 'has' }} no ATT&amp;CK technique.{% endif %} Whether these logs are collected isn't checked.</p>
+{% else %}
+<p class="rm-empty">MITRE ATT&amp;CK has no analytic for this system's baseline techniques on its platforms.</p>
+{% endif %}
+{% endif %}

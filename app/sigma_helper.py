@@ -1242,7 +1242,7 @@ def build_detection_rule_dict(
         "threat": [],
     }
 
-    from app.attack_tactics import ID_BY_NAME
+    from app.attack_tactics import ID_BY_NAME, tactic_entry, technique_entries
 
     tactics_found: list = []
     techniques_found: list = []
@@ -1262,39 +1262,15 @@ def build_detection_rule_dict(
             if entry and entry not in tactics_found:
                 tactics_found.append(entry)
 
-    for tactic in tactics_found:
-        threat_entry: Dict = {
-            "framework": "MITRE ATT&CK",
-            "tactic": {
-                "id": tactic['id'],
-                "name": tactic['name'],
-                "reference": f"/mitre/tactic?id={tactic['id']}",
-            },
-            "technique": [
-                {
-                    "id": tid,
-                    "name": tid,
-                    "reference": f"/mitre/technique/{tid}",
-                }
-                for tid in techniques_found
-            ],
-        }
-        if threat_entry["technique"]:
-            payload["threat"].append(threat_entry)
-
-    if techniques_found and not tactics_found:
-        for tid in techniques_found:
-            payload["threat"].append({
-                "framework": "MITRE ATT&CK",
-                "tactic": {
-                    "id": "TA0002", "name": "Execution",
-                    "reference": "/mitre/tactic?id=TA0002",
-                },
-                "technique": [{
-                    "id": tid, "name": tid,
-                    "reference": f"/mitre/technique/{tid}",
-                }],
-            })
+    # ATT&CK's own links, a sub-technique under its technique, as Kibana and Elastic write them.
+    if techniques_found:
+        for tactic in tactics_found:
+            payload["threat"].append({"framework": "MITRE ATT&CK", "tactic": tactic_entry(tactic['id'], tactic['name']),
+                                      "technique": technique_entries(techniques_found)})
+        if not tactics_found:
+            for technique in technique_entries(techniques_found):
+                payload["threat"].append({"framework": "MITRE ATT&CK", "tactic": tactic_entry("TA0002", "Execution"),
+                                          "technique": [technique]})
 
     return payload
 

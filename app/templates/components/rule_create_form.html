@@ -16,7 +16,8 @@
         {% if mode == 'edit' and rule %}<div class="rm-header__badges"><span class="rm-header__meta">{{ rule.name }}</span></div>{% endif %}
       </div>
       <div class="rm-header__tools">
-        {{ close_button(('data-click="modal.load" data-url="' ~ (back_url | e) ~ '"') if back_url else 'data-click="modal.remove"',
+        {# The literal parts are marked safe: joined with the escaped URL, they would be escaped too. #}
+        {{ close_button((('data-click="modal.load" data-url="' | safe) ~ (back_url | e) ~ ('"' | safe)) if back_url else 'data-click="modal.remove"',
                         'Back to rule' if back_url else 'Close') }}
       </div>
     </header>
@@ -27,7 +28,7 @@
       {% if sigma_id %}<input type="hidden" name="sigma_id" value="{{ sigma_id }}">{% endif %}
       <div class="rule-accordion-stack flex flex-col gap-ms">
         <details class="rule-accordion" open>
-          <summary>Create Rule</summary>
+          <summary>Create rule</summary>
           <div class="rule-accordion-panel">
             <div class="form-section">
               <label class="form-label" for="rule-name">Rule name *</label>
@@ -55,7 +56,7 @@
         </details>
 
         <details class="rule-accordion">
-          <summary>Define Rule</summary>
+          <summary>Define rule</summary>
           <div class="rule-accordion-panel">
             {# Rule type, as Kibana's Define step starts. It narrows Query language to what the type takes
                (data-languages) and shows its own settings (data-rule-types); rule_form.js keeps them in step.
@@ -190,7 +191,7 @@
         </details>
 
         <details class="rule-accordion">
-          <summary>About Rule</summary>
+          <summary>About rule</summary>
           <div class="rule-accordion-panel">
             <div class="rule-grid-2">
               <div class="form-section">

@@ -25,7 +25,7 @@
 <div class="page-header sys-header">
     <div class="sys-header__main">
         <h1 class="page-title-hero">Baselines {{ help_button('baselines') }}</h1>
-        <p class="page-subtitle">Baseline templates: the techniques to watch for. Applying one to a system gives it its own copy, where coverage is tracked.</p>
+        <p class="page-subtitle">Templates of the techniques to watch for, to apply to your systems.</p>
     </div>
     <div class="rh-more" data-more>
         {{ more_button('More actions', title='New baseline, import, add a technique', attrs='name="Baselines Actions"') }}
@@ -63,7 +63,7 @@
     <div class="sys-section__body">
     {% if baselines %}
         {% with template=true %}{% include "partials/system_steps_filters.html" %}{% endwith %}
-        <div id="system-steps-grid" class="sys-steps" data-rule-list
+        <div id="system-steps-grid" class="sys-steps" data-fold-store="tide.baselineGroupFolds" data-rule-list
              hx-get="/api/baselines/steps"
              hx-trigger="load, stepsChanged from:body, sysFilter from:body"
              hx-include="#sys-filters input, #sys-filters select"
@@ -90,7 +90,7 @@
      data-click="backdrop.hide">
     <div class="modal-content modal-md">
         <div class="modal-header">
-            <h3 class="modal-title">New Baseline</h3>
+            <h3 class="modal-title">New baseline</h3>
             {{ close_button('name="Close Modal"
                     data-click="el.hide" data-target="add-baseline-modal"') }}
         </div>
@@ -113,7 +113,7 @@
      data-click="backdrop.hide">
     <div class="modal-content modal-md">
         <div class="modal-header">
-            <h3 class="modal-title">{{ icon('upload','16') }} Import Baseline</h3>
+            <h3 class="modal-title">{{ icon('upload','16') }} Import baseline</h3>
             {{ close_button('name="Close Modal"
                     data-click="el.hide" data-target="import-baseline-modal"') }}
         </div>

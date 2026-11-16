@@ -12,7 +12,7 @@
 
 {% if grouped_systems %}
 <div class="card card-padded card-mb">
-    <h2 class="section-title">{{ icon('server','16') }} Affected Devices</h2>
+    <h2 class="section-title">{{ icon('server','16') }} Affected devices</h2>
 
     <!-- Traffic Light Legend -->
     <div class="det-color-key mb-md">
@@ -211,12 +211,12 @@
                 </div>
                 {% endif %}
 
-                {# Log Blind Spot button — only for red (at-risk) hosts without existing blind spot #}
+                {# Log blind spot button — only for red (at-risk) hosts without existing blind spot #}
                 {% if h.coverage_status == 'red' %}
                 <div class="aff-host-section--dashed">
                     <button name="Log Blind Spot" class="btn btn-sm aff-blindspot-btn"
                             data-click="affected.blindSpot" data-entity-type="cve" data-entity-id="{{ cve_id }}" data-system-id="{{ h.system_id }}" data-host-id="{{ h.host_id }}" data-host-name="{{ h.name }}">
-                        {{ icon('eye-off','10') }} Log Blind Spot
+                        {{ icon('eye-off','10') }} Log blind spot
                     </button>
                 </div>
                 {% endif %}
@@ -229,7 +229,7 @@
 {% elif cve.affected_hosts %}
 {# Fallback: ungrouped hosts #}
 <div class="card card-padded card-mb">
-    <h2 class="section-title">Affected Devices</h2>
+    <h2 class="section-title">Affected devices</h2>
     <div class="aff-host-grid">
         {% for h in cve.affected_hosts %}
         <a  name="Hosts" href="/hosts/{{ h.host_id }}" class="aff-host-card aff-host-card--{{ h.coverage_status }}">
@@ -247,7 +247,7 @@
      data-click="backdrop.hide">
     <div class="modal-content modal-md">
         <div class="modal-header">
-            <h3 class="modal-title">{{ icon('eye-off','16') }} Log Blind Spot</h3>
+            <h3 class="modal-title">{{ icon('eye-off','16') }} Log blind spot</h3>
             {{ close_button('name="Close Modal"
                     data-click="el.hide" data-target="blind-spot-modal"') }}
         </div>
@@ -258,7 +258,7 @@
         <form name="Submit Blind Spots" hx-post="/api/blind-spots"
               hx-target="#cve-affected-section"
               hx-swap="innerHTML"
-              hx-on::after-request="document.getElementById('blind-spot-modal').style.display='none'"
+              data-done-hides="blind-spot-modal"
               class="stack gap-ms">
             <input type="hidden" name="entity_type" value="">
             <input type="hidden" name="entity_id" value="">
@@ -272,7 +272,7 @@
             <div class="modal-actions">
                 <button name="Cancel" type="button" class="btn btn-secondary"
                         data-click="el.hide" data-target="blind-spot-modal">Cancel</button>
-                <button name="Log Blind Spot" type="submit" class="btn btn-primary">Log Blind Spot</button>
+                <button name="Log Blind Spot" type="submit" class="btn btn-primary">Log blind spot</button>
             </div>
         </form>
     </div>

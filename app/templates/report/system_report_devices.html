@@ -1,5 +1,6 @@
 {# System report: device exposure (KEV CVEs matched to this system's hosts). Included by
-   report/system_report.html when the report includes devices. #}
+   report/system_report.html when the report includes devices. With no known exploited CVE on any
+   device, one line says so in place of the narrative, the coverage ratio and the top CVEs. #}
 <div class="section-banner avoid-break" id="sec-devices">
     <div class="section-banner-title">Device Exposure</div>
     <div class="section-banner-sub">Known exploited vulnerabilities on {{ report.system.name }}'s devices, and whether they are detected</div>
@@ -40,6 +41,9 @@
     </div>
 </div>
 
+{% if not report.total_cves %}
+<div class="status-line">{% if report.total_hosts %}No known exploited vulnerability matched on {{ report.system.name }}'s {{ report.total_hosts }} device{{ 's' if report.total_hosts != 1 }}: {{ 'all are' if report.total_hosts != 1 else 'it is' }} clean.{% else %}No devices are recorded on {{ report.system.name }}.{% endif %}</div>
+{% else %}
 <div class="exec-narrative avoid-break">
     <strong>{{ report.system.name }}</strong> comprises {{ report.total_hosts }} device{{ 's' if report.total_hosts != 1 else '' }}
     with {{ report.total_cves }} unique CVE{{ 's' if report.total_cves != 1 else '' }} identified across the estate.
@@ -60,18 +64,20 @@
     {% endif %}
 </div>
 {% endif %}
+{% endif %}
 
 
 <!-- ══════════════════════════════════════════════════════
      SECTION 2 — VULNERABILITY COVERAGE RATIO  (device data)
      ══════════════════════════════════════════════════════ -->
-{% if report.include_devices is not defined or report.include_devices %}
+{% if (report.include_devices is not defined or report.include_devices) and report.total_cves %}
 <div class="section-banner avoid-break">
     <div class="section-banner-title">Vulnerability Coverage Ratio</div>
     <div class="section-banner-sub">Detection coverage across all CVE-host pairings</div>
 </div>
 
-<table>
+<table class="cols">
+    <colgroup><col/><col class="w-18"/><col class="w-18"/></colgroup>
     <thead>
         <tr><th>Metric</th><th>Count</th><th>Percentage</th></tr>
     </thead>
@@ -127,13 +133,14 @@
 <!-- ══════════════════════════════════════════════════════
      SECTION 4 — DEVICE STATUS SUMMARY
      ══════════════════════════════════════════════════════ -->
-{% if report.include_devices is not defined or report.include_devices %}
+{% if (report.include_devices is not defined or report.include_devices) and report.host_rows %}
 <div class="section-banner avoid-break">
     <div class="section-banner-title">Device Status Summary</div>
     <div class="section-banner-sub">Per-device vulnerability and detection overview</div>
 </div>
 
-<table>
+<table class="cols">
+    <colgroup><col class="w-18"/><col class="w-15"/><col/><col class="w-13"/><col class="w-9"/><col class="w-11"/><col class="w-15"/></colgroup>
     <thead>
         <tr><th>Device</th><th>IP Address</th><th>OS</th><th>Status</th><th>CVEs</th><th>At Risk</th><th>Monitored</th></tr>
     </thead>

@@ -1,26 +1,28 @@
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon, icon_text %}
 {% from "components/ui/breadcrumb.html" import breadcrumb %}
-{% from "components/window_ui.html" import drag_ctl, sections_item, sections_panel %}
+{% from "components/window_ui.html" import section_title, drag_ctl, sections_item, sections_panel %}
 {% from "macros/modal.html" import close_button, empty_state %}
 {% from "macros/menu.html" import more_button %}
 {% from "macros/help.html" import help_button with context %}
+{% from "components/ui/loading_state.html" import loading_state %}
 
 {#
   A system, in Rule Health's shape: header with a "…" menu, a whole-system metric strip, then
-  sections (Techniques, Devices, Heatmap) that collapse, hide and move as a window's do ("…" ›
+  sections (Techniques, Devices, Log sources, Hardening, Heatmap) that collapse, hide and move as a window's do ("…" ›
   Sections, components/window_ui.html) -- all remembered per browser (data-fold / data-section,
   app.js). The technique grid inside Baselines is filtered, sorted and
   grouped from the bar above it; those choices ride in the URL, and the presentation ones (sort,
   group, view) are also remembered per browser.
 
   Every baseline is managed here: the Baselines ⋮ has Add baseline (apply a template, or start an
-  empty one), Add technique and SIEM coverage; each baseline's own ⋮, in the
+  empty one), Add technique, Map rules by ATT&CK id… (Wazuh and Elastic rules, tick to map) and SIEM coverage; each baseline's own ⋮, in the
   grid grouped by baseline (the default here), has Edit baseline, Add technique and Remove baseline.
-  The Baseline filter narrows the grid to one baseline. As Rule Health (rule-browser-page), the page
-  fills the window: the header and metric strip stay put, every section's heading is always in view,
-  and each open section scrolls inside itself under its filter bar, a baseline's heading held at the
-  top of the technique grid (style.css, .sys-fill).
+  The Baseline filter narrows the grid to one baseline. As on the Baselines page, an open section
+  scrolls inside itself under its filter bar, a baseline's heading held at the top of the grid; here
+  each is at most the window's height and the page scrolls between them, so the section you're on
+  fills the window and scrolling past its end moves on to the next (style.css, .sys-fill--paged; it
+  keeps rule-browser-page for Rule Health's filter-bar scripts).
 #}
 
 {% block title %}{{ system.name }} | Systems | TIDE{% endblock %}
@@ -31,9 +33,6 @@
 {% set host_count = host_summaries | length %}
 {% set bl_count = baselines | length if baselines else 0 %}
 {% set clf_color = clf_colors.get(system.classification, '') if clf_colors and system.classification else '' %}
-{% macro collapse_ctl(label) -%}
-<button type="button" class="rm-collapse" data-rm-collapse aria-expanded="true" title="Collapse or expand {{ label }}" aria-label="Collapse or expand {{ label }}">{{ icon('chevron-down', '16') }}</button>
-{%- endmacro %}
 
 {# The arrangement's root: the header's "…" › Sections arranges the sections below it. #}
 <div class="sys-layout rule-browser-page" data-layout-key="tide.systemPageLayout" data-layout-legacy="tide.systemPageOrder">
@@ -62,6 +61,13 @@
                     data-click="systemPage.exportOpen">
                 {{ icon('download', '15') }}<span>Export report</span>
             </button>
+            {% if wazuh_destinations %}
+            <button name="Wazuh Agents" type="button" role="menuitem" class="rh-more__item"
+                    title="Which Wazuh agents are this system's devices"
+                    hx-get="/api/systems/{{ system.id }}/wazuh-agents" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
+                {{ icon('server', '15') }}<span>Wazuh agents…</span>
+            </button>
+            {% endif %}
             <div class="rh-more__sep" role="separator"></div>
             {{ sections_item() }}
             </div>
@@ -71,7 +77,7 @@
 </div>
 
 {% if baselines %}
-<div class="metrics-grid metrics-grid--7" id="system-steps-metrics"
+<div class="metrics-grid{{ ' metrics-grid--6' if wazuh }}" id="system-steps-metrics"
      hx-get="/api/systems/{{ system.id }}/steps-metrics"
      hx-trigger="stepsChanged from:body"
      hx-swap="innerHTML">
@@ -79,13 +85,12 @@
 </div>
 {% endif %}
 
-<div class="sys-sections sys-fill rm-col" data-col="main" data-fold-store="tide.systemPageFolds">
+<div class="sys-sections sys-fill sys-fill--paged rm-col" data-col="main" data-fold-store="tide.systemPageFolds">
 
 {# ── Baselines ──────────────────────────────────────────────────────────────────────────── #}
 <section class="card card-padded sys-section" data-section="baselines" data-section-label="Baselines" data-fold="baselines" aria-label="Baselines">
     <div class="sys-section__head">
-        {{ collapse_ctl('baselines') }}
-        <h2 class="section-title sys-section__title">{{ icon('check-square', '18') }} Baselines <span class="rm-fold__count">{{ bl_count }}</span></h2>
+        {{ section_title('Baselines', 'check-square', bl_count) }}
         <div class="rh-more" data-more>
             {{ more_button('Baseline actions', title='Add a baseline or a technique, choose SIEM coverage', attrs='name="Baseline Actions"') }}
             <div class="rh-more__menu" role="menu" hidden>
@@ -99,6 +104,11 @@
                         title="Add a technique to one of this system's baselines"
                         hx-get="/api/systems/{{ system.id }}/steps-new" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
                     {{ icon('plus', '15') }}<span>Add technique</span>
+                </button>
+                <button name="Map Rules By ATT&CK Id" type="button" role="menuitem" class="rh-more__item"
+                        title="Map Wazuh and Elastic rules to the techniques with no rule, by the ATT&CK ids they carry: you pick which"
+                        hx-get="/api/systems/{{ system.id }}/map-by-attack" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
+                    {{ icon('link', '15') }}<span>Map rules by ATT&amp;CK id…</span>
                 </button>
                 {% endif %}
                 <div class="rh-more__sep" role="separator"></div>
@@ -114,12 +124,11 @@
     <div class="sys-section__body">
     {% if baselines %}
         {% include "partials/system_steps_filters.html" %}
-        <div id="system-steps-grid" class="sys-steps" data-rule-list
+        <div id="system-steps-grid" class="sys-steps" data-fold-store="tide.baselineGroupFolds" data-rule-list
              hx-get="/api/systems/{{ system.id }}/steps"
              hx-trigger="load, stepsChanged from:body, sysFilter from:body"
              hx-include="#sys-filters input, #sys-filters select"
              hx-swap="innerHTML">
-            {% from "components/ui/loading_state.html" import loading_state %}
             {{ loading_state("Loading techniques…") }}
         </div>
     {% else %}
@@ -137,8 +146,7 @@
 {# ── Devices ────────────────────────────────────────────────────────────────────────────── #}
 <section class="card card-padded sys-section" data-section="devices" data-section-label="Devices" data-fold="devices" aria-label="Devices">
     <div class="sys-section__head">
-        {{ collapse_ctl('devices') }}
-        <h2 class="section-title sys-section__title">{{ icon('server', '18') }} Devices <span class="rm-fold__count">{{ host_count }}</span></h2>
+        {{ section_title('Devices', 'server', host_count) }}
         <div class="sys-section__tools">
             <label name="Nessus Upload Hint" class="btn btn-secondary btn-sm" for="nessus-upload"
                    title="Upload a .nessus or .xml scan file to auto-populate devices and packages">
@@ -150,7 +158,7 @@
                    hx-target="#hosts-section" hx-swap="innerHTML" name="file">
             <button name="Add Device" type="button" class="btn btn-primary btn-sm"
                     data-click="el.show" data-target="add-host-modal">
-                {{ icon('plus', '14') }} Add Device
+                {{ icon('plus', '14') }} Add device
             </button>
         </div>
         {{ drag_ctl('Devices') }}
@@ -164,11 +172,37 @@
     </div>
 </section>
 
+{# ── Log sources: what MITRE ATT&CK's analytics for its baseline techniques read, on its platforms
+   (attack_detection.system_log_sources); loads the first time it scrolls into view open ── #}
+<section class="card card-padded sys-section" data-section="logsources" data-section-label="Log sources" data-fold="logsources" aria-label="Log sources">
+    <div class="sys-section__head">
+        {{ section_title('Log sources', 'file-text') }}
+        {{ drag_ctl('Log sources') }}
+    </div>
+    <div class="sys-section__body">
+        <div id="system-log-sources" hx-get="/api/systems/{{ system.id }}/log-sources" hx-trigger="intersect once, stepsChanged from:body" hx-swap="innerHTML">
+            {{ loading_state("Reading MITRE ATT&CK's detection strategies…", inline=true) }}
+        </div>
+    </div>
+</section>
+
+{# ── Hardening: the Wazuh devices' CIS benchmark results, by policy (wazuh_assets.system_hardening) ── #}
+{% if hardening %}
+<section class="card card-padded sys-section" data-section="hardening" data-section-label="Hardening" data-fold="hardening" aria-label="Hardening">
+    <div class="sys-section__head">
+        {{ section_title('Hardening', 'shield-check', hardening | length) }}
+        {{ drag_ctl('Hardening') }}
+    </div>
+    <div class="sys-section__body">
+        {% include "partials/system_hardening.html" %}
+    </div>
+</section>
+{% endif %}
+
 {# ── Heatmap ────────────────────────────────────────────────────────────────────────────── #}
 <section class="card card-padded sys-section" data-section="heatmap" data-section-label="Heatmap" data-fold="heatmap" aria-label="Heatmap">
     <div class="sys-section__head">
-        {{ collapse_ctl('heatmap') }}
-        <h2 class="section-title sys-section__title">{{ icon('target', '18') }} Heatmap</h2>
+        {{ section_title('Heatmap', 'target') }}
         {{ drag_ctl('Heatmap') }}
     </div>
     <div class="sys-section__body">
@@ -203,14 +237,14 @@
      data-click="backdrop.hide">
     <div class="modal-content modal-md">
         <div class="modal-header">
-            <h3 class="modal-title">Add Device</h3>
+            <h3 class="modal-title">Add device</h3>
             {{ close_button('name="Close Modal"
                     data-click="el.hide" data-target="add-host-modal"') }}
         </div>
         <form name="Submit Hosts" hx-post="/api/inventory/systems/{{ system.id }}/hosts"
               hx-target="#hosts-section"
               hx-swap="innerHTML"
-              hx-on::after-request="document.getElementById('add-host-modal').style.display='none';this.reset()"
+              data-done-hides="add-host-modal" data-done-reset
               class="stack gap-md">
             <div>
                 <label class="form-label">Device name <span class="req">*</span></label>
@@ -229,7 +263,7 @@
             <div class="modal-actions">
                 <button name="Cancel" type="button" class="btn btn-secondary"
                         data-click="el.hide" data-target="add-host-modal">Cancel</button>
-                <button name="Add Device" type="submit" class="btn btn-primary">Add Device</button>
+                <button name="Add Device" type="submit" class="btn btn-primary">Add device</button>
             </div>
         </form>
     </div>
@@ -240,13 +274,13 @@
      data-click="backdrop.hide">
     <div class="modal-content modal-md">
         <div class="modal-header">
-            <h3 class="modal-title">Edit System</h3>
+            <h3 class="modal-title">Edit system</h3>
             {{ close_button('name="Close Modal"
                     data-click="el.hide" data-target="edit-env-modal"') }}
         </div>
         <form name="Update Systems" hx-put="/api/inventory/systems/{{ system.id }}"
               hx-swap="none"
-              hx-on::after-request="document.getElementById('edit-env-modal').style.display='none';window.location.reload();"
+              data-done-hides="edit-env-modal" data-done-reload
               class="stack gap-md">
             <div>
                 <label class="form-label">Name <span class="req">*</span></label>
@@ -264,6 +298,16 @@
                     <option value="{{ clf.name }}"{% if system.classification == clf.name %} selected{% endif %}>{{ clf.name }}</option>
                     {% endfor %}
                 </select>
+            </div>
+            <div>
+                <label class="form-label" for="edit-system-platforms">Platforms</label>
+                <input type="hidden" name="platforms_shown" value="1">
+                <select id="edit-system-platforms" name="platforms" class="form-input" multiple data-placeholder="None added">
+                    {% for p in platform_options %}
+                    <option value="{{ p }}"{% if p in system.platforms %} selected{% endif %}>{{ p }}</option>
+                    {% endfor %}
+                </select>
+                <p class="fs-sm text-secondary mt-xs mx-0 mb-0">{% if device_platforms %}From its devices: {{ device_platforms | join(', ') }}. {% endif %}Add what no device shows, such as SaaS, IaaS or an identity provider. How to detect and Log sources use them.</p>
             </div>
             <div class="form-footer">
                 <button name="Delete" type="button" class="btn btn-danger"
@@ -288,7 +332,7 @@
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">
-                Export System Report
+                Export system report
             </h3>
             {{ close_button('name="Close Export Modal" data-click="systemPage.exportClose"') }}
         </div>
@@ -322,6 +366,11 @@
             <label class="flex items-center gap-sm fs-base text-body mb-sm cursor-pointer">
                 <input name="Modal Include Devices" type="checkbox" id="modal-include-devices" class="accent-primary"> Include devices
             </label>
+            {% if host_summaries | selectattr('wazuh') | list %}
+            <label class="flex items-center gap-sm fs-base text-body mb-sm cursor-pointer">
+                <input name="Modal Include Wazuh" type="checkbox" id="modal-include-wazuh" class="accent-primary" checked> Include vulnerabilities and hardening
+            </label>
+            {% endif %}
         </div>
         <div class="mb-md">
             <label class="form-label">Baselines</label>

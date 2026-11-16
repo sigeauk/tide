@@ -41,14 +41,14 @@ The page's **⋮** menu has **Export report**, a threat report for the chosen ac
 **Tactics**, **Techniques**, **Groups**, **Software**, **Campaigns** and **Mitigations** (under **MITRE** in the sidebar) each list one kind of ATT&CK object, with how much of it your enabled rules cover. They work alike:
 
 - Filter by **Source** (Enterprise, ICS or Mobile) and the page's own filters: for example tactic, type and coverage for techniques, or platform for software.
-- **Sort** them, **Group by** a field such as tactic or coverage, and switch between cards and a table.
+- Order them with **Sort by**, **Group by** a field such as tactic or coverage, and switch between cards and a table.
 - Each card shows its coverage in a ring, with its left edge coloured to match, and the figures across the top total it, for example *Gaps groups use*: techniques a known group uses that no enabled rule of yours carries. A group, software, campaign, mitigation or tactic's ring is the share of its techniques your enabled rules carry. A technique's is 100 when a rule carries it, the share of its sub-techniques covered when only they are, else 0.
 
 Wherever a tactic appears, it shows with its own icon.
 
 ### Open an ATT&CK object
 
-Click one to open its window. A **technique** shows your rules for it, its sub-techniques, the groups that use it and how, software, campaigns, mitigations, Sigma rules and NIST 800-53 capabilities. A **group**, **software** or **campaign** shows the techniques it uses and how much you cover them, and links to the others. A **mitigation** breaks its coverage down by tactic. Names inside a window open their own windows; technique pills open the side panel.
+Click one to open its window. A **technique** shows your rules for it, **How to detect** it (MITRE's detection strategy: for each platform, what to look for, the log sources to read and what to tune), its sub-techniques, the groups that use it and how, software, campaigns, mitigations, Sigma rules and NIST 800-53 capabilities. A **group**, **software** or **campaign** shows the techniques it uses and how much you cover them, and links to the others. A **mitigation** breaks its coverage down by tactic. Names inside a window open their own windows; technique pills open the side panel.
 
 ### Create a baseline from a group, software or campaign
 
@@ -62,4 +62,4 @@ The baseline has one technique for each ATT&CK technique it uses, each described
 
 ### NIST 800-53
 
-**NIST** lists NIST 800-53 control families. Open a family to see its capabilities, and a capability to see the ATT&CK techniques it mitigates and whether your rules cover them.
+**NIST 800-53** lists its control families. Open a family to see its capabilities, and a capability to see the ATT&CK techniques it mitigates and whether your rules cover them.

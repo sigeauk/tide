@@ -221,6 +221,30 @@ def save_threat_data(df):
         conn.close()
 
 
+# ATT&CK's detection data (cti_helper.DETECTION_KEYS): table -> columns. A strategy detects techniques;
+# its analytics keep their order in it (position), each for its platforms, with the log sources it reads
+# and what to tune, in ATT&CK's order.
+MITRE_DETECTION_COLUMNS = {
+    "mitre_detection_strategies": ("stix_id VARCHAR", "strategy_id VARCHAR", "name VARCHAR", "domain VARCHAR"),
+    "mitre_strategy_techniques": ("strategy_id VARCHAR", "technique_id VARCHAR", "domain VARCHAR"),
+    "mitre_analytics": ("strategy_id VARCHAR", "analytic_id VARCHAR", "position INTEGER", "platforms VARCHAR",
+                        "description VARCHAR", "domain VARCHAR"),
+    "mitre_analytic_log_sources": ("analytic_id VARCHAR", "position INTEGER", "log_source VARCHAR",
+                                   "channel VARCHAR", "component_id VARCHAR", "domain VARCHAR"),
+    "mitre_analytic_tuning": ("analytic_id VARCHAR", "position INTEGER", "field VARCHAR", "description VARCHAR",
+                              "domain VARCHAR"),
+    "mitre_data_components": ("stix_id VARCHAR", "component_id VARCHAR", "name VARCHAR", "description VARCHAR",
+                              "domain VARCHAR"),
+}
+_MITRE_DETECTION_KEYS = {f"mitre_{key}": key for key in (
+    "detection_strategies", "strategy_techniques", "analytics", "analytic_log_sources", "analytic_tuning",
+    "data_components")}
+MITRE_DETECTION_DDL = {
+    table: f"CREATE TABLE IF NOT EXISTS {table} ({', '.join(cols)})"
+    for table, cols in MITRE_DETECTION_COLUMNS.items()
+}
+
+
 def _ensure_mitre_kb_schema(conn):
     """Create offline MITRE KB tables used by /mitre pages."""
     def _migrate_stix_domain_pk(
@@ -494,6 +518,14 @@ def _ensure_mitre_kb_schema(conn):
         )
     """)
     conn.execute("""
+        CREATE TABLE IF NOT EXISTS mitre_technique_revisions (
+            old_id VARCHAR,
+            new_id VARCHAR,
+            domain VARCHAR,
+            PRIMARY KEY (old_id, domain)
+        )
+    """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS mitre_technique_mitigations (
             technique_stix_id VARCHAR,
             mitigation_stix_id VARCHAR,
@@ -569,6 +601,8 @@ def _ensure_mitre_kb_schema(conn):
             PRIMARY KEY (campaign_stix_id, group_stix_id, domain)
         )
     """)
+    for ddl in MITRE_DETECTION_DDL.values():
+        conn.execute(ddl)
 
     cols = {c[0] for c in conn.execute("DESCRIBE mitre_techniques").fetchall()}
     if "stix_id" not in cols:
@@ -608,6 +642,11 @@ def _save_table_from_df(conn, table_name, df, columns):
         "mitre_campaign_techniques": ["campaign_stix_id", "technique_stix_id", "domain"],
         "mitre_campaign_software": ["campaign_stix_id", "software_stix_id", "domain"],
         "mitre_campaign_groups": ["campaign_stix_id", "group_stix_id", "domain"],
+        "mitre_technique_revisions": ["old_id", "domain"],
+        "mitre_detection_strategies": ["stix_id", "domain"],
+        "mitre_strategy_techniques": ["strategy_id", "technique_id", "domain"],
+        "mitre_analytics": ["strategy_id", "analytic_id", "domain"],
+        "mitre_data_components": ["stix_id", "domain"],
         "nist_capability_groups": ["group_code", "domain"],
         "nist_capabilities": ["capability_group", "capability_slug", "attack_object_id", "domain"],
     }
@@ -644,6 +683,9 @@ def save_mitre_knowledge(knowledge, domain):
         conn.execute("DELETE FROM mitre_groups WHERE LOWER(domain) = ?", [domain_value])
         conn.execute("DELETE FROM mitre_tactics WHERE LOWER(domain) = ?", [domain_value])
         conn.execute("DELETE FROM mitre_techniques WHERE LOWER(domain) = ?", [domain_value])
+        conn.execute("DELETE FROM mitre_technique_revisions WHERE LOWER(domain) = ?", [domain_value])
+        for table in MITRE_DETECTION_DDL:
+            conn.execute(f"DELETE FROM {table} WHERE LOWER(domain) = ?", [domain_value])
 
         techniques_df = knowledge.get("techniques")
         if techniques_df is not None and not techniques_df.empty:
@@ -667,6 +709,12 @@ def save_mitre_knowledge(knowledge, domain):
                 ["id", "name", "tactic", "url", "stix_id", "description", "is_subtechnique", "domain"],
             )
 
+        _save_table_from_df(
+            conn,
+            "mitre_technique_revisions",
+            knowledge.get("technique_revisions"),
+            ["old_id", "new_id", "domain"],
+        )
         _save_table_from_df(
             conn,
             "mitre_tactics",
@@ -751,6 +799,9 @@ def save_mitre_knowledge(knowledge, domain):
             knowledge.get("campaign_groups"),
             ["campaign_stix_id", "group_stix_id", "campaign_id", "group_id", "domain", "description"],
         )
+        for table, key in _MITRE_DETECTION_KEYS.items():
+            columns = [c.split()[0] for c in MITRE_DETECTION_COLUMNS[table]]
+            _save_table_from_df(conn, table, knowledge.get(key), columns)
     except Exception as e:
         log_error(f"Save MITRE knowledge failed: {e}")
         raise

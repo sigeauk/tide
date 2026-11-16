@@ -16,8 +16,9 @@ console.debug('TIDE app.js loading...');
     'use strict';
 
     const NAV_GROUP_IDS = [
-        'nav-group-risk',
+        'nav-group-systems',
         'nav-group-rules',
+        'nav-group-libraries',
         'nav-group-threats',
         'nav-group-mitre',
         'nav-group-account'
@@ -42,7 +43,7 @@ console.debug('TIDE app.js loading...');
     function updateThemeUI(isLight) {
         const label = document.getElementById('theme-label');
         if (label) {
-            label.textContent = isLight ? 'Dark Mode' : 'Light Mode';
+            label.textContent = isLight ? 'Dark mode' : 'Light mode';
         }
         // Profile & Preferences' Dark / Light buttons, when that page is open.
         const dark = document.getElementById('theme-dark');
@@ -88,71 +89,22 @@ console.debug('TIDE app.js loading...');
     };
 
     /**
-     * Toggle a sidebar nav group and persist its collapsed state.
+     * Toggle a sidebar nav group, remembered as every fold is (data-fold in the sidebar's
+     * data-fold-store). Opening one closes the rest.
      */
     window.toggleNavGroup = function(id) {
         const el = document.getElementById(id);
         if (!el) return;
 
-        const willOpen = el.classList.contains('collapsed');
-
-        // Accordion behavior: opening one section collapses the rest.
-        if (willOpen) {
+        if (el.classList.contains('collapsed')) {
             NAV_GROUP_IDS.forEach(function(groupId) {
                 const groupEl = document.getElementById(groupId);
                 if (!groupEl || groupId === id) return;
                 groupEl.classList.add('collapsed');
-                try {
-                    localStorage.setItem('nav_' + groupId, '1');
-                } catch (e) {
-                    console.warn('Unable to persist nav group state for', groupId, e);
-                }
+                saveFold(groupEl, false);
             });
         }
-
-        const isNowCollapsed = el.classList.toggle('collapsed');
-        try {
-            localStorage.setItem('nav_' + id, isNowCollapsed ? '1' : '0');
-        } catch (e) {
-            console.warn('Unable to persist nav group state for', id, e);
-        }
-    };
-
-    /**
-     * Expand/collapse all remembered collapsible sections.
-     * If scopeSelector is provided, only sections inside that container are updated.
-     */
-    window.setAllRememberedCollapsibles = function(scopeSelector, expand) {
-        const root = scopeSelector ? document.querySelector(scopeSelector) : document;
-        if (!root) return;
-
-        const scopeToken = scopeSelector
-            ? scopeSelector.replace(/^[#\.]/, '')
-            : (root.getAttribute('data-collapse-scope') || 'global');
-
-        const blocks = root.querySelectorAll('details[data-collapse-key]');
-        blocks.forEach(function(block) {
-            const key = block.getAttribute('data-collapse-key');
-            if (!key) return;
-
-            if (expand) {
-                block.setAttribute('open', '');
-            } else {
-                block.removeAttribute('open');
-            }
-
-            try {
-                localStorage.setItem('collapse_' + key, expand ? '1' : '0');
-            } catch (e) {
-                console.warn('Unable to persist collapsible state for', key, e);
-            }
-        });
-
-        try {
-            localStorage.setItem('collapse_scope_' + scopeToken, expand ? '1' : '0');
-        } catch (e) {
-            console.warn('Unable to persist collapsible scope state for', scopeToken, e);
-        }
+        saveFold(el, !el.classList.toggle('collapsed'));
     };
 
     /**
@@ -571,6 +523,22 @@ console.debug('TIDE app.js loading...');
     }, true);
     document.addEventListener('htmx:beforeRequest', function () { window.tideFilterSync(); });
     document.addEventListener('reset', function (e) { setTimeout(function () { window.tideFilterSync(e.target); }, 0); }, true);
+    // A Filters fold (macros/filters.html more_filters) says how many of its filters are set: a box
+    // ticked, a range filled, or a choice other than its default (data-filter-default, else none).
+    // A choice that only orders or groups the list (data-filter-order) doesn't count.
+    document.addEventListener('change', function (e) {
+        var more = e.target.closest && e.target.closest('.filters-more');
+        if (!more) return;
+        var n = 0;
+        more.querySelectorAll('[data-filter]').forEach(function (f) {
+            var fields = f.querySelectorAll('select[data-filter-choice]:not([data-filter-order]), input[type=number], input[type=date]');
+            if (f.querySelector('input[type=checkbox]:checked') || Array.prototype.some.call(fields, function (el) {
+                return el.value !== (el.getAttribute('data-filter-default') || '');
+            })) n++;
+        });
+        var count = more.querySelector('[data-filters-count]');
+        if (count) { count.textContent = n; count.hidden = !n; }
+    });
 
     // A filter bar's counts once its filters change: the server's "filterCounts" event (HX-Trigger),
     // {field name: {choice: n}}, puts each number beside its choice. The bar itself isn't redrawn.
@@ -795,82 +763,14 @@ console.debug('TIDE app.js loading...');
     }
 
     /**
-     * Restore each nav group's collapse state.
-     * Default behavior is collapsed when no preference exists.
+     * Restore each nav group's open state (collapsed when none is saved).
      */
     function restoreNavGroupStates() {
         NAV_GROUP_IDS.forEach(function(id) {
             const el = document.getElementById(id);
-            if (!el) return;
-
-            let shouldCollapse = true;
-            try {
-                const saved = localStorage.getItem('nav_' + id);
-                if (saved === '0') shouldCollapse = false;
-                if (saved === '1') shouldCollapse = true;
-            } catch (e) {
-                // Keep collapsed default if storage is unavailable.
-            }
-
-            el.classList.toggle('collapsed', shouldCollapse);
+            if (el) el.classList.toggle('collapsed', savedFold(el) !== true);
         });
     }
-
-    /**
-     * Restore and persist state for any details[data-collapse-key] block.
-     */
-    function restoreCollapsibleDetailsState() {
-        const scopes = document.querySelectorAll('[data-collapse-scope]');
-        scopes.forEach(function(scopeEl) {
-            const scopeToken = scopeEl.getAttribute('data-collapse-scope');
-            if (!scopeToken) return;
-            try {
-                const scopeSaved = localStorage.getItem('collapse_scope_' + scopeToken);
-                if (scopeSaved === '1' || scopeSaved === '0') {
-                    const expand = scopeSaved === '1';
-                    const scopedBlocks = scopeEl.querySelectorAll('details[data-collapse-key]');
-                    scopedBlocks.forEach(function(block) {
-                        if (expand) block.setAttribute('open', '');
-                        else block.removeAttribute('open');
-                    });
-                }
-            } catch (e) {
-                // Keep per-block or template defaults if storage is unavailable.
-            }
-        });
-
-        const blocks = document.querySelectorAll('details[data-collapse-key]');
-        blocks.forEach(function(block) {
-            const key = block.getAttribute('data-collapse-key');
-            if (!key) return;
-
-            try {
-                const saved = localStorage.getItem('collapse_' + key);
-                if (saved === '1') block.setAttribute('open', '');
-                if (saved === '0') block.removeAttribute('open');
-            } catch (e) {
-                // Keep template default if storage is unavailable.
-            }
-
-            if (block.dataset.collapseBound === '1') return;
-            block.addEventListener('toggle', function() {
-                try {
-                    localStorage.setItem('collapse_' + key, block.open ? '1' : '0');
-                    const scopeEl = block.closest('[data-collapse-scope]');
-                    if (scopeEl) {
-                        const scopeToken = scopeEl.getAttribute('data-collapse-scope');
-                        if (scopeToken) localStorage.removeItem('collapse_scope_' + scopeToken);
-                    }
-                } catch (e) {
-                    console.warn('Unable to persist collapsible state for', key, e);
-                }
-            });
-            block.dataset.collapseBound = '1';
-        });
-    }
-
-    // Expose for pages that lazily inject nested details blocks.
-    window.restoreCollapsibleDetailsState = restoreCollapsibleDetailsState;
 
     /**
      * Restore theme from localStorage
@@ -910,7 +810,6 @@ console.debug('TIDE app.js loading...');
     function initializePage() {
         restoreSidebarState();
         restoreNavGroupStates();
-        restoreCollapsibleDetailsState();
         restoreTheme();
         updateActiveNavItem();
         document.dispatchEvent(new CustomEvent('tide:pageInit'));
@@ -1723,22 +1622,154 @@ console.debug('TIDE app.js loading...');
         if (dashDirty && dashGrid()) { e.preventDefault(); e.returnValue = ''; }
     });
 
-    // Section open/closed
-    function readRuleModalFolds() { return readPref('tide.ruleModalFolds', {}) || {}; }
-    document.addEventListener('toggle', function(e) {
-        var fold = e.target;
-        if (!fold || !fold.matches || !fold.matches('details.rm-fold[data-fold]')) return;
-        var folds = readRuleModalFolds();
-        folds[fold.getAttribute('data-fold')] = fold.open;
-        writePref('tide.ruleModalFolds', folds);
+    // ── Hover tips: one for the whole app (UX.md 5.4) ──
+    // Any element with a title gets TIDE's own tip, on hover and on keyboard focus: one look and one
+    // delay everywhere, above the element (below when there's no room; beside it in the sidebar), never
+    // clipped by a scrolling box. Write a plain title="…", as a plain <select> for a choice. While the
+    // pointer is on an element, its title and those of the elements round it are held aside, so the
+    // browser's own tip doesn't show as well, and given back when it leaves. data-tooltip is the same
+    // tip with no title at all: the collapsed sidebar's labels, which don't show while it is expanded.
+    var TIP_SKIP = 'iframe, input[pattern], textarea[pattern]';
+    var tipEl = null, tipFor = null, tipTimer = null, tipHiddenAt = 0, heldTitles = [];
+    function tipText(el) { return el.getAttribute('data-tooltip') || el.__tideTitle || el.getAttribute('title') || ''; }
+    // An element's title, held aside or not: for a script that reads one (the Heatmap's search).
+    TIDE.titleOf = function(el) { return el.getAttribute('title') || el.__tideTitle || ''; };
+    function giveBackTitle(el) {
+        if (!el.hasAttribute('title') && el.__tideTitle) el.setAttribute('title', el.__tideTitle);
+        el.__tideTitle = undefined;
+    }
+    // Hold aside the titles round the element under the pointer, give back those it has left, and
+    // return the element whose tip it is (the innermost with one), if any.
+    function holdTitles(target) {
+        var chain = [], owner = null;
+        for (var n = target; n && n.nodeType === 1; n = n.parentElement) {
+            if (n.hasAttribute('title') && !n.matches(TIP_SKIP)) {
+                n.__tideTitle = n.getAttribute('title');
+                n.removeAttribute('title');
+                // An icon button's title is its name: keep one for screen readers while it is held.
+                if (!n.textContent.trim() && !n.hasAttribute('aria-label') && !n.hasAttribute('aria-labelledby')) n.setAttribute('aria-label', n.__tideTitle);
+            }
+            if (n.__tideTitle !== undefined) chain.push(n);
+            if (!owner && (n.__tideTitle || n.hasAttribute('data-tooltip'))) owner = n;
+        }
+        heldTitles.forEach(function(el) { if (chain.indexOf(el) < 0) giveBackTitle(el); });
+        heldTitles = chain;
+        if (owner && !owner.__tideTitle && owner.closest('.sidebar.expanded')) owner = null;
+        return owner;
+    }
+    function hideTip() {
+        clearTimeout(tipTimer);
+        if (tipFor) tipHiddenAt = Date.now();
+        tipFor = null;
+        if (tipEl) tipEl.hidden = true;
+    }
+    function showTip(el) {
+        var text = tipText(el).trim();
+        if (!text || !el.isConnected) return;
+        if (!tipEl) {
+            tipEl = document.createElement('div');
+            tipEl.id = 'tide-tip';
+            tipEl.className = 'tide-tip';
+            tipEl.setAttribute('role', 'tooltip');
+            document.body.appendChild(tipEl);
+        }
+        tipEl.textContent = text;
+        tipEl.hidden = false;
+        tipFor = el;
+        var r = el.getBoundingClientRect(), w = tipEl.offsetWidth, h = tipEl.offsetHeight, gap = 8;
+        var vw = document.documentElement.clientWidth, vh = document.documentElement.clientHeight, left, top;
+        if (el.closest('.sidebar')) {
+            left = r.right + gap + 2;
+            top = r.top + (r.height - h) / 2;
+        } else {
+            left = r.left + (r.width - w) / 2;
+            top = r.top - h - gap;
+            if (top < 4) top = r.bottom + gap;
+        }
+        tipEl.style.left = Math.round(Math.max(8, Math.min(left, vw - w - 8))) + 'px';
+        tipEl.style.top = Math.round(Math.max(4, Math.min(top, vh - h - 4))) + 'px';
+    }
+    // Shown after a moment, or at once when moving along from another tip.
+    function scheduleTip(el) {
+        clearTimeout(tipTimer);
+        if (tipFor === el) return;
+        if (tipFor) hideTip();
+        tipTimer = setTimeout(function() { showTip(el); }, Date.now() - tipHiddenAt < 300 ? 0 : 450);
+    }
+    document.addEventListener('mouseover', function(e) {
+        var owner = holdTitles(e.target);
+        if (owner) scheduleTip(owner);
+        else hideTip();
     }, true);
+    document.addEventListener('mouseout', function(e) {
+        if (e.relatedTarget) return;                  // onto another element: its mouseover deals with it
+        holdTitles(null);
+        hideTip();
+    }, true);
+    document.addEventListener('focusin', function(e) {
+        var el = e.target;
+        if (!el.matches || !el.matches(':focus-visible') || el.matches(TIP_SKIP)) return;
+        if (el.hasAttribute('title') || el.__tideTitle || (el.hasAttribute('data-tooltip') && !el.closest('.sidebar.expanded'))) scheduleTip(el);
+    });
+    document.addEventListener('focusout', function(e) { if (e.target === tipFor) hideTip(); else clearTimeout(tipTimer); });
+    document.addEventListener('mousedown', hideTip, true);
+    document.addEventListener('keydown', function(e) { if (e.key === 'Escape') hideTip(); }, true);
+    document.addEventListener('scroll', hideTip, true);
+    document.addEventListener('htmx:afterSwap', function() { if (tipFor && !tipFor.isConnected) hideTip(); });
 
-    // Panels (activity, score chart, logic, actions, MITRE) collapse via a head button and share the fold pref.
-    // Page sections built the same way (a system's Baselines / Devices / Heatmap) keep theirs under
-    // their container's data-fold-store key instead, so the two never collide.
-    function foldStoreKey(panel) {
-        var store = panel.closest('[data-fold-store]');
-        return store ? store.getAttribute('data-fold-store') : 'tide.ruleModalFolds';
+    // ── Folds remembered: one mechanism for every fold that keeps its state (UX.md 5.5) ──
+    // A fold is a <details data-fold="name">, a panel folded by its head (.rm-panel / .sys-section
+    // [data-fold]) or a sidebar nav group. Whether it is open is kept per browser in the JSON object
+    // named by its nearest [data-fold-store] (a page's, a list's, the sidebar's); a window's folds
+    // without one share tide.ruleModalFolds. A <details> drawn open fires a toggle as it is added,
+    // before its saved state is applied: only toggles after that are saved, or a list redrawn by
+    // htmx would save its defaults over what was chosen.
+    function foldStoreKey(el) {
+        var store = el.closest('[data-fold-store]');
+        if (store) return store.getAttribute('data-fold-store');
+        return el.closest('#modal-container') ? 'tide.ruleModalFolds' : 'tide.pageFolds';
+    }
+    function savedFold(el) { return (readPref(foldStoreKey(el), {}) || {})[el.getAttribute('data-fold')]; }
+    function saveFold(el, open) {
+        var key = foldStoreKey(el), folds = readPref(key, {}) || {};
+        folds[el.getAttribute('data-fold')] = open;
+        writePref(key, folds);
+    }
+    function applyFolds(root) {
+        if (!root || !root.querySelectorAll) return;
+        var folds = Array.prototype.slice.call(root.querySelectorAll('details[data-fold]'));
+        if (root.matches && root.matches('details[data-fold]')) folds.push(root);
+        folds.forEach(function(d) {
+            if (d.__tideFold) return;
+            d.__tideFold = 'applying';
+            var open = savedFold(d);
+            if (typeof open === 'boolean' && d.open !== open) d.open = open;
+            // After the toggle that setting it fires, if any, so that one isn't taken for a choice either.
+            setTimeout(function() { d.__tideFold = 'ready'; }, 0);
+        });
+    }
+    document.addEventListener('toggle', function(e) {
+        var d = e.target;
+        if (d.matches && d.matches('details[data-fold]') && d.__tideFold === 'ready') saveFold(d, d.open);
+    }, true);
+    // Straight after a swap, before it is painted (htmx:load comes only once the swap has settled, so
+    // a fold drawn open would show open for a moment before closing), and on whatever htmx loads.
+    document.addEventListener('htmx:afterSwap', function(e) { applyFolds(e.detail && e.detail.target); });
+    document.addEventListener('htmx:load', function(e) { applyFolds(e.target); });
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function() { applyFolds(document); });
+    else applyFolds(document);
+    // Open or close every fold under ``scope`` (a page's Expand all / Collapse all), remembered.
+    window.tideSetFolds = function(scope, open) {
+        var root = scope ? document.querySelector(scope) : document;
+        if (!root) return;
+        root.querySelectorAll('details[data-fold]').forEach(function(d) { d.open = open; saveFold(d, open); });
+    };
+
+    // A panel as it was left: folded, or open (one drawn folded, as History in the rule window, too).
+    function restorePanel(panel) {
+        var open = savedFold(panel);
+        if (open === false && !panel.hasAttribute('data-section-required')) setPanelCollapsed(panel, true);
+        else if (open === true) setPanelCollapsed(panel, false);
     }
     function setPanelCollapsed(panel, collapsed) {
         panel.classList.toggle('is-collapsed', collapsed);
@@ -1761,10 +1792,7 @@ console.debug('TIDE app.js loading...');
         if (!panel) return;
         var collapsed = !panel.classList.contains('is-collapsed');
         setPanelCollapsed(panel, collapsed);
-        var key = foldStoreKey(panel);
-        var folds = readPref(key, {}) || {};
-        folds[panel.getAttribute('data-fold')] = !collapsed;
-        writePref(key, folds);
+        saveFold(panel, !collapsed);
     }, true);
 
     // Page sections (a system's Baselines / Devices / Heatmap: a container with data-fold-store,
@@ -1779,10 +1807,7 @@ console.debug('TIDE app.js loading...');
             return found;
         }
         within('[data-fold-store]').forEach(function(col) {
-            var folds = readPref(col.getAttribute('data-fold-store') || '', {}) || {};
-            col.querySelectorAll(':scope > [data-fold]').forEach(function(panel) {
-                if (folds[panel.getAttribute('data-fold')] === false) setPanelCollapsed(panel, true);
-            });
+            col.querySelectorAll(':scope > [data-fold]:not(details)').forEach(restorePanel);
         });
         within('[data-layout-key]:not(.rule-modal)').forEach(applyWindowLayout);
     }
@@ -1974,13 +1999,7 @@ console.debug('TIDE app.js loading...');
         if (!target.classList.contains('rm-swap-quiet')) windowArrangingKey = null;
         var modal = target.querySelector('.rule-modal[data-rule-dom-id]');
         if (!modal) return;
-        var folds = readRuleModalFolds();
-        modal.querySelectorAll('details.rm-fold[data-fold]').forEach(function(fold) {
-            if (folds[fold.getAttribute('data-fold')] === false) fold.open = false;
-        });
-        modal.querySelectorAll('.rm-panel[data-fold]').forEach(function(panel) {
-            if (folds[panel.getAttribute('data-fold')] === false && !panel.hasAttribute('data-section-required')) setPanelCollapsed(panel, true);
-        });
+        modal.querySelectorAll('.rm-panel[data-fold]').forEach(restorePanel);
         applyWindowLayout(modal);
         updateRuleNavButtons();
         var closeBtn = modal.querySelector('[data-rm-close]');
@@ -2068,10 +2087,6 @@ console.debug('TIDE app.js loading...');
                 target.tagName === 'MAIN') {
                 initializePage();
                 executePageInitializers();
-            } else {
-                // Partial swaps can inject new details[data-collapse-key] blocks.
-                // Rebind restore/persistence for newly inserted accordions.
-                restoreCollapsibleDetailsState();
             }
             
             // Re-highlight any code blocks (Prism.js)
@@ -2137,33 +2152,6 @@ console.debug('TIDE app.js loading...');
         initializeApp();
     }
 
-    // <details data-remember="key"> keeps its open/closed state per browser. A panel rendered open on purpose
-    // (data-keep-open, e.g. right after a save) is left alone. A panel drawn open fires a toggle as it is
-    // added, before its saved state is applied: only toggles after that are saved, or a list redrawn by
-    // htmx would save its defaults over what was chosen.
-    function applyRemembered(root) {
-        if (!root || !root.querySelectorAll) return;
-        var panels = Array.prototype.slice.call(root.querySelectorAll('details[data-remember]'));
-        if (root.matches && root.matches('details[data-remember]')) panels.push(root);
-        panels.forEach(function (d) {
-            if (d.hasAttribute('data-keep-open')) { d.__tideRemembered = true; return; }
-            try {
-                var saved = localStorage.getItem('tide.open.' + d.getAttribute('data-remember'));
-                if (saved !== null) d.open = saved === '1';
-            } catch (_) { /* storage unavailable: keep the default */ }
-            // After the toggle that setting it fires, if any, so that one isn't taken for a choice either.
-            setTimeout(function () { d.__tideRemembered = true; }, 0);
-        });
-    }
-    document.addEventListener('toggle', function (e) {
-        var d = e.target;
-        if (!d.matches || !d.matches('details[data-remember]') || !d.__tideRemembered) return;
-        try { localStorage.setItem('tide.open.' + d.getAttribute('data-remember'), d.open ? '1' : '0'); } catch (_) { /* ignore */ }
-    }, true);
-    document.addEventListener('htmx:load', function (e) { applyRemembered(e.target); });
-    // Straight after a swap too, before it is painted: htmx:load comes only once the swap has settled,
-    // so a panel drawn open would show open for a moment before closing.
-    document.addEventListener('htmx:afterSwap', function (e) { applyRemembered(e.detail && e.detail.target); });
 
     // Management > client > Rule scoring: live total of the points allocated (delegated, so it survives htmx swaps).
     document.addEventListener('input', function (e) {
@@ -2470,14 +2458,9 @@ console.debug('TIDE app.js loading...');
         }, 200);
     });
 
-    // Merge button (rule_migration_diff.html), wired as a plain onclick attribute rather than a
-    // per-render <script> block with addEventListener -- a <script> tag only runs when the
-    // fragment containing it is inserted via htmx's own swap (which specifically re-executes
-    // script tags) or a real page load; a plain `el.innerHTML = html` assignment, like
-    // tideSwitchCompareTarget below uses to switch which linked rule you're comparing against,
-    // never executes embedded scripts at all. That silently left the Merge button dead after
-    // switching targets. An onclick attribute has no such dependency -- it's wired by the
-    // browser's own HTML parser the moment the element exists, however it got there.
+    // Merge button (rule_migration_diff.html): its data-action (pages/shell.js, `merge`) calls this,
+    // so it works however the comparison reached the page, including tideSwitchCompareTarget's
+    // innerHTML below. Never an inline handler or <script>: the Content-Security-Policy refuses both.
     window.tideMergeLinked = function (root) {
         var direction = (document.querySelector('input[name="rm-merge-direction"]:checked') || {}).value || 'source_over_target';
         var deleteWhich = (document.querySelector('input[name="rm-merge-delete"]:checked') || {}).value || 'none';

@@ -31,7 +31,7 @@ except Exception:  # pragma: no cover
 from app.config import get_settings
 from app.api.deps import CurrentUser, DbDep, ActiveClient, OptionalClient
 from app.services import keycloak_config
-from app.api import auth, rules, heatmap, threats, promotion, sigma, elastic as elastic_api, rule_upstream as rule_upstream_api, hunting as hunting_api, settings as settings_api, inventory, external_sharing, clients as clients_api, management as management_api, mitre as mitre_api, bulk_edit as bulk_edit_api, diagnostics as diagnostics_api, dashboard as dashboard_api, rule_monitoring as rule_monitoring_api, maintenance as maintenance_api
+from app.api import auth, rules, heatmap, threats, promotion, sigma, elastic as elastic_api, rule_upstream as rule_upstream_api, hunting as hunting_api, settings as settings_api, inventory, external_sharing, clients as clients_api, management as management_api, mitre as mitre_api, bulk_edit as bulk_edit_api, diagnostics as diagnostics_api, dashboard as dashboard_api, rule_monitoring as rule_monitoring_api, maintenance as maintenance_api, backlog as backlog_api
 
 # 4.1.0 P1: structured JSON logging with per-request context. Replaces the
 # old basicConfig() call. Format selected by TIDE_LOG_FORMAT env (default
@@ -232,7 +232,7 @@ async def scheduled_sync(force_mapping=False, client_id: str | None = None, job_
     from app.services import sync_runs
     started = datetime.now() - timedelta(seconds=2)   # server time, as DuckDB now() stores it
     if job_id:
-        _update_sync_job(job_id, "running", "Connecting to Elastic…")
+        _update_sync_job(job_id, "running", "Connecting to the SIEMs…")
 
     try:
         # Import here to avoid circular imports
@@ -254,10 +254,10 @@ async def scheduled_sync(force_mapping=False, client_id: str | None = None, job_
                 sync_runs.finish(job_id, "partial", total=count, error=reason,
                                  detail={"missed": [name for name, _ in missed]})
         elif job_id:
-            _update_sync_job(job_id, "complete", f"Synced {count} rules from Elastic", rule_count=count)
+            _update_sync_job(job_id, "complete", f"Synced {count} rules", rule_count=count)
             sync_runs.finish(job_id, "success", total=count)
     except Exception as e:
-        logger.warning(f"Per-tenant sync failed (Elastic may be unreachable): {e}")
+        logger.warning(f"Per-tenant sync failed (a SIEM may be unreachable): {e}")
         logger.info("TIDE will continue running — sync will retry on next user action")
         if job_id:
             _update_sync_job(job_id, "error", str(e))
@@ -492,7 +492,7 @@ async def lifespan(app: FastAPI):
                 _env_url, _env_key, len(_maps),
             )
             for _l, _u, _t, _a in _siems:
-                logger.info(
+                logger.info(  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure # whether a token is set, never the token
                     "[auth-banner]   SIEM '%s' active=%s url=%s token_present=%s",
                     _l, bool(_a), _u, bool(_t),
                 )
@@ -885,6 +885,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/api/redoc",
         "/openapi.json",
         "/api/external",
+        "/csp-report",          # browsers report Content-Security-Policy violations, sign-in page too
     }
     
     # URL path → resource name mapping for permission checks
@@ -894,6 +895,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/systems": "page:systems",
         "/cve-overview": "page:cve_overview",
         "/baselines": "page:baselines",
+        "/backlog": "page:detection_backlog",
+        "/api/backlog": "page:detection_backlog",
         "/rules": "page:rules",
         # Rule Monitoring is Rule Health's: whoever can see rules sees what needs action.
         "/rule-monitoring": "page:rules",
@@ -1486,6 +1489,35 @@ def create_app() -> FastAPI:
     # not bind-mount the app static dir, so every /static request proxies
     # to uvicorn anyway — adding the header here is the only place it can
     # actually take effect.
+    # The Content-Security-Policy on every page (#89 R3, app/services/csp.py): HTML only, as a policy
+    # applies to the document; the partials htmx swaps in are held to the page's. Its sign-out address
+    # is the Keycloak sign-in uses now (the integration's, which can change while TIDE runs; else .env's).
+    # FastAPI's API docs (DEBUG only) load Swagger from a CDN with an inline script, so go without.
+    from app.services import csp as _csp
+    from app.services import keycloak_config as _keycloak_config
+    _csp_skip = tuple(p for p in (app.docs_url, app.redoc_url, app.swagger_ui_oauth2_redirect_url) if p and settings.debug)
+
+    @app.middleware("http")
+    async def _content_security_policy(request: Request, call_next):
+        response = await call_next(request)
+        if str(response.headers.get("content-type") or "").startswith("text/html") \
+                and not request.url.path.startswith(_csp_skip):
+            response.headers[_csp.header_name()] = _csp.policy(_keycloak_config.current().url)
+        return response
+
+    @app.post(_csp.REPORT_PATH, include_in_schema=False)
+    async def csp_report(request: Request):
+        """A browser's report of what the Content-Security-Policy would block (or blocked)."""
+        from fastapi.responses import Response
+        from starlette.concurrency import run_in_threadpool
+        if int(request.headers.get("content-length") or 0) > _csp.MAX_BODY:
+            return Response(status_code=413)
+        body = await request.body()
+        if len(body) <= _csp.MAX_BODY:
+            from app.services.database import get_database_service
+            await run_in_threadpool(_csp.record, get_database_service(), _csp.parse(body))
+        return Response(status_code=204)
+
     @app.middleware("http")
     async def _immutable_dist_cache(request: Request, call_next):
         response = await call_next(request)
@@ -1696,18 +1728,27 @@ def create_app() -> FastAPI:
         bind-mounted source tree or a `git pull` leaves them missing or
         stale, and pages then render new templates against old CSS/JS.
         Rebuilding here keeps the served bundle in step with the source.
+        A manifest written after every source last changed (the image's,
+        built with it) is fresh: nothing is rebuilt, so app/static can stay
+        read-only.
         """
         nonlocal _built_signature
+        sig = None
         try:
             sig = _source_signature()
             if sig == _built_signature:
+                return
+            if _built_signature is None and os.path.exists(_manifest_path) and \
+                    os.stat(_manifest_path).st_mtime_ns >= max(m for _p, m, _s in sig):
+                _built_signature = sig
                 return
             from app.scripts.build_assets import build as _build_assets
             _build_assets()
             _built_signature = sig
         except Exception as _exc:
-            # Read-only FS or missing source: fall through to manifest/fallback.
-            _built_signature = None
+            # Read-only FS or missing source: fall through to manifest/fallback, and don't try again
+            # until the sources change.
+            _built_signature = sig
             logger.warning(f"Asset rebuild failed ({_exc}); using existing manifest/fallback")
 
     _ensure_bundles_fresh()
@@ -1909,6 +1950,7 @@ def create_app() -> FastAPI:
     app.include_router(hunting_api.router)
     app.include_router(settings_api.router)
     app.include_router(inventory.router)
+    app.include_router(backlog_api.router)
     app.include_router(external_sharing.router)
     app.include_router(clients_api.router)
     app.include_router(management_api.router)
@@ -2043,16 +2085,13 @@ def create_app() -> FastAPI:
     # --- PAGE ROUTES ---
     
     @app.get("/", response_class=HTMLResponse, name="home")
-    def home(request: Request, user: CurrentUser):
-        """Home page - redirect to dashboard or show landing."""
-        return render_template(
-            "pages/core/home.html",
-            request,
-            {
-                "user": user,
-                "active_page": "home",
-            }
-        )
+    def home(request: Request, user: CurrentUser, db: DbDep, client_id: OptionalClient):
+        """Home: what needs this person on the active client (app/services/home.py); with no client,
+        only the page."""
+        from app.services import home as home_lists
+        ctx = home_lists.page_context(db, client_id, user)
+        ctx.update({"user": user, "active_page": "home"})
+        return render_template("pages/core/home.html", request, ctx)
     
     @app.get("/rules", response_class=HTMLResponse, name="rule_health")
     def rule_health_page(request: Request, user: CurrentUser):
@@ -2094,7 +2133,12 @@ def create_app() -> FastAPI:
         qp = request.query_params
         search_q = qp.get("search") or ""
         space_q = qp.get("space") or ""
-        enabled_q = qp.get("enabled") or ""
+        # Rule Health opens on the enabled rules (UX.md 9.5): most of a client's rules can be disabled,
+        # and they'd fill the first screen. An address with any filter (a link to find a rule by its
+        # name), or with "enabled=" (empty, as the page keeps it when Status is All), shows them all.
+        filtered = any(qp.get(k) for k in ("search", "space", "state", "linked_to", "upstream", "rule_type", "language",
+                                           "min_score", "max_score", "validation", "validated_from", "validated_to"))
+        enabled_q = qp.get("enabled", "" if filtered else "true")
         from app.services.database import VALIDATION_STATES, normalize_rule_states
         state_q = normalize_rule_states(qp.getlist("state"))
         linked_to_q = (qp.get("linked_to") or "") if "linked" in state_q else ""
@@ -2244,6 +2288,16 @@ def create_app() -> FastAPI:
             {"user": user, "active_page": "rule_monitoring", **page_context(db, client_id, request.query_params, user)},
         )
 
+    @app.get("/backlog", response_class=HTMLResponse, name="detection_backlog")
+    def detection_backlog_page(request: Request, user: CurrentUser, db: DbDep, client_id: ActiveClient):
+        """Detection Backlog: the ATT&CK techniques systems' baselines still need covered, most urgent
+        first. Its filters can come in the address."""
+        from app.api.backlog import page_context
+        return render_template(
+            "pages/inventory/detection_backlog.html", request,
+            {"user": user, "active_page": "detection_backlog", **page_context(db, client_id, request.query_params, user)},
+        )
+
     @app.get("/heatmap", response_class=HTMLResponse, name="heatmap")
     def heatmap_page(request: Request, user: CurrentUser):
         """Heatmap page."""
@@ -2358,6 +2412,7 @@ def create_app() -> FastAPI:
         # empty landscape with a banner instead so the user can come back in
         # a moment without seeing a stack trace.
         from app.models.threats import ThreatLandscapeMetrics
+        from app.services import rule_issues
         metrics_error = None
         try:
             metrics = db.get_threat_landscape_metrics(client_id=_cid)
@@ -2395,7 +2450,7 @@ def create_app() -> FastAPI:
                 "metrics_error": metrics_error,
                 "origins": origins,
                 "sources": sources,
-                "last_sync_time": get_last_sync_time(),
+                "last_sync": rule_issues.freshness(db, _cid),
             }
         )
 
@@ -2988,13 +3043,13 @@ def create_app() -> FastAPI:
             {
                 "user": user,
                 "active_page": "management",
+                "active_tab": request.query_params.get("tab", ""),   # which of the page's tabs opens (#108)
                 "client": client,
                 "client_siems": client_siems,
                 "client_users": client_users,
                 "available_siems": available_siems,
                 "available_users": available_users,
                 "all_roles": all_roles,
-                "known_kibana_spaces": (db.get_all_kibana_spaces() or []),
                 "client_connectors": client_connectors,
                 "available_connectors": available_connectors,
                 "siems": all_siems,
@@ -3132,4 +3187,4 @@ app = create_app()
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)  # nosec B104 # only when run directly, in the container, which only nginx reaches

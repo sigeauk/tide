@@ -1,15 +1,18 @@
-"""The GitLab issues TIDE raised from Rule Monitoring (6.3.1), kept in the client's own database.
+"""The GitLab issues TIDE raised from Rule Monitoring (6.3.1) and for single rules (#106), kept in the
+client's own database.
 
 Each row is one issue in one of the client's issues projects (``client_gitlab_projects``, by
 ``link_id``), with the Rule Monitoring causes it was raised for (``causes``: JSON list of
-``[issue, cause, siem_id, space]``, as ``rule_issues.causes_from`` reads them). Rule Monitoring shows
-the issue on each of those causes while it is open, and for ``SHOW_CLOSED_DAYS`` after it closes
+``[issue, cause, siem_id, space]``, as ``rule_issues.causes_from`` reads them), or the rules it was
+raised for from Rule Health (``rules``: JSON list of ``[rule_id, siem_id, space]``). Rule Monitoring
+shows an issue on each of its causes, and Rule Health on each rule it is about (its own, or a cause
+the rule has: ``about_rules``), while it is open and for ``SHOW_CLOSED_DAYS`` after it closes
 (``shown``); raising one of them again offers to comment on it instead.
 
 ``state`` (``opened``, ``closed``, or ``deleted`` once GitLab no longer has it), ``closed_at`` (when
 it closed, or when TIDE found it gone) and its assignee are GitLab's when TIDE last looked:
-``refresh`` asks again, after each sync (``after_sync``, for the issues still shown) and when Copy
-for engineers lists them.
+``refresh`` asks again, after each sync (``after_sync``, for the issues still shown), after Sync this
+rule (``after_rule_sync``, for the issues about it) and when Raise issue lists them.
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 Key = Tuple[str, str, str, str]
+RuleKey = Tuple[str, str, str]
 SHOW_CLOSED_DAYS = 7
 
 DDL = """
@@ -40,13 +44,14 @@ DDL = """
         checked_at  TIMESTAMP,
         closed_at   TIMESTAMP,
         assignee    VARCHAR,
-        assignee_name VARCHAR
+        assignee_name VARCHAR,
+        rules       VARCHAR
     )
 """
-_ADDED = (("closed_at", "TIMESTAMP"), ("assignee", "VARCHAR"), ("assignee_name", "VARCHAR"))
+_ADDED = (("closed_at", "TIMESTAMP"), ("assignee", "VARCHAR"), ("assignee_name", "VARCHAR"), ("rules", "VARCHAR"))
 
 _COLS = ("id", "link_id", "project", "iid", "web_url", "title", "causes", "state", "created_by", "created_at",
-         "commented_at", "checked_at", "closed_at", "assignee", "assignee_name")
+         "commented_at", "checked_at", "closed_at", "assignee", "assignee_name", "rules")
 
 
 def _utcnow() -> datetime:
@@ -67,19 +72,23 @@ def _rows(conn, sql: str, params: list) -> List[Dict[str, Any]]:
     for row in conn.execute(sql, params).fetchall():
         item = dict(zip(_COLS, row))
         item["causes"] = [tuple(k) for k in json.loads(item["causes"] or "[]")]
+        item["rules"] = [tuple(k) for k in json.loads(item["rules"] or "[]")]
         out.append(item)
     return out
 
 
-def record(conn, link: Dict[str, Any], issue: Dict[str, Any], title: str, causes: Iterable[Key], actor: str) -> str:
-    """Keep an issue just raised (gitlab.create_issue's answer); returns its row id."""
+def record(conn, link: Dict[str, Any], issue: Dict[str, Any], title: str, causes: Iterable[Key], actor: str,
+           rules: Iterable[RuleKey] = ()) -> str:
+    """Keep an issue just raised (gitlab.create_issue's answer), for ``causes`` (Rule Monitoring) or
+    ``rules`` (raised for single rules from Rule Health); returns its row id."""
     ensure(conn)
     return conn.execute(
         "INSERT INTO gitlab_issues (link_id, project, iid, web_url, title, causes, state, created_by, checked_at, "
-        "assignee, assignee_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        "assignee, assignee_name, rules) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
         [link["id"], link["project"], issue["iid"], issue.get("web_url"), title,
          json.dumps(sorted(list(k) for k in set(causes))), issue.get("state") or "opened", actor, _utcnow(),
-         issue.get("assignee"), issue.get("assignee_name")]).fetchone()[0]
+         issue.get("assignee"), issue.get("assignee_name"),
+         json.dumps(sorted(list(k) for k in set(rules)))]).fetchone()[0]
 
 
 def get(conn, row_id: str) -> Dict[str, Any] | None:
@@ -104,6 +113,24 @@ def by_cause(conn) -> Dict[Key, List[Dict[str, Any]]]:
     for item in every(conn):
         for key in item["causes"]:
             out.setdefault(key, []).append(item)
+    return out
+
+
+def about_rules(conn, causes_by_rule: Dict[RuleKey, Iterable[Key]], now: Optional[datetime] = None,
+                open_only: bool = False) -> Dict[RuleKey, List[Dict[str, Any]]]:
+    """The issues about each rule that Rule Health shows: those raised for the rule itself, and those
+    raised for a cause it has (``causes_by_rule``: each rule's cause keys, from its findings), each with
+    ``for_rule`` (raised for the rule, not a cause). The rule window lists those ``shown`` (open, and
+    closed in the last week); its card, ``open_only``. Newest first; rules with none left out."""
+    out: Dict[RuleKey, List[Dict[str, Any]]] = {}
+    issues = [i for i in every(conn) if (i["state"] == "opened" if open_only else shown(i, now))]
+    if not issues:
+        return out
+    for rule, causes in causes_by_rule.items():
+        mine = set(causes)
+        found = [{**i, "for_rule": rule in i["rules"]} for i in issues if rule in i["rules"] or mine & set(i["causes"])]
+        if found:
+            out[rule] = found
     return out
 
 
@@ -176,6 +203,22 @@ def refresh(db, client_id: str, issues: List[Dict[str, Any]],
         with db.get_connection() as conn:
             set_now(conn, mine, now)
     return found
+
+
+def after_rule_sync(db, client_id: str, rules: Iterable[RuleKey]) -> None:
+    """After Sync this rule (or anything that syncs a few rules, such as bulk edit's Sync): the state now
+    of the issues about them that Rule Health shows (``about_rules``: raised for them, or for a cause they
+    have), so one closed in GitLab shows closed. Quiet when GitLab doesn't answer, as after a sync."""
+    from app.services import rule_issues
+    from app.services.tenant_manager import tenant_context_for
+    rules = list(rules)
+    with tenant_context_for(client_id):
+        with db.get_connection() as conn:
+            found = rule_issues.rule_findings(conn, rules)
+            issues = {i["id"]: i for about in about_rules(conn, rule_issues.cause_keys(found, rules)).values()
+                      for i in about}
+        if issues:
+            refresh(db, client_id, list(issues.values()))
 
 
 def after_sync(db, client_id: str) -> None:

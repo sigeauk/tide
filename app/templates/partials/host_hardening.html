@@ -1,0 +1,35 @@
+{# Partial: host_hardening.html -- a Wazuh device's SCA / CIS results (wazuh_assets.host_hardening): each
+   policy's score and counts, then the checks it fails, with their CIS ids and remediation (expand a check).
+   Context: hardening (list of policies). #}
+{% from "macros/icons.html" import icon %}
+<div class="min-w-0 mb-md">
+    <div class="flex items-center justify-between mb-ms">
+        <h2 class="section-title fs-title">{{ icon('shield-check', '18') }} Hardening</h2>
+    </div>
+    {% for p in hardening %}
+    <div class="card card-padded-sm mb-sm">
+        <div class="flex items-center justify-between gap-sm flex-wrap">
+            <strong title="{{ p.policy_id }}">{{ p.name or p.policy_id }}</strong>
+            <span class="status-pill status-{{ 'success' if (p.score or 0) >= 80 else ('warning' if (p.score or 0) >= 50 else 'danger') }}" title="Wazuh's score: passed checks as a share of those that apply">{{ p.score }}%</span>
+        </div>
+        <p class="text-muted fs-sm">{{ p.passed }} passed · {{ p.failed }} failed · {{ p.not_applicable }} not applicable{% if p.end_scan %} · scanned {{ p.end_scan.strftime('%Y-%m-%d %H:%M') }}{% endif %}</p>
+        {% if p.failing %}
+        <details data-fold="hardening-failing" class="rm-fold">
+            <summary><span>Failing checks <span class="rm-fold__count">{{ p.failing | length }}</span></span></summary>
+            <div class="rm-items">
+                {% for c in p.failing %}
+                <details class="rm-item block">
+                    <summary class="cursor-pointer">{% if c.cis_ids %}<span class="mono">CIS {{ c.cis_ids | join(', ') }}</span> {% endif %}{{ c.title }}</summary>
+                    {% if c.rationale %}<p class="rm-item__text">{{ c.rationale }}</p>{% endif %}
+                    {% if c.remediation %}<pre class="query-display rm-query">{{ c.remediation }}</pre>{% endif %}
+                    {% if c.technique_ids %}<p class="text-muted fs-sm">ATT&amp;CK: {{ c.technique_ids | join(', ') }}</p>{% endif %}
+                </details>
+                {% endfor %}
+            </div>
+        </details>
+        {% else %}
+        <p class="rm-empty">No failing checks.</p>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>

@@ -202,6 +202,11 @@
   --color-success-text: var(--color-sev-4-text);
   --color-success-glow: var(--color-sev-4-glow);
 
+  /* GitLab's own orange, for GitLab issues (#107) */
+  --color-gitlab:       #fc6d26;
+  --color-gitlab-bg:    #3a1d0f;
+  --color-gitlab-text:  #ff9a5c;
+
   /* ── MITRE pill status colors ──────────── */
   --color-covered:      var(--color-success);
   --color-covered-bg:   var(--color-success-bg);
@@ -366,6 +371,7 @@ a:hover { color: var(--color-primary); }
 .status-pill.status-danger  { background: var(--color-danger-bg);  color: var(--color-danger-text);  border-color: color-mix(in srgb, var(--color-danger) 55%, transparent); }
 .status-pill.status-muted   { background: var(--color-bg-base);    color: var(--color-text-muted);   border-color: var(--color-border); }
 .status-pill.status-info    { background: var(--color-info-bg);    color: var(--color-info-text);    border-color: color-mix(in srgb, var(--color-info) 55%, transparent); }
+.status-pill.status-gitlab  { background: var(--color-gitlab-bg);  color: var(--color-gitlab-text);  border-color: color-mix(in srgb, var(--color-gitlab) 55%, transparent); }
 /* A technique's priority on a system (Risks) */
 .sm-priority--critical { background: var(--color-danger-bg);  color: var(--color-danger-text);  border-color: var(--color-danger); }
 .sm-priority--high     { background: var(--color-warning-bg); color: var(--color-warning-text); border-color: var(--color-warning); }
@@ -857,41 +863,6 @@ a:hover { color: var(--color-primary); }
 }
 
 .sidebar.expanded .nav-label { opacity: 1; }
-
-/* Sidebar tooltips (Layer 5) */
-.sidebar:not(.expanded) .nav-item[data-tooltip]::after {
-  content: attr(data-tooltip) !important;
-  position: absolute !important;
-  left: calc(100% + 10px) !important;
-  top: 50% !important;
-  bottom: auto !important;
-  transform: translateY(-50%) !important;
-  background: var(--color-bg-layer-5) !important;
-  border: 1px solid var(--color-border) !important;
-  border-top: 1px solid var(--color-highlight-3) !important;
-  color: var(--color-primary) !important;
-  padding: 0.5rem 0.75rem !important;
-  border-radius: var(--radius-md) !important;
-  font-size: 0.875rem !important;
-  white-space: nowrap !important;
-  opacity: 0 !important;
-  visibility: hidden !important;
-  transition: all var(--transition-fast) !important;
-  z-index: 9999 !important;
-  box-shadow: var(--shadow-lg) !important;
-  pointer-events: none !important;
-}
-
-.sidebar .nav-item[data-tooltip]::before {
-  display: none !important;
-  content: none !important;
-}
-
-.sidebar:not(.expanded) .nav-item[data-tooltip]:hover::after {
-  opacity: 1 !important;
-  visibility: visible !important;
-  transform: translateY(-50%) !important;
-}
 
 
 .sidebar-footer {
@@ -1757,33 +1728,16 @@ a:hover { color: var(--color-primary); }
   margin-left: auto;
 }
 
-/* Collapsible section header for client detail */
-.client-section-toggle {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  cursor: pointer;
-  padding-bottom: 0.5rem;
-  border-bottom: 2px solid var(--color-info);
-  user-select: none;
-  margin-bottom: 0.75rem;
-}
-.client-section-toggle:hover { opacity: 0.85; }
-.client-section-toggle__chevron {
-  color: var(--color-text-muted);
-  transition: transform 0.2s;
-  display: flex;
-  flex-shrink: 0;
-}
-.client-section-toggle__title {
-  margin: 0;
-  font-size: 1.05rem;
-  font-weight: 700;
-  color: var(--color-primary);
-  flex: 1;
-}
-.client-section-toggle__actions { display: flex; gap: 0.5rem; align-items: center; }
-
+/* A client's Assigned Users (#108): a table as a system's techniques are, a column per role */
+.client-users-table { min-width: 44rem; }
+.host-vuln-table { min-width: 0; }            /* a device page's Wazuh vulnerabilities, in its half of the page */
+.host-vuln-table td { padding: 0.45rem 0.7rem; border-bottom: 1px solid var(--color-border-muted); }   /* under its headings, as a rule row's */
+.client-users-table .rule-row { cursor: default; }
+.client-users-table .rt-title { display: inline; }
+.client-users-table th:nth-child(1) { width: 12rem; }
+.client-users-table .client-users-table__role { width: 6rem; text-align: center; }
+.client-users-table input[type="checkbox"]:disabled { opacity: 0.6; cursor: not-allowed; }
+.client-users-table .client-users-table__more { width: 3rem; overflow: visible; text-align: right; }
 
 /* ================================================================
  * HOST CARD GRID  (nested inside a card; uses bg-action layer)
@@ -2523,17 +2477,18 @@ a:hover { color: var(--color-primary); }
 /* ================================================================
  * GRID LAYOUTS
  * ================================================================ */
+/* A page shows four figures at most (UX.md 9.3); --6 is for the strips that keep more:
+   a system with Wazuh devices, a client's page, Diagnostics. */
 .metrics-grid {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 1rem;
   margin-bottom: 1.5rem;
 }
 
-@media (max-width: 1200px) { .metrics-grid { grid-template-columns: repeat(3, 1fr); } }
-@media (max-width: 768px)  { .metrics-grid { grid-template-columns: repeat(2, 1fr); } }
-/* A system's figures: seven, Effective beside Covered (#79). */
-@media (min-width: 1201px) { .metrics-grid--7 { grid-template-columns: repeat(7, 1fr); } }
+@media (max-width: 1200px) { .metrics-grid--6 { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 768px)  { .metrics-grid, .metrics-grid--6 { grid-template-columns: repeat(2, 1fr); } }
+@media (min-width: 1201px) { .metrics-grid--6 { grid-template-columns: repeat(6, 1fr); } }
 
 .rules-grid {
   display: grid;
@@ -2609,51 +2564,26 @@ a:hover { color: var(--color-primary); }
 
 
 /* ================================================================
- * CSS TOOLTIPS  (data-tooltip) — Layer 5
+ * HOVER TIPS — one for the whole app (app.js "Hover tips"): every title, and data-tooltip
  * ================================================================ */
-[data-tooltip] { position: relative; }
-
-[data-tooltip]:not(.nav-item)::before,
-[data-tooltip]:not(.nav-item)::after {
-  position: absolute;
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transition: all var(--transition-fast);
-  z-index: 100;
-}
-
-[data-tooltip]:not(.nav-item)::before {
-  content: attr(data-tooltip);
-  bottom: calc(100% + 8px);
-  left: 50%;
-  transform: translateX(-50%) translateY(4px);
+.tide-tip {
+  position: fixed;
+  z-index: 10050;
+  max-width: 22rem;
   padding: 0.4rem 0.6rem;
   background: var(--color-bg-layer-5);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
-  font-size: 0.7rem;
-  font-weight: 500;
-  color: var(--color-text);
-  white-space: nowrap;
   box-shadow: var(--shadow-lg);
+  color: var(--color-text);
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.45;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  pointer-events: none;
 }
-
-[data-tooltip]:not(.nav-item)::after {
-  content: '';
-  bottom: calc(100% + 2px);
-  left: 50%;
-  transform: translateX(-50%) translateY(4px);
-  border: 6px solid transparent;
-  border-top-color: var(--color-bg-layer-5);
-}
-
-[data-tooltip]:not(.nav-item):hover::before,
-[data-tooltip]:not(.nav-item):hover::after {
-  opacity: 1;
-  visibility: visible;
-  transform: translateX(-50%) translateY(0);
-}
+.tide-tip[hidden] { display: none; }
 
 /* ================================================================
  * SCORE FILLS, STATUS ICONS
@@ -2673,19 +2603,6 @@ a:hover { color: var(--color-primary); }
  * PAGE HEADER
  * ================================================================ */
 .page-header { margin-bottom: 1.5rem; }
-
-.header-centered {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-}
-
-.header-centered .page-subtitle {
-  margin-left: auto;
-  margin-right: auto;
-  max-width: 700px;
-}
 
 .page-title {
   font: var(--h1);
@@ -2742,6 +2659,9 @@ a:hover { color: var(--color-primary); }
   flex: 1;
   min-width: 200px;
 }
+
+/* A text box in a filter bar or a library's browser is as tall as the filter buttons beside it (.form-select). */
+.filter-group > input.form-input, .browser-filter > input.form-input { height: 38px; }
 
 /* ── Filter dropdown (Rule Health / Promotion "Score", "Validate", "State") ──
  * Consolidates a sort selector + range/checklist inputs behind one
@@ -2800,10 +2720,23 @@ a:hover { color: var(--color-primary); }
 .tide-filter-dropdown { max-height: min(60vh, 420px); overflow-y: auto; }
 /* A rule library's browser: a choice that would show no rules (app.js hideEmptyChoices) */
 .tide-filter-dropdown label.rh-checkbox-row.is-empty-choice { display: none; }
-/* A filter dropdown in a rule library's settings row, and in its browser: sized like their inputs */
-.sigma-select-group .tide-filter-btn { min-width: 140px; height: auto; min-height: 0; padding: 0.4rem 0.6rem; font-size: 0.8rem; background: var(--color-bg-action); border: 1px solid var(--color-border); border-radius: var(--radius-sm); }
-.browser-filter > input, .browser-filter .tide-filter-btn { height: 1.9rem; }
-.browser-filter .tide-filter-btn { width: 100%; min-height: 0; padding: 0.35rem 0.5rem; font-size: 0.75rem; background: var(--color-bg-action); border: 1px solid var(--color-border-muted); border-radius: var(--radius-sm); }
+/* A filter dropdown in a rule library's settings row: the standard size, at least this wide (UX.md 9.5) */
+.sigma-select-group .tide-filter-btn { min-width: 140px; }
+/* A rule library's browser: the same filter button as a filters bar, filling its cell (UX.md 9.5) */
+.browser-filter .tide-filter-btn { width: 100%; }
+/* The filters a list uses less, under one Filters fold that counts those set (macros/filters.html more_filters) */
+.filters-more { grid-column: 1 / -1; }
+.filters-more__btn { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.2rem 0.1rem; list-style: none; cursor: pointer;
+  font-size: 0.8rem; font-weight: 600; color: var(--color-text-secondary); user-select: none; }
+.filters-more__btn::-webkit-details-marker { display: none; }
+.filters-more__btn:hover { color: var(--color-text); }
+.filters-more__btn:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; border-radius: var(--radius-sm); }
+.filters-more__chev { transition: transform var(--transition-fast); }
+.filters-more[open] .filters-more__chev { transform: rotate(90deg); }
+.filters-more__body { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.5rem; margin-top: 0.4rem; }
+/* In a filters bar (Rule Health) the fold takes a line of its own, its filters laid out as the bar's */
+.filters-bar > .filters-more { flex-basis: 100%; margin-top: -0.5rem; }
+.filters-bar .filters-more__body { display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-end; margin-top: 0.5rem; }
 /* Any other <select> as the same choice dropdown (app.js tideEnhanceSelect): the select stays,
    invisible over its button, so a form can still point at it when it is required and empty. */
 .tide-select { position: relative; display: inline-block; vertical-align: middle; min-width: 8rem; }
@@ -3074,6 +3007,9 @@ body.light {
   --color-sev-3-text:      #0969da;
   --color-sev-4-text:      #1a7f37;
   --color-sev-5-text:      #8250df;
+  --color-gitlab:          #fc6d26;
+  --color-gitlab-bg:       #fff1ea;
+  --color-gitlab-text:     #c2410c;
   --color-focus-ring:      rgba(9,105,218,0.2);
   --shadow-sm:    0 1px 2px rgba(31,35,40,0.08);
   --shadow:       0 1px 3px rgba(31,35,40,0.10), 0 3px 6px rgba(31,35,40,0.06);
@@ -3453,53 +3389,20 @@ details:not([open]) > summary > .docs-toc__chev { transform: rotate(-90deg); }
 
 
 /* ================================================================
- * MODULE GRID & CARDS  (Dashboard / Home)
+ * HOME  (pages/core/home.html): a section per list, two to a row, one on a narrow screen. Each is
+ * a system page's section (.sys-section) holding the rule window's items (.rm-items).
  * ================================================================ */
-.module-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 1rem;
-}
-
-.module-card {
-  background: var(--color-bg-action);
-  border: none;
-  border-top: 1px solid var(--color-highlight-2);
-  border-radius: var(--radius-md);
-  padding: 1rem;
-  transition: all var(--transition-fast);
-  text-decoration: none;
-  display: block;
-  box-shadow: var(--shadow-sm);
-}
-
-.module-card:hover {
-  background: var(--color-bg-action-hover);
-  transform: translateY(-2px);
-  box-shadow: var(--shadow);
-}
-
-.module-title {
-  font-weight: 600;
-  font-size: 0.9rem;
-  color: var(--color-text);
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.5rem;
-}
-
-.module-title svg { color: var(--color-primary); }
-
-.module-desc {
-  font-size: 0.75rem;
-  color: var(--color-text-muted);
-  line-height: 1.5;
-}
+.home-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; align-items: start; }
+@media (max-width: 900px) { .home-grid { grid-template-columns: minmax(0, 1fr); } }
+.home-grid > .sys-section { margin: 0; min-width: 0; }
+/* Its figures above the list: the severity pills, then the change in the period. */
+.home-card__figures { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem 0.6rem; margin-bottom: 0.75rem; }
+.home-card__figures .metric-change { margin: 0; justify-content: flex-start; }
+.home-card__more { display: inline-flex; align-items: center; gap: 0.3rem; margin: 0.75rem 0 0; font-size: 0.8rem; }
 
 
 /* ================================================================
- * OVERVIEW SECTION  (Home page)
+ * OVERVIEW SECTION  (Dashboard sections, Settings)
  * ================================================================ */
 .overview-section {
   background: var(--color-bg-surface);
@@ -3635,78 +3538,6 @@ a.metric-card--link:focus-visible { outline: 2px solid var(--color-primary); out
 /* A long list of choices (Rule Monitoring's issues): the whole row, in columns. */
 .dash-field--wide { grid-column: 1 / -1; }
 .dash-settings__checks--cols { display: grid; grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr)); }
-
-.tech-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 0.75rem;
-}
-
-.tech-item {
-  background: var(--color-bg-action);
-  border: none;
-  border-top: 1px solid var(--color-highlight-2);
-  border-radius: var(--radius-md);
-  padding: 0.75rem;
-  text-align: center;
-  box-shadow: var(--shadow-sm);
-}
-
-.tech-item svg { color: var(--color-primary); margin-bottom: 0.25rem; }
-
-.tech-item-name {
-  font-weight: 600;
-  font-size: 0.8rem;
-  color: var(--color-text);
-}
-
-.tech-item-desc {
-  font-size: 0.7rem;
-  color: var(--color-text-muted);
-  margin-top: 0.15rem;
-}
-
-/* Design principle items (Home page) */
-.principle-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-  gap: 1rem;
-}
-
-.principle-card {
-  display: flex;
-  gap: 0.75rem;
-  align-items: flex-start;
-  background: var(--color-bg-action);
-  border: none;
-  border-top: 1px solid var(--color-highlight-2);
-  border-radius: var(--radius-md);
-  padding: 1rem;
-  box-shadow: var(--shadow-sm);
-  transition: all var(--transition-fast);
-}
-
-.principle-card strong { color: var(--color-text); }
-
-.principle-card p {
-  font-size: 0.8rem;
-  color: var(--color-text-muted);
-  margin: 0;
-}
-
-/* Legacy principle-item (keep for compat) */
-.principle-item {
-  display: flex;
-  gap: 0.75rem;
-  align-items: flex-start;
-}
-
-.principle-item strong { color: var(--color-text); }
-
-.principle-item p {
-  font-size: 0.8rem;
-  color: var(--color-text-muted);
-}
 
 
 /* ================================================================
@@ -4819,22 +4650,7 @@ a.metric-card--link:focus-visible { outline: 2px solid var(--color-primary); out
   min-width: 120px;
 }
 
-.browser-filter > input,
-.browser-filter > select {
-  width: 100%;
-  padding: 0.35rem 0.5rem;
-  font-size: 0.75rem;
-  background: var(--color-bg-action);
-  border: 1px solid var(--color-border-muted);
-  border-radius: var(--radius-sm);
-  color: var(--color-text);
-}
-
-.browser-filter > input:focus,
-.browser-filter > select:focus {
-  outline: none;
-  border-color: var(--color-primary);
-}
+.browser-filter > input { width: 100%; }
 
 .rules-list-container {
   max-height: 180px;
@@ -5769,17 +5585,6 @@ body.is-resizing-slide-panel {
 
 
 /* ================================================================
- * FOOTER BAR
- * ================================================================ */
-.footer-bar {
-  text-align: center;
-  margin-top: 2rem;
-  padding-top: 1.5rem;
-  border-top: 1px solid var(--color-border);
-}
-
-
-/* ================================================================
  * 4.1.0 P5 — UI standards: breadcrumb, page-header, loading-state.
  * Centralised so every page renders the same chrome. The legacy
  * inline-styled breadcrumbs in baseline_detail / cve_detail /
@@ -5933,6 +5738,11 @@ body.is-resizing-slide-panel {
   color: var(--color-danger-text);
   border: 1px solid var(--color-danger);
 }
+.badge-gitlab {
+  background: var(--color-gitlab-bg);
+  color: var(--color-gitlab-text);
+  border: 1px solid var(--color-gitlab);
+}
 .badge-neutral {
   background: var(--color-bg-action);
   color: var(--color-text-muted);
@@ -6066,14 +5876,6 @@ body.is-resizing-slide-panel {
 
 /* Collapsed sidebar: hide group triggers' nav-label and chevron */
 .sidebar:not(.expanded) .nav-group__chevron { display: none; }
-/* Suppress tooltip on group triggers in collapsed mode — they show flyout submenus instead */
-.sidebar:not(.expanded) .nav-group__trigger[data-tooltip]::before,
-.sidebar:not(.expanded) .nav-group__trigger[data-tooltip]::after {
-  display: none !important;
-  content: '' !important;
-  opacity: 0 !important;
-  visibility: hidden !important;
-}
 /* Collapsed sidebar: flyout submenu on hover */
 .sidebar:not(.expanded) .nav-group__items {
   display: none;
@@ -6103,7 +5905,6 @@ body.is-resizing-slide-panel {
   opacity: 1;
   pointer-events: auto;
 }
-/* Show the trigger tooltip in collapsed mode (inherits from .nav-item[data-tooltip]) */
 
 @keyframes fadeIn {
   from { opacity: 0; }
@@ -6875,6 +6676,8 @@ body.is-resizing-slide-panel {
 .rc-flags { display: flex; flex-wrap: wrap; gap: 0.35rem; }
 .rc-flags .tide-lifecycle,
 .rc-flags .upstream-badge { font-size: 0.68rem; padding: 0.12rem 0.45rem; border-radius: var(--radius-badge); text-transform: none; letter-spacing: 0; font-weight: 500; }
+/* A symbol and how many (problems by severity, GitLab issues, #107): tight, so two fit the table's State column */
+.rc-flags [data-problems], .rc-flags .status-gitlab { gap: 0.25rem; padding-left: 0.4rem; padding-right: 0.4rem; }
 .rc-foot {
   display: flex;
   align-items: center;
@@ -6927,16 +6730,17 @@ body.is-resizing-slide-panel {
 /* Default widths are per column, not per position, because columns can be reordered.
    The Rule column takes whatever is left. The first column is the bulk-edit checkbox. */
 .rules-table th[data-col="score"]     { width: 4.75rem; }
-.rules-table th[data-col="siem"]      { width: 12rem; }
+.rules-table th[data-col="siem"]      { width: 9rem; }
 .rules-table th[data-col="state"]     { width: 6.75rem; }
 .rules-table th[data-col="severity"]  { width: 6.5rem; }
-.rules-table th[data-col="validated"] { width: 10.5rem; }
+.rules-table th[data-col="validated"] { width: 9rem; }
 .rules-table th[data-col="upstream"]  { width: 7.5rem; }
 .rules-table .rt-upstream .upstream-badge { white-space: normal; text-transform: none; letter-spacing: 0; line-height: 1.25; text-align: left; }
 .rules-table th[data-col="author"]    { width: 7.5rem; }
-.rules-table th[data-col="mitre"]     { width: 10.5rem; }
+.rules-table th[data-col="mitre"]     { width: 9rem; }
 .rules-table th[data-col="type"]      { width: 7.5rem; }
 .rules-table th[data-col="lang"]      { width: 4.25rem; }
+.rules-table th[data-col="alerts"]    { width: 7.5rem; }
 .rules-table th.rt-check { width: 2.5rem; padding-left: 0; padding-right: 0; text-align: center; }
 .rt-th--sortable { cursor: pointer; user-select: none; }
 .rt-th--sortable:hover { color: var(--color-text); }
@@ -7201,22 +7005,18 @@ body.is-resizing-slide-panel {
 .rm-test .form-select { width: auto; min-width: 4.75rem; height: 28px; padding-top: 0.1rem; padding-bottom: 0.1rem; font-size: 0.78rem; }
 .rm-test .btn { height: 28px; }
 
-/* Management: per-client rule scoring weights */
+/* Management: per-client rule scoring weights (the body of a client's Rule scoring section) */
 .scoring-editor { display: flex; flex-direction: column; gap: 0.75rem; padding: 0 0.25rem; }
-.scoring-editor__head { display: flex; align-items: center; gap: 0.6rem; cursor: pointer; list-style: none; user-select: none; }
-.scoring-editor__head::-webkit-details-marker { display: none; }
-.scoring-editor__head:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; border-radius: var(--radius-sm); }
-.scoring-editor__chev { margin-left: auto; display: inline-flex; color: var(--color-text-muted); transition: transform 0.15s; }
-.scoring-editor[open] > .scoring-editor__head .scoring-editor__chev { transform: rotate(90deg); }
-.scoring-editor[open] > .scoring-editor__head { margin-bottom: 0.75rem; }
-.scoring-editor__title { display: flex; align-items: center; gap: 0.4rem; margin: 0; font-size: 0.95rem; font-weight: 700; color: var(--color-text); }
+.scoring-editor__intro .badge { margin-right: 0.35rem; }
 .scoring-editor__intro, .scoring-editor__meta { margin: 0; font-size: 0.78rem; line-height: 1.45; color: var(--color-text-muted); }
 .scoring-editor__msg { margin: 0; padding: 0.5rem 0.75rem; border-radius: var(--radius-md); font-size: 0.8rem; }
 .scoring-editor__msg--ok { color: var(--color-success); border: 1px solid var(--color-success); }
 .scoring-editor__msg--error { color: var(--color-danger); border: 1px solid var(--color-danger); background: var(--color-sev-1-bg); }
 .scoring-form { display: flex; flex-direction: column; gap: 0.75rem; }
 .scoring-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr)); gap: 1rem 2rem; }
-.scoring-group__title { margin: 0 0 0.4rem; font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-text-muted); }
+/* A group's heading inside a section: a scoring group, or a part of a client's settings (#108) */
+.scoring-group__title, .section-subhead { margin: 0 0 0.4rem; font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-text-muted); }
+.section-subhead { margin-bottom: 0.6rem; padding: 0 0.25rem; }
 .scoring-row { display: grid; grid-template-columns: minmax(0, 1fr) 5rem 5.5rem; align-items: center; gap: 0.6rem; padding: 0.25rem 0; font-size: 0.82rem; color: var(--color-text-secondary); cursor: help; }
 .scoring-row__input { width: 5rem; height: 30px; padding: 0.3rem 0.5rem; }
 .scoring-row__default { font-size: 0.7rem; color: var(--color-text-muted); }
@@ -7493,7 +7293,6 @@ body.is-resizing-slide-panel {
 .metric-card--tip:hover,
 .metric-card--tip:focus-within { z-index: 20; }
 .metric-card--tip:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
-.metric-card .metric-sub span + span { margin-left: 0.35rem; }
 .metric-tip {
   display: none;
   position: absolute;
@@ -7702,7 +7501,6 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 
 /* Client → Assigned Users: a user's roles on this client (several allowed). */
 .client-roles { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 0.25rem 0.75rem; }
-.client-roles__label { font-size: 0.72rem; }
 .client-role-box { font-size: 0.75rem; }
 .client-role-box input:disabled + * , .client-role-box:has(input:disabled) { opacity: 0.6; cursor: not-allowed; }
 
@@ -7889,6 +7687,7 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .rm-item--warn { border-left-color: var(--color-warning); }
 .rm-item--error { border-left-color: var(--color-danger); }
 .rm-item--info { border-left-color: var(--color-info); }
+.rm-item--gitlab { border-left-color: var(--color-gitlab); }
 .rm-item--gap { border-left-color: var(--color-warning); }
 .rm-item--gap .rm-item__name { color: var(--color-warning-text); }
 .rm-item--na, .rm-item--muted { border-left-color: var(--color-border-strong); }
@@ -7973,7 +7772,7 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .sys-header__main { min-width: 0; flex: 1 1 auto; }
 .sys-header__clf { font-size: 0.7rem; vertical-align: middle; margin-left: 0.5rem; }
 /* Sections that fill what the page (a .rule-browser-page: Rule Health's layout) leaves below its
-   header and figures, so every section's heading is always in view: a folded one is its heading;
+   header and figures (the Baselines page), so every section's heading is always in view: a folded one is its heading;
    open ones share the height, Baselines twice what the others get (at least 12rem, none taller
    than its content: what one doesn't need goes to the others), and scroll inside themselves. A
    section's filter bar stays at the top of it, and a technique grid scrolls under its filter bar
@@ -7983,6 +7782,13 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .sys-fill > .sys-section { flex: 1 1 0; min-height: 12rem; max-height: max-content; display: flex; flex-direction: column; }
 .sys-fill > .sys-section[data-section="baselines"] { flex-grow: 2; }
 .sys-fill > .sys-section.is-collapsed { flex: 0 0 auto; min-height: 0; }
+/* A system's page (sys-fill--paged): the same sections, one window each. The page scrolls; an open
+   section is as tall as it needs up to the window's height, scrolling inside itself, so the one you're
+   on fills the window and scrolling past its end moves the page on to the next. It keeps Rule Health's
+   page class for its filter bar's scripts, so the page's fixed height is undone here. */
+.main-content:has(.sys-fill--paged) { display: block; height: auto; min-height: 100vh; overflow: visible; overflow-x: clip; }
+.rule-browser-page:has(> .sys-fill--paged) { display: block; }
+.sys-fill--paged > .sys-section[data-section] { flex: 0 0 auto; min-height: 0; max-height: calc(100vh - 2rem); }
 .sys-fill > .sys-section > .sys-section__head { flex: 0 0 auto; }
 .sys-fill > .sys-section > .sys-section__body {
   flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-gutter: stable;
@@ -8000,7 +7806,7 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 }
 @media (max-width: 768px) {   /* as Rule Health: the page scrolls as a whole */
   .sys-fill, .sys-fill > .sys-section, .sys-fill > .sys-section:not(.is-collapsed) > .sys-section__body:has(> #system-steps-grid) { display: block; }
-  .sys-fill > .sys-section { max-height: none; min-height: 0; margin-bottom: 1rem; }
+  .sys-fill > .sys-section, .sys-fill--paged > .sys-section[data-section] { max-height: none; min-height: 0; margin-bottom: 1rem; }
   .sys-fill > .sys-section > .sys-section__body, .sys-fill #system-steps-grid { overflow: visible; margin-right: 0; padding: 0; }
 }
 .sys-sections { display: flex; flex-direction: column; gap: 1rem; margin-top: 1rem; }
@@ -8010,7 +7816,14 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .sys-section__body { margin-top: 0.85rem; }
 .sys-section.is-collapsed .sys-section__body,
 .sys-section.is-collapsed .sys-section__tools { display: none; }
-.sys-section.is-collapsed .rm-collapse svg { transform: rotate(-90deg); }
+/* The heading is the fold control (window_ui.section_title): plain text filling the heading's room,
+   its chevron turned while folded */
+.sys-section__toggle { all: unset; display: flex; align-items: center; gap: 0.45rem; width: 100%; min-width: 0; cursor: pointer; border-radius: var(--radius-sm); }
+.sys-section__toggle:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.sys-section__chev { display: inline-flex; color: var(--color-text-secondary); }
+.sys-section__chev svg { transition: transform var(--transition-fast); }
+.sys-section__toggle:hover .sys-section__chev { color: var(--color-text); }
+.sys-section.is-collapsed .sys-section__chev svg { transform: rotate(-90deg); }
 .sys-note { margin-bottom: 0.85rem; background: var(--color-info-bg); border-color: var(--color-info); color: var(--color-info-text); }
 .sys-filters { margin-bottom: 0.85rem; }
 .sys-filter-list { display: flex; flex-direction: column; max-height: 16rem; overflow-y: auto; }
@@ -8031,6 +7844,14 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 
 /* Rule Monitoring (#67): the Systems page's groups, issue → cause → rules; Rule Health's table. */
 .rmon-list { min-height: 0; }
+
+/* Detection Backlog: a fold per ATT&CK technique (Rule Monitoring's list); on a narrow screen its
+   figures go under its name. */
+.backlog-id { font-family: var(--font-mono); font-size: 0.8rem; }
+@media (max-width: 768px) {
+  .backlog-list .sys-group__head { flex-wrap: wrap; }
+  .backlog-list .sys-group__meta { flex-basis: 100%; margin-left: 1.4rem; }
+}
 .rmon-meaning { margin: 0 0 0.6rem; font-size: 0.82rem; line-height: 1.45; }
 .rmon-table { min-width: 48rem; }
 .rmon-table th:nth-child(2) { width: 10rem; }
@@ -8136,6 +7957,22 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .mw-baseline__form .btn-primary { align-self: flex-end; }
 .mw-baseline__hint { margin: 0.25rem 0; font-size: 0.75rem; color: var(--color-text-muted); }
 .mw-sigma--deprecated, .mw-sigma--unsupported { color: var(--color-danger); }
+/* How to detect (components/attack_detection.html): ATT&CK's detection strategy for a technique, one
+   card per platform's analytic (reference, so a neutral edge), its log sources and what to tune. */
+.rm-item--ref { border-left-color: var(--color-border-strong); }
+.ad-strategy + .ad-strategy { margin-top: 0.85rem; }
+.ad-strategy__head { display: flex; align-items: center; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.5rem; }
+.ad-strategy__name { font-size: 0.8rem; font-weight: 600; color: var(--color-text); }
+.ad-logs { list-style: none; margin: 0.45rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.25rem; }
+.ad-logs li { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0.25rem 0.4rem; font-size: 0.75rem; }
+.ad-logs__channel { color: var(--color-text-secondary); overflow-wrap: anywhere; }
+.ad-other { margin-top: 0.5rem; }
+.ad-platforms { margin: 0 0 0.6rem; }
+/* A system's Log sources (partials/system_log_sources.html): the events column takes what's left. */
+.ad-table th[data-col="source"] { width: 13rem; }
+.ad-table th[data-col="platform"] { width: 9rem; }
+.ad-table th[data-col="steps"] { width: 6.5rem; }
+.ad-table td { overflow-wrap: anywhere; }
 /* A coverage bar; --pct (0-100) set on the element. */
 .cov-bar { height: 0.45rem; border-radius: 999px; background: var(--bg-level-3-inner); border: 1px solid var(--color-border-muted); overflow: hidden; }
 .cov-bar > span { display: block; height: 100%; width: calc(var(--pct, 0) * 1%); background: var(--color-danger); }
@@ -8402,8 +8239,9 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .btn.btn-h38 { height: 38px; }
 .sigma-select.sigma-select--wide { min-width: 180px; }
 .browser-filter.browser-filter--wide { flex: 2; }
-/* The Sigma, Elastic and Hunting browsers: one filter grid of five columns, the search two wide, wrapping alike */
-.lib-workbench .browser-filters { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+/* The Sigma, Elastic and Hunting browsers: the search two thirds wide beside MITRE technique, the rest
+   under one Filters fold below (UX.md 9.5) */
+.lib-workbench .browser-filters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .lib-workbench .browser-filter--wide { grid-column: span 2; }
 /* A library page fits the window, as Rule Health does (rule-browser-page): the header and settings
    stay put, and the browser and the open item reach the bottom of the page */
@@ -8486,14 +8324,8 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .lib-detail__h-note { margin-left: 0.5rem; font-weight: 400; letter-spacing: 0; text-transform: none; }
 .lib-more { padding: 0.75rem; text-align: center; font-size: 0.78rem; color: var(--color-text-muted); }
 .lib-detail__tools { display: inline-flex; align-items: center; gap: 0.4rem; flex-shrink: 0; }
-/* A fact with an explanation on hover or focus: wraps, and opens below (the pane's top would clip it) */
+/* A fact with an explanation on hover or focus (its title, in the shared tip) */
 .lib-tip { cursor: help; }
-.lib-tip[data-tooltip]::before { white-space: normal; width: max-content; max-width: 22rem; line-height: 1.45;
-  bottom: auto; top: calc(100% + 8px); left: 0; transform: translateY(-4px); text-transform: none; letter-spacing: 0; }
-.lib-tip[data-tooltip]::after { bottom: auto; top: calc(100% - 4px); left: 1rem; transform: translateY(-4px);
-  border-top-color: transparent; border-bottom-color: var(--color-bg-layer-5); }
-.lib-tip[data-tooltip]:hover::before, .lib-tip[data-tooltip]:hover::after,
-.lib-tip[data-tooltip]:focus-visible::before, .lib-tip[data-tooltip]:focus-visible::after { opacity: 1; visibility: visible; transform: none; }
 .lib-tip:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
 .lib-fact-note { font-weight: 400; color: var(--color-text-muted); }
 /* Where this client has a library rule (Elastic Rules: In your SIEMs) */

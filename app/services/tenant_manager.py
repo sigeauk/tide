@@ -372,6 +372,8 @@ def _create_tenant_schema(conn):
             created_at TIMESTAMP DEFAULT now()
         )
     """)
+    from app.services import wazuh_assets
+    wazuh_assets.ensure(conn)          # Wazuh agents as devices: the agent, vulnerability and alert tables
     conn.execute("""
         CREATE TABLE IF NOT EXISTS software_inventory (
             id VARCHAR PRIMARY KEY DEFAULT (uuid()),
@@ -656,6 +658,8 @@ def _create_tenant_schema(conn):
     DatabaseService.add_step_risk_columns(conn)
     # ── The library rule a technique was made from (same columns as Migration 97) ──
     DatabaseService.add_step_source_columns(conn)
+    # ── The platforms a person adds to a system (same column as Migration 109) ──
+    DatabaseService.add_system_platforms_column(conn)
 
     # ── App settings (key-only PK in tenant DB) ──
     conn.execute("""
@@ -745,7 +749,11 @@ def _mirror_sql(alias: str, table: str, client_id: str) -> str:
     if table == "client_siem_map":
         select = f"SELECT * FROM client_siem_map WHERE client_id = '{client_id}'"
     elif table == "siem_inventory":
-        select = ("SELECT * REPLACE (CAST(NULL AS VARCHAR) AS api_token_enc) FROM siem_inventory "
+        # A Wazuh SIEM's indexer password (sealed, in extra_config) stays out too.
+        select = ("SELECT * REPLACE (CAST(NULL AS VARCHAR) AS api_token_enc, "
+                  "CASE WHEN extra_config IS NULL THEN NULL ELSE "
+                  "json_merge_patch(extra_config, '{\"indexer_password_enc\": null}') END AS extra_config) "
+                  "FROM siem_inventory "
                   f"WHERE id IN (SELECT siem_id FROM client_siem_map WHERE client_id = '{client_id}')")
     else:
         raise ValueError(f"not a mirrored table: {table}")

@@ -1,0 +1,31 @@
+{#
+  What the browser security policy blocked: Clear this list (app.services.csp), a super admin's, inside the
+  check's row as Delete these files is (partials/diagnostics_orphans.html).
+    preview  how much it clears, and the button
+    done     what was cleared
+  Context: mode, kept / cleared ({kinds, times}).
+#}
+{% from "macros/icons.html" import icon %}
+
+{% if mode == 'done' %}
+<div class="diag-fix diag-fix--done" role="status">
+    <p>{{ icon('check-circle', '14') }} Cleared {{ cleared.kinds }} kind{{ 's' if cleared.kinds != 1 }} of block
+       ({{ cleared.times }} report{{ 's' if cleared.times != 1 }}). Run the check again to see anything browsers have reported since.</p>
+</div>
+
+{% else %}
+<div class="diag-fix">
+    {% if kept.kinds %}
+    <p><strong>Clear this list</strong>: {{ kept.kinds }} kind{{ 's' if kept.kinds != 1 }} of block, reported
+       {{ kept.times }} time{{ 's' if kept.times != 1 }}. Clear it once they are dealt with: a browser reports anything
+       the policy still blocks again.</p>
+    <form class="diag-fix__confirm" hx-post="/api/diagnostics/csp/clear" hx-target="closest .diag-fix" hx-swap="outerHTML"
+          hx-disabled-elt="find button" hx-indicator="find .htmx-indicator">
+        <button name="Clear This List" type="submit" class="btn btn-danger btn-sm">{{ icon('trash-2', '13') }} Clear it</button>
+        <span class="htmx-indicator text-secondary">{{ icon('loader', '14', 'spin') }} Clearing…</span>
+    </form>
+    {% else %}
+    <p class="text-muted">Browsers have reported nothing the policy blocked.</p>
+    {% endif %}
+</div>
+{% endif %}

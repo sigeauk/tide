@@ -1,0 +1,36 @@
+{# Partial: system_hardening.html -- a system's Hardening section: its Wazuh devices' CIS benchmark results by
+   policy (wazuh_assets.system_hardening): how many devices run it, their average and lowest score, and the
+   checks most of them fail, each a link to nothing but with its CIS id. Context: hardening (list). #}
+{% from "macros/icons.html" import icon %}
+<div class="rm-items">
+    {% for p in hardening %}
+    <div class="rm-item">
+        <div class="rm-item__main">
+            <div class="rm-item__name">{{ p.name or p.policy_id }}</div>
+            <div class="rm-item__meta">
+                <span class="status-pill status-{{ 'success' if p.avg_score >= 80 else ('warning' if p.avg_score >= 50 else 'danger') }}" title="Average of the devices' scores">{{ p.avg_score }}% average</span>
+                <span>{{ p.devices }} device{{ 's' if p.devices != 1 }}</span>
+                {% if p.devices > 1 %}<span class="text-muted" title="The device with the lowest score">lowest {{ p.worst_score }}% on {{ p.worst }}</span>{% endif %}
+                <span class="text-muted">{{ p.total_failing }} check{{ 's' if p.total_failing != 1 }} failing somewhere</span>
+            </div>
+            {% if p.failing %}
+            <details data-fold="hardening-most-failed" class="rm-fold mt-sm">
+                <summary><span>Most failed checks</span></summary>
+                <table class="rules-table host-vuln-table">
+                    <thead><tr><th>CIS</th><th>Check</th><th>Failing on</th></tr></thead>
+                    <tbody>
+                    {% for c in p.failing %}
+                    <tr>
+                        <td class="mono">{{ c.cis_ids | join(', ') or '-' }}</td>
+                        <td>{{ c.title }}</td>
+                        <td>{{ c.failing }} of {{ c.devices }}</td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </details>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>

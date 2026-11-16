@@ -8,6 +8,7 @@ import logging
 import re
 
 from fastapi import APIRouter, Request, Query
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse
 
 from app.api.deps import CurrentUser, RequireUser, DbDep, ActiveClient
@@ -160,6 +161,15 @@ async def deploy_rule(request: Request, rule_id: str, db: DbDep, user: RequireUs
             return _form_error(problem)
     else:
         payload = er.kibana_payload(rule, "", str(form.get("enabled") or "").lower() == "true")
+    # Elastic's own validator (#7) on the rule as it would be deployed: a query it can't parse isn't,
+    # when the client says so.
+    from app.services import elastic_validator
+    target = next((s for s in db.get_client_siems(client_id) or []
+                   if s.get("id") == siem_id and str(s.get("space") or "default") == space), None)
+    problems = await run_in_threadpool(elastic_validator.check_rule, db, target, payload) if target else None
+    stopped, note = elastic_validator.verdict(problems, elastic_validator.stops(db, client_id), "deploy the rule")
+    if stopped:
+        return _form_error(stopped)
     confirm = str(form.get("confirm_version") or "") == "1"
     actor = user.name or user.username
     status, message, key, ask = await _run_in_context(
@@ -175,6 +185,7 @@ async def deploy_rule(request: Request, rule_id: str, db: DbDep, user: RequireUs
     else:
         response = request.app.state.templates.TemplateResponse(
             request, "components/rule_modal.html",
-            _build_rule_modal_context(db, client_id, deployed, key[2], key[1], flash=message))
+            _build_rule_modal_context(db, client_id, deployed, key[2], key[1],
+                                      flash=message + note))
     response.headers["HX-Trigger"] = "refreshRules"
     return response

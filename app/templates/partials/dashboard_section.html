@@ -20,10 +20,10 @@
     {% set metrics = view.metrics %}{% set filters = view.filters %}{% set stale_days = view.stale_days %}{% set flows = view.flows or {} %}
     {% include "partials/rule_monitoring_metrics.html" %}
 {% elif src == 'system' %}
-    {% set totals = view.totals %}{% set coverage_undefined = view.coverage_undefined %}{% set changes = view.changes or {} %}
+    {% set totals = view.totals %}{% set coverage_undefined = view.coverage_undefined %}{% set changes = view.changes or {} %}{% set wazuh = view.wazuh %}
     {% include "partials/system_steps_metrics.html" %}
 {% elif src == 'threat_landscape' %}
-    {% set metrics = view.metrics %}{% set last_sync_time = view.last_sync_time %}
+    {% set metrics = view.metrics %}{% set last_sync = view.last_sync %}
     {% include "partials/threat_metrics.html" %}
 {% elif src == 'baselines' %}
     {% set baselines_overview = view.overview %}{% set baselines_rollup = view.rollup %}{% set changes = view.changes or {} %}
@@ -51,7 +51,7 @@
     {% for siem in view.client_siems %}
     <div class="integration-card">
         <div class="integration-card-name">{{ siem.label }} &middot; {{ siem.name }}</div>
-        <div class="integration-card-url">{{ siem.kibana_url }}</div>
+        <div class="integration-card-url">{{ siem.kibana_url or siem.manager_url or '' }}</div>
         <span class="integration-card-status status-{{ 'active' if siem.is_active else 'inactive' }}">{{ 'Connected' if siem.is_active else 'Inactive' }}</span>
     </div>
     {% else %}
@@ -63,7 +63,7 @@
     {% endfor %}
     {% endif %}
     {% if 'opencti' in metric_keys %}
-    {# The client's OpenCTI connectors (Linked CTI Connectors), as their last Test found them. #}
+    {# The client's OpenCTI connectors (Linked CTI connectors), as their last Test found them. #}
     {% for o in view.client_opencti %}
     <div class="integration-card">
         <div class="integration-card-name">OpenCTI &middot; {{ o.label }}</div>

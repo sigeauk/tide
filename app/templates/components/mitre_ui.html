@@ -6,11 +6,11 @@
 {% from "components/window_ui.html" import collapse_ctl, drag_ctl %}
 {% from "components/mitre_pill.html" import mitre_pill %}
 
-{# A window section: collapsible head, movable, body from the call block. #}
-{% macro panel(key, title, count=none) -%}
-<div class="rm-panel" data-fold="mw-{{ key }}" data-section="{{ key }}" data-section-label="{{ title }}">
+{# A window section: collapsible head, movable, body from the call block; ``open=false`` draws it folded. #}
+{% macro panel(key, title, count=none, open=true) -%}
+<div class="rm-panel{{ '' if open else ' is-collapsed' }}" data-fold="mw-{{ key }}" data-section="{{ key }}" data-section-label="{{ title }}">
     <div class="rm-panel__head">
-        {{ collapse_ctl(title) }}
+        {{ collapse_ctl(title, open) }}
         <h3 class="rm-panel__title">{{ title }}{% if count is not none %} <span class="rm-fold__count">{{ count }}</span>{% endif %}</h3>
         {{ drag_ctl(title) }}
     </div>
@@ -119,10 +119,10 @@
 
 {# A window section listing related ATT&CK objects: id, name (opens that object's window when its
    kind has one, else its page), and a short line under the name. #}
-{% macro related_section(key, title, items, kind, src, window_kinds, summary_field='description', empty='None.') -%}
-<div class="rm-panel" data-fold="mw-{{ key }}" data-section="{{ key }}" data-section-label="{{ title }}">
+{% macro related_section(key, title, items, kind, src, window_kinds, summary_field='description', empty='None.', open=true) -%}
+<div class="rm-panel{{ '' if open else ' is-collapsed' }}" data-fold="mw-{{ key }}" data-section="{{ key }}" data-section-label="{{ title }}">
     <div class="rm-panel__head">
-        {{ collapse_ctl(title) }}
+        {{ collapse_ctl(title, open) }}
         <h3 class="rm-panel__title">{{ title }} <span class="rm-fold__count">{{ items | length }}</span></h3>
         {{ drag_ctl(title) }}
     </div>

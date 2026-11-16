@@ -7,15 +7,17 @@
   the same sections, each with its own "…" menu and Move: Description (Update edits the title and
   description in place) · Sigma rules (suggested from its ATT&CK ids, or searched; convert each) ·
   Risks (priority and category, copied to each system the template is applied to) · MITRE ATT&CK
-  (Update edits its ATT&CK ids in place). Arrangement remembered per browser
+  (Update edits its ATT&CK ids in place) · How to detect (ATT&CK's detection strategies for its
+  techniques, every platform: components/attack_detection.html). Arrangement remembered per browser
   (app.js, tide.templateWindowLayout).
-  Context: detail (from get_template_step_detail). Or, opened blank by Add technique or "+" beside
+  Context: detail (from get_template_step_detail), detection. Or, opened blank by Add technique or "+" beside
   < > (which adds another to the same template): new (partials/technique_new_form.html) and a blank
   detail -- the title is all it needs to be created.
 #}
 {% from "macros/icons.html" import icon, tactic_icon %}
 {% from "components/mitre_pill.html" import mitre_pill %}
 {% from "components/mitre_ui.html" import technique_list %}
+{% from "components/attack_detection.html" import detect_section %}
 {% from "components/window_ui.html" import collapse_ctl, drag_ctl, section_menu, sections_item, window_menu %}
 {% from "macros/modal.html" import close_button %}
 {% from "components/ui/loading_state.html" import loading_state %}
@@ -188,6 +190,8 @@
             {% endif %}
           </div>
         </div>
+
+        {{ detect_section(detection | default([]), detail.technique_ids, new=new) }}
       </aside>
     </div>
   </div>

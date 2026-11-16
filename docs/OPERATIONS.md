@@ -69,7 +69,7 @@ In **Rule Health**, the **⋮** menu holds the sync options for the client you h
 - **Sync** reads the rules from every destination (a SIEM and one of its spaces) linked to the client. Hover over it to sync one destination only.
 - **Sync with mappings** does the same, and also asks each SIEM again which fields its indexes have. Use it after changing index mappings. A normal sync only rechecks index patterns not checked in the last 24 hours.
 
-You can leave the page while a sync runs. The **Last Synced** card shows when the client's rules were last synced. A sync that didn't finish cleanly is shown under the page title:
+You can leave the page while a sync runs. The **Last synced** card shows when the client's rules were last synced. A sync that didn't finish cleanly is shown under the page title:
 
 | Result | What it means |
 |--------|---------------|
@@ -88,7 +88,7 @@ A rule deleted in Kibana is marked **Deprecated** at the next sync, keeping its 
 - **Destinations whose last two syncs could not read every rule**: TIDE still counts rules there that may have been deleted in Kibana. To clear one you know was deleted, open it and use **Sync this rule**.
 - **Rules sharing a rule id in Kibana**: Kibana holds two rules under one rule id, usually a copy and Elastic's own prebuilt rule. TIDE holds one of them; delete the one you don't need in Kibana.
 
-Syncs run when someone starts one. TIDE's figures for a destination are as of its last sync, so **Destinations not synced for 7 days** lists those that have fallen behind, with when each was last synced. Rule Health's **Last Synced** card counts them in red, and reports say when the rules were last synced.
+Syncs run when someone starts one. TIDE's figures for a destination are as of its last sync, so **Destinations not synced for 7 days** lists those that have fallen behind, with when each was last synced. Rule Health's **Last synced** card counts them in red, and reports say when the rules were last synced.
 
 ---
 
@@ -174,7 +174,7 @@ In **Settings → Management → Backups**, **Restore steps** on a backup's row 
 
     `sed -i 's/^TIDE_VERSION=.*/TIDE_VERSION=<version>/' .env`
 
-    which rewrites the line that starts with `TIDE_VERSION=` (`-i` changes the file itself; `s/old/new/` replaces the matched line). `grep ^TIDE_VERSION .env` shows the version set. If `.env` is written by your deployment, for example an Ansible playbook, set the version there instead: a change made on the host is overwritten at the next deployment. That version's image must be on the host, or Docker must be able to pull it; without internet access, `docker load` it first, as in the [Quick start](../README.md#2-get-the-images).
+    which rewrites the line that starts with `TIDE_VERSION=` (`-i` changes the file itself; `s/old/new/` replaces the matched line). `grep ^TIDE_VERSION .env` shows the version set. If `.env` is written by your deployment, for example an Ansible playbook, set the version there instead: a change made on the host is overwritten at the next deployment. That version's image must be on the host, or Docker must be able to pull it; without internet access, `docker load` it first, as in the [Quick start](../README.md#2-get-the-images). Put back that version's `docker-compose.yml` and `nginx/` folder too (the copies you kept when upgrading), and after step 5 run `docker compose restart tide-nginx`.
 
 3. **Set your current data aside.** Every database and `credentials.key` move to a new folder named for this moment, such as `data-before-restore-20261020-183000`. Nothing is deleted, and the rest of `data/`, such as logs and the backup schedule, stays as it is.
 
@@ -200,23 +200,25 @@ Read the release's notes in the [Changelog](../CHANGELOG.md) first: some release
 
 1. **Back up.** **Back up now** in Management → Backups, or by hand as above. Keep that backup until the new version runs well. If it doesn't, restore the backup into the version that made it, or into a later release once there is one (see [Restore a backup](#restore-a-backup)).
 
-2. **Set the new version.** Set `TIDE_VERSION` in `.env` to the new release: edit the file (for example `nano .env`), or run the command below, which rewrites the line that starts with `TIDE_VERSION=`. If `.env` is written by your deployment, for example an Ansible playbook, set the version there instead: a change made on the host is overwritten at the next deployment.
+2. **Get the release's files.** Copy the new release's `docker-compose.yml` and `nginx/` folder over yours, as you did when installing (see the [Quick start](../README.md#1-get-the-files)); keep your `.env`, `certs/` and `data/`. If you changed either file, make the same change in the new copy. Keep your old copies until the new version runs well: going back needs them too.
+
+3. **Set the new version.** Set `TIDE_VERSION` in `.env` to the new release: edit the file (for example `nano .env`), or run the command below, which rewrites the line that starts with `TIDE_VERSION=`. If `.env` is written by your deployment, for example an Ansible playbook, set the version there instead: a change made on the host is overwritten at the next deployment.
 
     `sed -i 's/^TIDE_VERSION=.*/TIDE_VERSION=<version>/' .env`
 
-3. **Get its image.** With internet access, `docker compose pull` downloads it; without, `docker load` it as in the [Quick start](../README.md#2-get-the-images).
+4. **Get its image.** With internet access, `docker compose pull` downloads it; without, `docker load` it as in the [Quick start](../README.md#2-get-the-images).
 
     `docker compose pull`
 
-4. **Start it.** TIDE's container is created again with the new version, and TIDE upgrades its databases as it starts. If your deployment starts TIDE, run it instead.
+5. **Start it, then restart nginx.** TIDE's container is created again with the new version, and TIDE upgrades its databases as it starts. nginx reads its configuration only as it starts, and `up -d` leaves it running when its own settings haven't changed, so restart it to load the release's `nginx.conf`. If your deployment starts TIDE, run it instead.
 
-    `docker compose up -d`
+    `docker compose up -d && docker compose restart tide-nginx`
 
-5. **Watch it upgrade.** When the release changes the databases, the log says `Migrations complete` once they're upgraded; `Application startup complete` says TIDE is ready (Ctrl+C stops showing the log, not TIDE).
+6. **Watch it upgrade.** When the release changes the databases, the log says `Migrations complete` once they're upgraded; `Application startup complete` says TIDE is ready (Ctrl+C stops showing the log, not TIDE).
 
     `docker compose logs -f tide-app`
 
-6. **Review rule updates.** Each release brings Elastic's rules and the Sigma rules as they were when it was built. In **Rule Health**, set the **Upstream** filter to **Elastic update available** and **Sigma update available** to see your rules whose Elastic or Sigma original has changed since, and open each one: **Upstream → Review update** shows the changes section by section, so you take only what you want. Kibana updates Elastic's prebuilt rules itself (Rules → Rule updates).
+7. **Review rule updates.** Each release brings Elastic's rules and the Sigma rules as they were when it was built. In **Rule Health**, set the **Upstream** filter to **Elastic update available** and **Sigma update available** to see your rules whose Elastic or Sigma original has changed since, and open each one: **Upstream → Review update** shows the changes section by section, so you take only what you want. Kibana updates Elastic's prebuilt rules itself (Rules → Rule updates).
 
 ---
 
@@ -281,6 +283,7 @@ The file is rewritten and checked table by table before it replaces the original
 - **Sync activity:** every rule and Threat Landscape sync for the last 90 days, with **Retry**.
 - **Fixes:** some checks offer a fix. Fixes are off for every client until a super admin turns on **Allow diagnostic fixes** for it. A fix shows what it will change first, copies the client's database to `data/diagnostics-backups/` before changing anything, and can be undone.
 - **Database files with no client:** database files in `data/` that belong to no client, such as those of a client deleted before TIDE 6.4.0 (which left them behind) or an old CTI database. **Delete these files** lists them again and, once you type the word it asks for, deletes them for good (super admins only).
+- **What the browser security policy blocked:** TIDE tells browsers which scripts, styles and connections its pages may use (a Content-Security-Policy), and browsers block anything else. They report what they block to TIDE, which lists it here (and logs it the first time). Report what is listed from TIDE's own pages; something from a browser extension (`chrome-extension`, `moz-extension`) can be ignored. If the policy stops something in TIDE working, set `CSP_MODE=report-only` in `.env` (see [Settings](CONFIGURATION.md#optional)) until a release fixes it. Once what is listed is dealt with, **Clear this list** empties it (super admins only); a browser reports anything the policy still blocks again.
 - **Access:** who has Platform Admin and who has Support on each client (super admins only).
 - **Query:** run a read-only SQL statement against TIDE's own database or a client's, and save the ones you use again (super admins only). It runs on a copy of the database, so it never changes or holds up the live one.
 
@@ -292,7 +295,7 @@ Every check, look-up, fix and access change is recorded in the audit log.
 
 | What you see | What to do |
 |--------------|------------|
-| A rule sync **Failed** or **Partly done** | Read the reason under Rule Health's title. Usually a SIEM was unreachable or refused its API key: check it with **Test Connection** in the SIEM's dialog in Management → Integrations, then click **Retry**. |
+| A rule sync **Failed** or **Partly done** | Read the reason under Rule Health's title. Usually a SIEM was unreachable or refused its API key: check it with **Test connection** in the SIEM's dialog in Management → Integrations, then click **Retry**. |
 | A rule sync shows **Interrupted** | TIDE restarted during it. Click **Retry**. |
 | A rule sync shows **Done, steps failed** | The rules were read, but a step afterwards failed; the result says which and why. Click **Retry**. If it fails again, report the error from **Diagnostics → Sync activity** with TIDE's log from that time. |
 | Diagnostics shows **A database stopped after a DuckDB fatal error** | DuckDB stopped a client's database, so TIDE restarted itself, which repairs the rule history indexes. If that client's pages work, nothing more is needed. If they say its database stopped, a second error came within 10 minutes and TIDE didn't restart again: restart it with `docker compose restart tide-app`, and if it happens again, back up the data folder and report the error. |

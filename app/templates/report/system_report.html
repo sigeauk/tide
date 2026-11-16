@@ -4,8 +4,10 @@
     ─────────────────────────────────────────────────────────────────
       • Figures are the system page's own: the metric strip, statuses and each technique as its
         window shows it, for the baselines chosen at export.
-      • Technical reports add the coverage matrix and a detail entry per technique.
-      • Coverage trend, device and CVE sections are partials (system_report_trend / _devices / _cves).
+      • Technical reports add the coverage matrix and a detail entry per technique. The executive
+        report is its own template, a short briefing (system_report_ciso.html), sharing these styles.
+      • Coverage trend, device and CVE sections are partials (system_report_trend / _devices / _cves);
+        the CVE breakdown is left out when no device has a known exploited vulnerability.
     Airgap-safe: NO external fonts, images or URLs.
 -->
 {%- set _clf_colors = {'Official':'#1a7f37','Confidential':'#9a6700','Secret':'#c0392b','Top Secret':'#c0392b'} -%}
@@ -20,304 +22,7 @@
 <head>
 <meta charset="utf-8"/>
 <title>{{ report.system.name }} — {% if technical %}Technical Deep Dive{% else %}CISO Executive Summary{% endif %}</title>
-<style>
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-/* ══════════════════════════════════════════════════════
-   PAGE RULES
-   ══════════════════════════════════════════════════════ */
-@page cover {
-    size: A4 portrait;
-    margin: 0;
-    background-color: #ffffff;
-    @top-left      { content: none; }
-    @top-center    { content: none; }
-    @bottom-center { content: none; }
-}
-
-@page {
-    size: A4 portrait;
-    margin: 15mm;
-    background-color: #ffffff;
-    @top-left {
-        content: string(sysname);
-        font-family: "Liberation Sans", Arial, sans-serif;
-        font-size: 6.5pt; color: #6e7681;
-    }
-    @top-center {
-        content: "{{ report.classification or 'Official' }}";
-        font-family: "Liberation Sans", Arial, sans-serif;
-        font-size: 6.5pt; font-weight: 700;
-        color: {{ clf_color }};
-    }
-    @bottom-center {
-        content: "TIDE — Threat Informed Detection Engine  ·  Page " counter(page) " of " counter(pages) "  ·  {{ report.classification or 'Official' }}";
-        font-family: "Liberation Sans", Arial, sans-serif;
-        font-size: 6pt; color: #6e7681;
-    }
-}
-
-/* ══════════════════════════════════════════════════════
-   DESIGN TOKENS  (light / print-friendly)
-   ══════════════════════════════════════════════════════ */
-:root {
-    --navy:      #0d1117;
-    --primary:   #3b82f6;
-    --primary-d: #1a3a5c;
-
-    --text:    #1a1f2e;
-    --text-2:  #3b4252;
-    --text-3:  #6e7681;
-
-    --border:  #d0d7de;
-    --row-alt: #f6f8fa;
-    --th-bg:   #1c2128;
-    --th-tx:   #58a6ff;
-
-    --danger:  #c0392b;
-    --warning: #9a6700;
-    --success: #1a7f37;
-    --info:    #1a4fa3;
-
-    --gap-bg: #fff0ee;  --gap-bd: #e67e74;  --gap-tx: #c0392b;
-    --cov-bg: #eefaf1;  --cov-bd: #52c87b;  --cov-tx: #1a7f37;
-    --amb-bg: #fef9ee;  --amb-bd: #d4a84b;  --amb-tx: #9a6700;
-    --inf-bg: #eef4ff;  --inf-bd: #70a8e8;  --inf-tx: #1a4fa3;
-
-    --ff:      "Liberation Sans", Arial, Helvetica, sans-serif;
-    --ff-mono: "Liberation Mono", "Courier New", monospace;
-}
-
-html, body {
-    font-family: var(--ff);
-    font-size: 8.5pt;
-    line-height: 1.55;
-    background: transparent;
-    color: var(--text);
-}
-
-/* ══════════════════════════════════════════════════════
-   COVER PAGE
-   ══════════════════════════════════════════════════════ */
-.cover {
-    page: cover;
-    page-break-after: always;
-    background: #ffffff;
-    display: flex; flex-direction: column;
-    height: 297mm; padding: 0;
-    text-align: center; color: var(--text);
-}
-.cover-topbar    { width:100%; height:12mm; background:var(--primary); flex-shrink:0; }
-.cover-bottombar { width:100%; height:4mm;  background:var(--primary); flex-shrink:0; margin-top:auto; }
-.cover-body      { flex:1; display:flex; flex-direction:column; justify-content:center; padding:10mm 20mm 8mm 20mm; }
-.cover-logo      { font-size:42pt; font-weight:700; color:var(--primary); letter-spacing:0.12em; display:block; margin-bottom:2mm; }
-.cover-tagline   { font-size:8pt; color:var(--text-2); text-transform:uppercase; letter-spacing:0.18em; margin-bottom:18mm; }
-.cover-rule      { border:none; border-top:1px solid #3b434d; width:80mm; margin:0 auto 16mm auto; }
-.cover-title     { font-size:24pt; font-weight:700; color:var(--text); margin-bottom:3mm; line-height:1.2; }
-.cover-system    { font-size:13pt; font-weight:700; color:var(--text-2); margin-bottom:2mm; string-set: sysname content(); }
-.cover-subtitle  { font-size:9pt; color:var(--text-2); margin-bottom:6mm; }
-.cover-level-pill {
-    display:inline-block; background:#21262d; color:#8b949e;
-    font-size:7pt; font-weight:600; padding:1mm 5mm; border-radius:3mm;
-    border:1px solid #30363d; text-transform:uppercase; letter-spacing:0.1em; margin-bottom:8mm;
-}
-.cover-clf-badge {
-    display:inline-block; font-size:8pt; font-weight:700;
-    color:{{ clf_color }}; border:1.5px solid {{ clf_color }};
-    padding:1.5mm 6mm; border-radius:2mm; text-transform:uppercase;
-    letter-spacing:0.1em; margin-bottom:6mm;
-}
-.cover-sys-clf {
-    display:inline-block; font-size:7pt; font-weight:700; padding:1mm 4mm; border-radius:3mm;
-    border:1px solid var(--border); color:var(--text-2); text-transform:uppercase; letter-spacing:0.08em;
-}
-.cover-baselines { font-size:7.5pt; color:var(--text-2); margin-bottom:8mm; }
-.cover-meta { margin-top:auto; padding-top:6mm; font-size:7pt; color:#6e7681; border-top:1px solid #21262d; }
-
-/* ══════════════════════════════════════════════════════
-   SECTION BANNERS
-   ══════════════════════════════════════════════════════ */
-.section-banner {
-    border-left:3px solid var(--border); padding:1.5mm 0 1.5mm 5mm;
-    margin-bottom:5mm; page-break-inside:avoid; break-after:avoid;
-}
-.section-banner-title { font-size:11pt; font-weight:700; color:var(--text-2); line-height:1.2;
-                        bookmark-level:1; bookmark-label:content(); }
-.section-banner-sub   { font-size:7pt; color:var(--text-3); margin-top:1mm; }
-.sub-heading {
-    font-size:9pt; font-weight:700; color:var(--text); margin:5mm 0 2mm 0; break-after:avoid;
-    bookmark-level:2; bookmark-label:content();
-}
-
-/* ══════════════════════════════════════════════════════
-   METRIC CARDS  (the system page's metric strip)
-   ══════════════════════════════════════════════════════ */
-.summary-grid {
-    display:grid; grid-template-columns:repeat(6,1fr); gap:3mm; margin-bottom:5mm;
-}
-.summary-grid--7 { grid-template-columns:repeat(7,1fr); }
-.stat-card {
-    background:#f3f4f6; border:1px solid var(--border); border-top:3px solid var(--primary);
-    border-radius:2mm; padding:3.5mm 2.5mm; text-align:center; page-break-inside:avoid;
-}
-.stat-value {
-    font-size:18pt; font-weight:700; color:#1a4fa3; line-height:1; display:block; margin-bottom:1.5mm;
-}
-.stat-value.danger  { color: var(--danger); }
-.stat-value.success { color: var(--success); }
-.stat-value.warning { color: var(--warning); }
-.stat-value.plain   { color: var(--text); }
-.stat-label {
-    font-size:5.5pt; color:var(--text-2); font-weight:700; text-transform:uppercase; letter-spacing:0.1em; display:block;
-}
-.stat-sub { font-size:5.5pt; color:var(--text-3); display:block; margin-top:1mm; line-height:1.3; }
-
-/* ══════════════════════════════════════════════════════
-   TABLES
-   ══════════════════════════════════════════════════════ */
-table {
-    width:100%; border-collapse:collapse; font-size:7.5pt;
-    table-layout:auto; page-break-inside:auto; border:1px solid var(--border); margin-bottom:5mm;
-}
-thead { display: table-header-group; }
-table tr { page-break-inside:avoid; }
-th {
-    background:var(--th-bg); color:var(--th-tx); text-transform:uppercase;
-    letter-spacing:0.06em; font-size:5.5pt; font-weight:700;
-    padding:2.5mm 3mm; text-align:left; border:1px solid var(--border);
-}
-td {
-    padding:2mm 3mm; border:1px solid var(--border); vertical-align:top;
-    color:var(--text-2); line-height:1.4; word-wrap:break-word; overflow-wrap:break-word;
-}
-tbody tr:nth-child(even) td { background:var(--row-alt); }
-tr.tactic-row td {
-    background:var(--primary-d) !important; color:#ffffff; font-weight:700; font-size:6.5pt;
-    text-transform:uppercase; letter-spacing:0.06em; padding:1.5mm 3mm;
-}
-td.num  { font-family:var(--ff-mono); font-size:6.5pt; white-space:nowrap; }
-td.mono { font-family:var(--ff-mono); font-size:6.5pt; }
-.muted  { color:var(--text-3); }
-.flag-danger { color:var(--danger); font-weight:700; }
-a { color:inherit; text-decoration:none; }
-
-/* ══════════════════════════════════════════════════════
-   BADGES & PILLS
-   ══════════════════════════════════════════════════════ */
-.badge {
-    display:inline-block; padding:0.8mm 2.5mm; border-radius:10mm;
-    font-size:6pt; font-weight:700; line-height:1.4; white-space:nowrap;
-    border:1px solid transparent; vertical-align:middle;
-}
-.badge-red    { background:var(--gap-bg); border-color:var(--gap-bd); color:var(--gap-tx); }
-.badge-amber  { background:var(--amb-bg); border-color:var(--amb-bd); color:var(--amb-tx); }
-.badge-green  { background:var(--cov-bg); border-color:var(--cov-bd); color:var(--cov-tx); }
-.badge-grey   { background:#f0f0f0; border-color:#b0b0b0; color:#6e7681; }
-.badge-primary{ background:var(--inf-bg); border-color:var(--inf-bd); color:var(--inf-tx); }
-.badge-outline{ background:#ffffff; border-color:var(--border); color:var(--text-2); }
-
-.prio { display:inline-block; padding:0.8mm 2.5mm; border-radius:1mm; font-size:6pt; font-weight:700;
-        white-space:nowrap; border:1px solid transparent; vertical-align:middle; }
-.prio-critical { background:#c0392b; color:#ffffff; }
-.prio-high     { background:var(--gap-bg); border-color:var(--gap-bd); color:var(--gap-tx); }
-.prio-medium   { background:var(--amb-bg); border-color:var(--amb-bd); color:var(--amb-tx); }
-.prio-low      { background:#f0f0f0; border-color:#b0b0b0; color:#6e7681; }
-
-.mitre-pill {
-    display:inline-block; padding:0.5mm 2mm; border-radius:1mm; font-family:var(--ff-mono);
-    font-size:6pt; font-weight:700; margin:0.3mm 0.5mm 0.3mm 0; white-space:nowrap; vertical-align:middle;
-    background:#ffffff; border:1px solid var(--border); color:var(--text-2);
-}
-
-/* ══════════════════════════════════════════════════════
-   COVERAGE BAR
-   ══════════════════════════════════════════════════════ */
-.coverage-bar { width:100%; height:2mm; background:var(--border); border-radius:1mm; overflow:hidden; margin:1mm 0; }
-.coverage-bar .fill { height:100%; border-radius:1mm; }
-.coverage-bar .fill.good { background:var(--success); }
-.coverage-bar .fill.warn { background:var(--warning); }
-.coverage-bar .fill.bad  { background:var(--danger); }
-
-/* ══════════════════════════════════════════════════════
-   TECHNIQUE DETAIL
-   ══════════════════════════════════════════════════════ */
-.tech {
-    border:1px solid var(--border); border-left:3px solid var(--border); border-radius:2mm;
-    padding:3mm 4mm; margin-bottom:4mm;
-}
-.tech-red   { border-left-color:var(--danger); }
-.tech-amber { border-left-color:#d4a84b; }
-.tech-green { border-left-color:var(--success); }
-.tech-grey  { border-left-color:#b0b0b0; }
-.tech-head  { break-inside:avoid; break-after:avoid; margin-bottom:2mm; }
-.tech-title { font-size:9.5pt; font-weight:700; color:var(--text); margin-bottom:1.5mm;
-              bookmark-level:3; bookmark-label:content(); }
-.tech-pills { margin-bottom:1mm; }
-.tech-pills > * { margin-right:1mm; }
-.tech-meta  { font-size:6.5pt; color:var(--text-3); }
-.tech-desc  { font-size:7.5pt; color:var(--text-2); margin-bottom:2mm; white-space:pre-line; }
-.tech-label { font-size:6pt; font-weight:700; text-transform:uppercase; letter-spacing:0.08em;
-              color:var(--text-3); margin:2.5mm 0 1mm 0; break-after:avoid; }
-
-.cov-item {
-    border:1px solid var(--border); border-left:3px solid var(--border); border-radius:1.5mm;
-    padding:1.5mm 2.5mm; margin-bottom:1.5mm; break-inside:avoid; font-size:7pt;
-}
-.cov-success { border-left-color:var(--success); }
-.cov-warning { border-left-color:#d4a84b; background:var(--amb-bg); }
-.cov-danger  { border-left-color:var(--danger); background:var(--gap-bg); }
-.cov-info    { border-left-color:var(--inf-bd); }
-.cov-muted   { border-left-color:#b0b0b0; }
-.cov-when    { font-weight:700; color:var(--text); }
-.cov-name    { font-weight:700; color:var(--text); }
-.cov-note    { font-size:6.5pt; color:var(--text-3); margin-top:0.5mm; }
-.empty       { font-size:7pt; color:var(--text-3); font-style:italic; }
-
-.attack-list { font-size:7pt; }
-.attack-list div { margin-bottom:0.5mm; }
-
-/* ══════════════════════════════════════════════════════
-   TOC, LEGEND, NARRATIVE
-   ══════════════════════════════════════════════════════ */
-.toc-item {
-    display:flex; align-items:baseline; gap:2mm; padding:1.5mm 0;
-    border-bottom:1px dotted var(--border); font-size:8pt;
-}
-.toc-item .toc-num  { font-weight:700; color:var(--primary); min-width:6mm; }
-.toc-item .toc-text { color:var(--text); flex:1; }
-.toc-item .toc-page::after { content: target-counter(attr(href), page); color:var(--text-3); }
-
-.legend {
-    display:flex; gap:4mm; font-size:6.5pt; margin-bottom:5mm; color:var(--text-3);
-}
-.legend .swatch {
-    display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:1.5mm; vertical-align:middle;
-}
-.exec-narrative {
-    background: #f6f8fa; border: 1px solid var(--border); border-left: 3px solid var(--primary);
-    border-radius: 2mm; padding: 4mm 5mm; margin-bottom: 6mm; font-size: 8.5pt;
-    line-height: 1.6; color: var(--text);
-}
-.callout {
-    border:1px solid var(--amb-bd); background:var(--amb-bg); color:var(--amb-tx);
-    border-radius:2mm; padding:2.5mm 4mm; margin-bottom:5mm; font-size:7.5pt;
-}
-.callout-danger { border-color:var(--gap-bd); background:var(--gap-bg); color:var(--gap-tx); }
-
-/* Legacy helpers used by the device partials */
-.detail-card {
-    background:#f6f8fa; border:1px solid var(--border); border-radius:2mm;
-    padding:3mm 4mm; margin-bottom:3mm; page-break-inside:avoid;
-}
-.detail-card-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:2mm; }
-
-.page-break { page-break-after:always; }
-.avoid-break { page-break-inside:avoid; }
-.report-footer {
-    margin-top:10mm; padding-top:4mm; border-top:1px solid var(--border);
-    font-size:6.5pt; color:var(--text-3); text-align:center;
-}
-</style>
+{% include "report/system_report_style.html" %}
 </head>
 <body>
 
@@ -375,11 +80,15 @@ a { color:inherit; text-decoration:none; }
   {%- if report.trend -%}{%- set _ = toc.append(('sec-trend', 'Coverage Trend')) -%}{%- endif -%}
 {%- endif -%}
 {%- if show_devices -%}{%- set _ = toc.append(('sec-devices', 'Device Exposure')) -%}{%- endif -%}
+{%- if report.wazuh -%}
+  {%- set _ = toc.append(('sec-wazuh', 'Vulnerabilities')) -%}
+  {%- set _ = toc.append(('sec-hardening', 'Hardening')) -%}
+{%- endif -%}
 {%- if technical and show_baselines -%}
   {%- set _ = toc.append(('sec-matrix', 'Coverage Matrix')) -%}
   {%- if report.detailed_techniques -%}{%- set _ = toc.append(('sec-detail', 'Technique Detail')) -%}{%- endif -%}
 {%- endif -%}
-{%- if technical and show_devices -%}
+{%- if technical and show_devices and report.total_cves -%}
   {%- set _ = toc.append(('sec-cves', 'CVE Breakdown — By Vulnerability')) -%}
   {%- set _ = toc.append(('sec-hosts', 'CVE Breakdown — By Host')) -%}
 {%- endif -%}
@@ -451,7 +160,8 @@ a { color:inherit; text-decoration:none; }
 
 {%- set non_alerting = report.techniques | selectattr('non_alerting') | list | length -%}
 {%- set review_due = report.techniques | selectattr('review_due') | list | length -%}
-<table class="avoid-break">
+<table class="cols avoid-break">
+    <colgroup><col class="w-16"/><col class="w-16"/><col/></colgroup>
     <thead><tr><th>Status</th><th>Techniques</th><th>What it means</th></tr></thead>
     <tbody>
         <tr><td><span class="badge badge-green">Covered</span></td><td>{{ t.covered }}{% if non_alerting %} <span class="muted">({{ non_alerting }} non-alerting)</span>{% endif %}{% if t.not_effective %} <span class="flag-danger">({{ t.not_effective }} not effective)</span>{% endif %}</td>
@@ -471,34 +181,7 @@ a { color:inherit; text-decoration:none; }
     <div class="section-banner-sub">Each baseline's techniques on {{ report.system.name }}</div>
 </div>
 
-<table>
-    <thead>
-        <tr><th>Baseline</th><th>Techniques</th><th>Covered</th><th>No coverage</th><th>Known gaps</th><th>N/A</th><th style="width:18%">Coverage</th><th>Effective</th></tr>
-    </thead>
-    <tbody>
-        {% for bl in report.baselines %}
-        {%- set p = bl.coverage_pct -%}
-        <tr>
-            <td><strong style="color:var(--text);">{{ bl.name }}</strong>
-                {% if bl.description %}<div class="muted" style="font-size:6.5pt;">{{ bl.description }}</div>{% endif %}
-                {% if bl.applied_at %}<div class="muted" style="font-size:6pt;">Applied {{ bl.applied_at.strftime('%Y-%m-%d') }}</div>{% endif %}</td>
-            <td>{{ bl.totals.total }}</td>
-            <td><span class="badge badge-green">{{ bl.totals.covered }}</span></td>
-            <td><span class="badge badge-red">{{ bl.totals.none }}</span></td>
-            <td><span class="badge badge-amber">{{ bl.totals.gap }}</span></td>
-            <td><span class="badge badge-grey">{{ bl.totals.na }}</span></td>
-            <td>
-                {% if report.coverage_undefined %}<span class="muted">not scored</span>{% else %}
-                <span class="badge {% if p >= 80 %}badge-green{% elif p >= 40 %}badge-amber{% else %}badge-red{% endif %}">{{ p }}%</span>
-                <div class="coverage-bar"><div class="fill {% if p >= 80 %}good{% elif p >= 40 %}warn{% else %}bad{% endif %}" style="width:{{ p }}%"></div></div>
-                {% endif %}
-            </td>
-            {%- set ep = bl.effective_pct %}
-            <td>{% if report.coverage_undefined %}<span class="muted">—</span>{% else %}<span class="badge {% if ep >= 80 %}badge-green{% elif ep >= 40 %}badge-amber{% else %}badge-red{% endif %}">{{ ep }}%</span>{% endif %}</td>
-        </tr>
-        {% endfor %}
-    </tbody>
-</table>
+{% include "report/system_report_baselines.html" %}
 
 <!-- ══════════════════════════════════════════════════════
      PRIORITY GAPS
@@ -509,7 +192,8 @@ a { color:inherit; text-decoration:none; }
 </div>
 
 {% if report.priority_gaps %}
-<table>
+<table class="cols">
+    <colgroup><col class="w-11"/><col/><col class="w-15"/><col class="w-16"/><col class="w-14"/><col class="w-18"/></colgroup>
     <thead><tr><th>Priority</th><th>Technique</th><th>ATT&amp;CK</th><th>Baseline</th><th>Status</th><th>Reason</th></tr></thead>
     <tbody>
         {% for g in report.priority_gaps %}
@@ -537,7 +221,8 @@ a { color:inherit; text-decoration:none; }
 </div>
 
 {% if report.siem_coverage %}
-<table>
+<table class="cols">
+    <colgroup><col/><col class="w-22"/><col class="w-12"/><col class="w-18"/><col class="w-18"/></colgroup>
     <thead><tr><th>Destination</th><th>In SIEM coverage</th><th>Rules</th><th>Techniques mapped</th><th>Techniques covered</th></tr></thead>
     <tbody>
         {% for s in report.siem_coverage %}
@@ -558,8 +243,9 @@ a { color:inherit; text-decoration:none; }
 
 {% if report.uncounted_mappings %}
 <div class="sub-heading">Rules that don't count</div>
-<div class="callout callout-danger avoid-break">These rules are mapped, but are disabled, or sit where this system is not measured, so they do not count as coverage. Enable the rule, add its destination to the system's SIEM coverage, or map the rule where the system is measured.</div>
-<table>
+<div class="callout callout-danger avoid-break keep-with-next">These rules are mapped, but are disabled, or sit where this system is not measured, so they do not count as coverage. Enable the rule, add its destination to the system's SIEM coverage, or map the rule where the system is measured.</div>
+<table class="cols">
+    <colgroup><col/><col class="w-13"/><col class="w-18"/><col class="w-20"/><col class="w-16"/><col class="w-12"/></colgroup>
     <thead><tr><th>Rule</th><th>Why</th><th>Destination</th><th>Technique</th><th>Baseline</th><th>Added</th></tr></thead>
     <tbody>
         {% for u in report.uncounted_mappings %}
@@ -586,6 +272,11 @@ a { color:inherit; text-decoration:none; }
 {% include "report/system_report_devices.html" %}
 {% endif %}
 
+{% if report.wazuh %}
+<div class="page-break"></div>
+{% include "report/system_report_wazuh.html" %}
+{% endif %}
+
 {% if technical and show_baselines %}
 <!-- ══════════════════════════════════════════════════════
      COVERAGE MATRIX  (baseline → tactic → technique)
@@ -600,8 +291,9 @@ a { color:inherit; text-decoration:none; }
 {%- set rows = report.techniques | selectattr('baseline_id', 'equalto', bl.id) | list -%}
 <div class="sub-heading">{{ bl.name }}{% if not report.coverage_undefined %} — {{ bl.coverage_pct }}% covered, {{ bl.effective_pct }}% effective{% endif %}</div>
 {% if rows %}
-<table>
-    <thead><tr><th style="width:4%">#</th><th style="width:27%">Technique</th><th style="width:13%">ATT&amp;CK</th><th style="width:9%">Priority</th><th style="width:12%">Status</th><th>Covered by</th></tr></thead>
+<table class="cols">
+    <colgroup><col class="w-6"/><col class="w-26"/><col class="w-14"/><col class="w-11"/><col class="w-14"/><col/></colgroup>
+    <thead><tr><th>#</th><th>Technique</th><th>ATT&amp;CK</th><th>Priority</th><th>Status</th><th>Covered by</th></tr></thead>
     <tbody>
         {%- set ns = namespace(tactic=none) -%}
         {% for tech in rows %}
@@ -687,14 +379,12 @@ a { color:inherit; text-decoration:none; }
 {% endif %}
 {% endif %}{# technical and show_baselines #}
 
-{% if technical and show_devices %}
+{% if technical and show_devices and report.total_cves %}
 {% include "report/system_report_cves.html" %}
 {% endif %}
 
 <div class="report-footer">
-    Report generated by TIDE — Threat Informed Detection Engine
-    &nbsp;|&nbsp; {{ report.generated_at }}
-    &nbsp;|&nbsp; {{ report.classification or 'Official' }} — {{ report.system.name }}
+    Report generated by TIDE — Threat Informed Detection Engine · {{ report.generated_at }} · {{ report.classification or 'Official' }} — {{ report.system.name }}
 </div>
 
 </body>

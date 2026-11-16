@@ -62,19 +62,19 @@
     {% endfor %}
 
     {% if notes_html %}
-    <details class="rm-fold lib-detail__fold" open>
+    <details data-fold="notes" class="rm-fold lib-detail__fold" open>
         <summary>Notes<span class="rm-fold__count">{{ notes_html | length }}</span></summary>
         <div class="rm-prose">{% for note in notes_html %}{{ note }}{% endfor %}</div>
     </details>
     {% endif %}
     {% if hunt.refs %}
-    <details class="rm-fold lib-detail__fold">
+    <details data-fold="references" class="rm-fold lib-detail__fold">
         <summary>References<span class="rm-fold__count">{{ hunt.refs | length }}</span></summary>
         <ul class="rm-links">{% for ref in hunt.refs %}<li><a href="{{ ref }}" target="_blank" rel="noopener noreferrer">{{ icon('external-link', '12') }} {{ ref }}</a></li>{% endfor %}</ul>
     </details>
     {% endif %}
     {% if source %}
-    <details class="rm-fold lib-detail__fold">
+    <details data-fold="source" class="rm-fold lib-detail__fold">
         <summary>Source</summary>
         <p class="lib-detail__path" title="Where it is in Elastic's detection-rules repository">{{ hunt.file_path }}</p>
         <pre class="query-display rm-query lib-detail__source">{{ source | highlight_source('toml') }}</pre>

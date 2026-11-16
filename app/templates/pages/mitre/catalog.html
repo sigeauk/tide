@@ -30,7 +30,7 @@
 </div>
 
 <div class="rule-scroll-region">
-<div id="catalog-grid" class="cat-grid-host" data-rule-list
+<div id="catalog-grid" class="cat-grid-host" data-fold-store="tide.mitreFolds" data-rule-list
      hx-get="/api/mitre/grid/{{ spec.key }}" hx-trigger="catalogFilter"
      hx-include="#catalog-filters input, #catalog-filters select" hx-swap="innerHTML">
     {{ loading_state("Loading " ~ spec.title | lower ~ "…") }}

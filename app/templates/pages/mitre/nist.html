@@ -5,7 +5,7 @@
 {% block title %}NIST 800-53 | TIDE{% endblock %}
 
 {% block content %}
-{{ breadcrumb(items=[('Home', '/'), ('MITRE', '/mitre'), ('NIST', none)]) }}
+{{ breadcrumb(items=[('Home', '/'), ('MITRE', '/mitre'), ('NIST 800-53', none)]) }}
 
 
 {# As Rule Health (rule-browser-page): the header, figures and search stay put; the families scroll. #}
@@ -13,7 +13,7 @@
 <div class="page-header flex items-start justify-between gap-md">
     <div>
         <h1 class="page-title-hero">NIST 800-53 {{ help_button('nist') }}</h1>
-        <p class="page-subtitle">Control families and mapped capability descriptions served from the bundled NIST mappings file.</p>
+        <p class="page-subtitle">NIST 800-53 controls, and the ATT&amp;CK techniques each one mitigates.</p>
     </div>
 </div>
 
@@ -36,9 +36,9 @@
 </div>
 
 <div class="rule-scroll-region">
-<div id="nist-groups" class="cve-list">
+<div id="nist-groups" class="cve-list" data-fold-store="tide.nistFolds">
     {% for group in nist_groups %}
-    <details class="cve-card-item cve-card-item--available block" data-collapse-key="nist-family-{{ group.code }}">
+    <details class="cve-card-item cve-card-item--available block" data-fold="family-{{ group.code }}">
         <summary class="row-grid row-grid--top cursor-pointer">
             <div class="cve-card-item__id">{{ group.code }}</div>
             <div class="cve-card-item__body">
@@ -54,7 +54,7 @@
         </summary>
         <div class="cve-list nist-capability-list">
             {% for capability in group.capabilities %}
-            <details class="cve-card-item cve-card-item--available nist-capability" data-collapse-key="nist-family-{{ group.code }}-capability-{{ capability.slug }}">
+            <details class="cve-card-item cve-card-item--available nist-capability" data-fold="family-{{ group.code }}-capability-{{ capability.slug }}">
                 <summary class="row-grid row-grid--top cursor-pointer">
                     <div class="cve-card-item__id">{{ capability.capability_id or capability.slug }}</div>
                     <div class="cve-card-item__body">

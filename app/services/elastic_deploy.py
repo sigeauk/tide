@@ -66,9 +66,10 @@ def payload_from_form(rule: dict, form, username: str, technique_lookup: dict) -
 
 
 def destination(db, client_id: str, siem_id: str, space: str) -> Optional[dict]:
-    """The tenant's linked destination ``(siem_id, space)``, or None if it is not linked."""
+    """The tenant's linked Elastic destination ``(siem_id, space)``, or None if it is not one."""
+    from app.services.siem_kinds import elastic_only
     return next(
-        (s for s in (db.get_client_siems(client_id) or [])
+        (s for s in elastic_only(db.get_client_siems(client_id))
          if s.get("id") == siem_id and str(s.get("space") or "default") == space),
         None,
     )

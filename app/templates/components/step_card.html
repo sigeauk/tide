@@ -3,7 +3,8 @@
 
   Context: step (a row from get_system_steps), system_id; or, on the Baselines page, template and a
   row from get_template_steps -- a template's technique, with no coverage or rule count (it has
-  none until applied to a system).
+  none until applied to a system). A row with system_name (the Detection Backlog's, across
+  systems) names its system first.
 
   Laid out as a rule card (components/rule_card.html): ring | title, and beneath it one line of
   facts (status on this system -- Partial coverage for known gaps beside coverage that counts --,
@@ -22,7 +23,7 @@
 #}
 {% from "macros/icons.html" import icon, tactic_icon %}
 {% from "components/mitre_pill.html" import mitre_pill %}
-{% from "components/window_ui.html" import not_effective_pill, technique_ring %}
+{% from "components/window_ui.html" import not_effective_pill, tag, technique_ring %}
 
 {% set status = step.status | default('red') %}
 {% set status_class = {'green': 'success', 'amber': 'warning', 'grey': 'muted', 'red': 'danger'}.get(status, 'danger') %}
@@ -35,13 +36,14 @@
      data-step-open data-rule-open role="button" tabindex="0" aria-label="Open technique: {{ step.title }}"
      hx-get="{{ '/api/baselines/tactics/' ~ step.step_id if template else '/api/systems/' ~ system_id ~ '/steps/' ~ step.step_id }}"
      hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
-     hx-trigger="click, keyup[key=='Enter']">
+     hx-trigger="tide-open" data-opens>
 
     <div class="rc-head">
         {% if not template %}{{ technique_ring(status, step.evidence_score, step.evidence_rule, how=step.evidence_how) }}{% endif %}
         <div class="rc-heading">
             <div class="rc-title" title="{{ step.title }}">{{ step.title }}</div>
             <div class="rc-meta">
+                {% if step.system_name %}{{ tag(step.system_name, title='System', kind='system') }}{% endif %}
                 {% if not template %}<span class="rc-sev text-{{ status_class }}" title="{{ status_label }} on this system">{{ status_label }}</span>{% endif %}
                 <span class="cat-card__tactic">{{ tactic_icon(step.tactic, '12') }} {{ step.tactic | default('Other') }}</span>
                 {% if step.priority %}<span class="rc-sev rc-sev--{{ step.priority }}" title="Priority">{{ step.priority | capitalize }}</span>{% endif %}

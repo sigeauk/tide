@@ -1266,20 +1266,55 @@ def fetch_alert_counts(kibana_url, api_key, space, days=ALERT_DAYS, session=None
     return {"ok": True, "rows": rows, "truncated": True}
 
 
+EXCEPTION_READS = 8     # exception lists read at once
+
+
 def fetch_exception_items(kibana_url, api_key, space, lists, session=None):
     """Every item of each exception list in ``lists`` (``(list_id, namespace_type)``) the rules of
     ``space`` use (Rule Monitoring, #75): ``{(list_id, namespace_type): [item], or None when Kibana
-    didn't give them all}``. One paged read per list; a list that fails doesn't stop the others."""
+    didn't give them all}``. One paged read per list, ``EXCEPTION_READS`` at once; a list that fails
+    doesn't stop the others."""
     session = session or _new_session(api_key, kibana_url)
     base = kibana_url.rstrip("/")
-    out = {}
-    for list_id, namespace_type in sorted(lists):
+
+    def read(key):
         try:
-            out[(list_id, namespace_type)] = get_exception_list_entries(list_id, space, session, base, namespace_type)
+            return get_exception_list_entries(key[0], space, session, base, key[1])
         except Exception as exc:   # noqa: BLE001 - its last items stand; the sync goes on
-            log_error(f"Could not read exception list {list_id} in {space}: {type(exc).__name__}: {exc}")
-            out[(list_id, namespace_type)] = None
-    return out
+            log_error(f"Could not read exception list {key[0]} in {space}: {type(exc).__name__}: {exc}")
+            return None
+
+    keys = sorted(lists)
+    if not keys:
+        return {}
+    with ThreadPoolExecutor(max_workers=min(EXCEPTION_READS, len(keys))) as pool:
+        return dict(zip(keys, pool.map(read, keys)))
+
+
+def fetch_exception_lists(kibana_url, api_key, space, session=None):
+    """The exception lists of ``space``, its own and those shared by every space, each without its
+    items (name, description, type): ``{(list_id, namespace_type): list}``, or None when Kibana didn't
+    give them all. One paged read for the space (the GitLab backup writes them, #90)."""
+    session = session or _new_session(api_key, kibana_url)
+    prefix = _space_api_prefix(kibana_url.rstrip("/"), space)
+    out, page, per_page = {}, 1, 100
+    while True:
+        try:
+            response = session.get(f"{prefix}/api/exception_lists/_find", params={
+                "namespace_type": "single,agnostic", "per_page": per_page, "page": page})
+        except Exception as exc:   # noqa: BLE001 - the last details stand; the sync goes on
+            log_error(f"Could not list the exception lists in {space}: {type(exc).__name__}: {exc}")
+            return None
+        if response.status_code != 200:
+            log_error(f"Could not list the exception lists in {space}: HTTP {response.status_code}")
+            return None
+        data = response.json() or {}
+        for found in data.get("data") or []:
+            if found.get("list_id"):
+                out[(str(found["list_id"]), str(found.get("namespace_type") or "single"))] = found
+        if not data.get("data") or page * per_page >= int(data.get("total") or 0):
+            return out
+        page += 1
 
 
 # ==========================================
@@ -1523,10 +1558,17 @@ def _process_rules(session, base_url, all_rules, check_mappings=True, catalogue=
                     continue
                 if 'tactic' in t:
                     tactics.append(t['tactic'].get('name', ''))
-                for tech in t.get('technique', []):
-                    if tech.get('id'):
-                        mitre_ids.append(tech.get('id'))
-                    techniques.append(f"{tech.get('id')} {tech.get('name')}")
+                # A technique and its sub-techniques (T1059 › T1059.001), as Kibana nests them; each
+                # counted once, though the rule lists it under several tactics.
+                for tech in t.get('technique') or []:
+                    for item in [tech, *((tech or {}).get('subtechnique') or [])]:
+                        if not isinstance(item, dict):
+                            continue
+                        if item.get('id') and item['id'] not in mitre_ids:
+                            mitre_ids.append(item['id'])
+                        label = f"{item.get('id')} {item.get('name')}"
+                        if label not in techniques:
+                            techniques.append(label)
 
         rule_data = {
             "rule_id": r.get('rule_id'),
@@ -2523,7 +2565,7 @@ def _put_rule(session, base_url: str, space: str, rule: dict, on_recreated=None)
     if not _is_decrypt_failure(response):
         return response, None
     rule_id = rule.get("rule_id")
-    _logger.warning("Rule %s has invalid API key credentials on target cluster (space %s). "
+    _logger.warning("Rule %s has invalid API key credentials on target cluster (space %s). "  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure # the rule id and space, no key
                     "Triggering _update_api_key refresh...", rule_id, space)
     try:
         existing = _lookup_rule_by_rule_id(session, base_url, space, rule_id)
@@ -2537,11 +2579,11 @@ def _put_rule(session, base_url: str, space: str, rule: dict, on_recreated=None)
             retry = session.put(url, json=rule)
             if not _is_decrypt_failure(retry):
                 if retry.status_code in (200, 201):
-                    _logger.warning("Rule %s: API key refreshed in space %s and the update applied.", rule_id, space)
+                    _logger.warning("Rule %s: API key refreshed in space %s and the update applied.", rule_id, space)  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure # the rule id and space, no key
                     return retry, "Its API key in Kibana couldn't be read, so TIDE refreshed it first."
                 return retry, None
         else:
-            _logger.warning("Rule %s: _update_api_key failed in space %s: HTTP %s %s",
+            _logger.warning("Rule %s: _update_api_key failed in space %s: HTTP %s %s",  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure # Kibana's error text, which carries no key
                             rule_id, space, refresh.status_code, (refresh.text or "")[:200])
 
     # Fallback: delete and create again. Only with a copy of the rule as it is now, to put back if
@@ -2553,7 +2595,7 @@ def _put_rule(session, base_url: str, space: str, rule: dict, on_recreated=None)
         _logger.warning("Rule %s is an Elastic prebuilt rule; not re-creating it in space %s.", rule_id, space)
         return response, ("Its API key in Kibana can't be read and couldn't be refreshed. It is an Elastic "
                           "prebuilt rule, so TIDE didn't re-create it: reinstall it in Kibana.")
-    _logger.warning("Rule %s: refresh didn't fix the API key in space %s; deleting and re-creating it "
+    _logger.warning("Rule %s: refresh didn't fix the API key in space %s; deleting and re-creating it "  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure # the rule id and space, no key
                     "under the same rule_id.", rule_id, space)
     deleted = session.delete(url, params={"rule_id": rule_id})
     if deleted.status_code not in (200, 204, 404):

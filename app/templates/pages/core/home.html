@@ -1,127 +1,195 @@
 {% extends "base.html" %}
-{% from "macros/icons.html" import icon, icon_text %}
+{% from "macros/icons.html" import icon %}
+{% from "macros/help.html" import help_button with context %}
+{% from "macros/modal.html" import empty_state %}
+{% from "macros/metrics.html" import metric_flow %}
+{% from "macros/rule_ui.html" import severity_icon, SEVERITY_LOOK %}
+{% from "components/window_ui.html" import section_title, tag %}
 
-{% block title %}TIDE - Platform Overview{% endblock %}
+{#
+  Home: what needs the person signed in on the active client (app/services/home.py builds ``lists``),
+  a section per list, each only for someone who can open its page: Rule Monitoring, Known gaps to
+  review, Validations lapsing and GitLab issues. Each shows its first few and links to the rest; a
+  section's title folds it, remembered under tide.homeFolds. A list that can't be worked out says so.
+#}
 
-{% block head %}
-{% endblock %}
+{% block title %}Home | TIDE{% endblock %}
+
+{% macro more_link(url, words, more, external=false) -%}
+{%- if url -%}
+<a class="home-card__more" href="{{ url }}"{% if external %} target="_blank" rel="noopener"{% endif %}>{{ words }}{% if more %} ({{ more }} more){% endif %} {{ icon('arrow-right', '13') }}</a>
+{%- elif more -%}
+<p class="home-card__more text-muted">And {{ more }} more.</p>
+{%- endif -%}
+{%- endmacro %}
+
+{% macro failed(list) -%}
+<div class="alert alert-danger">{{ list.failed }}</div>
+{%- endmacro %}
 
 {% block content %}
-<div class="page-header header-centered mb-xl flex flex-col items-center text-center">
-    <img src="/static/icons/tide 48x48.png" alt="TIDE" class="mb-md" width="150" height="150">   
-    <p class="page-subtitle">
-         <strong>Threat Informed Detection Engine</strong> — A standalone, containerized platform for managing detection rules, analyzing threat coverage, and automating security workflows.
-    </p>
-</div>
-
-<!-- Key Modules -->
-<div class="overview-section">
-    <h2>{{ icon('layout-grid', '20') }} Key Modules</h2>
-    <div class="module-grid">
-        <a  name="Dashboard Card" href="/dashboard" class="module-card">
-            <div class="module-title">{{ icon('layout-dashboard', '18') }} Dashboard</div>
-            <div class="module-desc">Aggregated overview of detection engineering program health.</div>
-        </a>
-        <a  name="Rule Health Card" href="/rules" class="module-card">
-            <div class="module-title">{{ icon('shield-check', '18') }} Rule Health</div>
-            <div class="module-desc">Assess quality scores, field mappings, and validation status of detection rules.</div>
-        </a>
-        <a  name="Threat Landscape Card" href="/threats" class="module-card">
-            <div class="module-title">{{ icon('target', '18') }} Threat Landscape</div>
-            <div class="module-desc">Track threat actors and their TTPs from OpenCTI and other sources.</div>
-        </a>
-        <a  name="MITRE Heatmap Card" href="/heatmap" class="module-card">
-            <div class="module-title">{{ icon('grid-3x3', '18') }} MITRE Heatmap</div>
-            <div class="module-desc">Visualize ATT&CK technique coverage and identify detection gaps.</div>
-        </a>
-        <a  name="Sigma Converter Card" href="/sigma" class="module-card">
-            <div class="module-title">{{ icon('sigma', '18') }} Sigma Rules</div>
-            <div class="module-desc">Read SigmaHQ's rules and convert them to Elastic KQL, Lucene, EQL, or ES|QL.</div>
-        </a>
+<div class="page-header">
+    <div>
+        <h1 class="page-title-hero">Home {{ help_button('home') }}</h1>
+        <p class="page-subtitle">What needs attention{% if active_client %} on {{ active_client.name }}{% endif %}, as of the last sync.</p>
     </div>
 </div>
 
-<!-- Technology Stack -->
-<div class="overview-section">
-    <h2>{{ icon('cpu', '20') }} Technology Stack</h2>
-    <div class="tech-grid">
-        <div class="tech-item">
-            {{ icon('server', '22') }}
-            <div class="tech-item-name">Nginx</div>
-            <div class="tech-item-desc">Reverse proxy, SSL</div>
-        </div>
-        <div class="tech-item">
-            {{ icon('zap', '22') }}
-            <div class="tech-item-name">FastAPI</div>
-            <div class="tech-item-desc">REST API, HTMX</div>
-        </div>
-        <div class="tech-item">
-            {{ icon('database', '22') }}
-            <div class="tech-item-name">DuckDB</div>
-            <div class="tech-item-desc">Analytics DB</div>
-        </div>
-        <div class="tech-item">
-            {{ icon('code', '22') }}
-            <div class="tech-item-name">HTMX</div>
-            <div class="tech-item-desc">Server UI</div>
-        </div>
-        <div class="tech-item">
-            {{ icon('palette', '22') }}
-            <div class="tech-item-name">Custom CSS</div>
-            <div class="tech-item-desc">Semantic Design</div>
-        </div>
-        <div class="tech-item">
-            {{ icon('shield', '22') }}
-            <div class="tech-item-name">Keycloak</div>
-            <div class="tech-item-desc">OIDC SSO</div>
-        </div>
-    </div>
-</div>
+{% if not lists %}
+{% call empty_state('home') %}
+<p>{% if active_client %}Nothing here for your role. The sidebar lists the pages you can open.{% else %}You aren't a member of a client yet. An administrator adds you to one.{% endif %}</p>
+{% endcall %}
+{% else %}
+<div class="home-grid" data-fold-store="tide.homeFolds">
 
-<!-- Key Principles -->
-<div class="overview-section">
-    <h2>{{ icon('lightbulb', '20') }} Design Principles</h2>
-    <div class="principle-grid">
-        <div class="principle-card">
-            <span class="text-success">{{ icon('check-circle', '20') }}</span>
-            <div>
-                <strong>Standalone First</strong>
-                <p>Operates independently in air-gapped environments</p>
-            </div>
+{# ── Rule Monitoring: the open problems by kind, errors first ──────────────────────────────── #}
+{% if lists.monitoring %}{% set rm = lists.monitoring %}
+<section name="Home Rule Monitoring" class="card card-padded sys-section" data-fold="monitoring" aria-label="Rule Monitoring">
+    <div class="sys-section__head">{{ section_title('Rule Monitoring', 'triangle-alert', none if rm.failed else rm.count) }}</div>
+    <div class="sys-section__body">
+    {% if rm.failed %}{{ failed(rm) }}{% else %}
+        {% if rm.severities or rm.flow %}
+        <div class="home-card__figures">
+            {#- As Rule Monitoring's Errors, Warnings and Info cards count and word them. -#}
+            {% set tips = {'error': "with an error: they don't do their job until it is fixed",
+                           'warning': 'with warnings only: they run, but less well',
+                           'info': 'with only information: worth knowing'} %}
+            {% for sev, n in rm.severities %}{% set look = SEVERITY_LOOK[sev] %}
+            <span class="status-pill status-{{ look.tone }}" title="{{ n }} {{ 'rules (or whole destinations)' if sev != 'info' else 'rules' }} {{ tips[sev] }}">{{ icon(look.icon, '11') }} <span class="status-pill__text">{{ n }}<span class="sr-only"> {{ look.one if n == 1 else look.many }}</span></span></span>
+            {% endfor %}
+            {{ metric_flow(rm.flow) }}
         </div>
-        <div class="principle-card">
-            <span class="text-success">{{ icon('check-circle', '20') }}</span>
-            <div>
-                <strong>Bundled Data</strong>
-                <p>Sigma & MITRE ATT&CK data included in image</p>
+        {% endif %}
+        {% if rm.rows %}
+        <div class="rm-items">
+            {% for i in rm.rows %}
+            <div class="rm-item rm-item--{{ {'error': 'error', 'info': 'info'}.get(i.severity, 'warn') }}">
+                <div class="rm-item__main">
+                    <div class="rm-item__name" title="{{ i.title }}">{{ severity_icon(i.severity) }} <a class="rm-item__open" href="{{ i.url }}">{{ i.title }}</a></div>
+                    <div class="rm-item__meta text-muted">{{ i.facts }}</div>
+                </div>
             </div>
+            {% endfor %}
         </div>
-        <div class="principle-card">
-            <span class="text-success">{{ icon('check-circle', '20') }}</span>
-            <div>
-                <strong>Persistent User Data</strong>
-                <p>Validations survive container updates</p>
-            </div>
-        </div>
-        <div class="principle-card">
-            <span class="text-success">{{ icon('check-circle', '20') }}</span>
-            <div>
-                <strong>Sync-on-Demand</strong>
-                <p>External APIs synced periodically, not live</p>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Footer -->
-<div class="footer-bar">
-    {% if user %}
-    <p class="text-muted mb-sm">
-        Logged in as <strong class="text-primary">{{ user.username }}</strong>
-    </p>
+        {% elif rm.linked %}
+        <p class="rm-empty">No rule needs action.</p>
+        {% else %}
+        <p class="rm-empty">No SIEM is linked to this client yet.</p>
+        {% endif %}
+        {{ more_link(rm.url, 'Show all in Rule Monitoring', rm.more) }}
     {% endif %}
-    <p class="text-primary fs-md">
-        TIDE v{{ settings.tide_version }}
-    </p>
+    </div>
+</section>
+{% endif %}
+
+{# ── Known gaps to review: marks whose Review by date has passed or is near ─────────────────── #}
+{% if lists.reviews %}{% set rv = lists.reviews %}
+<section name="Home Reviews" class="card card-padded sys-section" data-fold="reviews" aria-label="Known gaps to review">
+    <div class="sys-section__head">{{ section_title('Known gaps to review', 'calendar', none if rv.failed else rv.count) }}</div>
+    <div class="sys-section__body">
+    {% if rv.failed %}{{ failed(rv) }}{% else %}
+        {% if rv.rows %}
+        <div class="rm-items">
+            {% for g in rv.rows %}
+            <div class="rm-item rm-item--{{ 'na' if g.kind == 'na' else 'gap' }}">
+                <div class="rm-item__main">
+                    <div class="rm-item__name" title="{{ g.title }}">{{ icon('minus-circle' if g.kind == 'na' else 'triangle-alert', '13') }}
+                        <button type="button" class="rm-item__open" hx-get="{{ g.url }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+                                title="Open this technique on {{ g.system }}">{{ g.title }}</button></div>
+                    {% if g.reason %}<p class="rm-item__text">{{ g.reason }}</p>{% endif %}
+                    <div class="rm-item__meta">
+                        {{ tag(g.system, title='System', kind='system') }}
+                        <span class="text-muted">{{ 'Not applicable' if g.kind == 'na' else 'Known gap' }}</span>
+                        <span class="{{ 'text-warning' if g.due else 'text-muted' }}" title="{{ 'Due for review since' if g.due else 'To be reviewed by' }} {{ g.review_by.isoformat() }}">
+                            {{ icon('calendar', '10') }} {{ 'Review due' if g.due else 'Review by ' ~ g.review_by.isoformat() }}
+                        </span>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="rm-empty">No known gap is due for review in the next {{ review_ahead }} days.</p>
+        {% endif %}
+        {{ more_link(rv.url if rv.more else '', 'Show all in Systems', rv.more) }}
+    {% endif %}
+    </div>
+</section>
+{% endif %}
+
+{# ── Validations lapsing: enabled rules whose validation has expired or is due soon ─────────── #}
+{% if lists.validations %}{% set va = lists.validations %}
+<section name="Home Validations" class="card card-padded sys-section" data-fold="validations" aria-label="Validations lapsing">
+    <div class="sys-section__head">{{ section_title('Validations lapsing', 'circle-check', none if va.failed else va.count) }}</div>
+    <div class="sys-section__body">
+    {% if va.failed %}{{ failed(va) }}{% else %}
+        {% if va.count or va.flow %}
+        <div class="home-card__figures" title="Enabled rules">
+            {% if va.expired %}<span class="status-pill status-danger"><span class="status-pill__text">{{ va.expired }} expired</span></span>{% endif %}
+            {% if va.soon %}<span class="status-pill status-warning"><span class="status-pill__text">{{ va.soon }} due soon</span></span>{% endif %}
+            {{ metric_flow(va.flow, up='validated', down='lapsed', up_good=true) }}
+        </div>
+        {% endif %}
+        {% if va.rows %}
+        <div class="rm-items">
+            {% for r in va.rows %}
+            <div class="rm-item rm-item--{{ 'error' if r.status == 'expired' else 'warn' }}">
+                <div class="rm-item__main">
+                    <div class="rm-item__name" title="{{ r.name }}">
+                        <button type="button" class="rm-item__open" hx-get="{{ r.url }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+                                title="Open this rule">{{ r.name }}</button></div>
+                    <div class="rm-item__meta">
+                        {% if r.destination %}{{ tag(r.destination, title='Destination') }}{% endif %}
+                        <span class="{{ 'text-danger' if r.status == 'expired' else 'text-warning' }}">{{ 'Expired' if r.status == 'expired' else 'Due soon' }}</span>
+                        {% if r.checked %}<span class="text-muted">validated {{ r.checked.strftime('%Y-%m-%d') }}</span>{% endif %}
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="rm-empty">No enabled rule's validation has expired or is due soon.</p>
+        {% endif %}
+        {{ more_link(va.url if va.count else '', 'Show all in Rule Health', va.more) }}
+    {% endif %}
+    </div>
+</section>
+{% endif %}
+
+{# ── GitLab issues: the open ones TIDE raised for the client's rules ───────────────────────── #}
+{% if lists.issues and (lists.issues.failed or lists.issues.linked or lists.issues.count) %}{% set gi = lists.issues %}
+<section name="Home GitLab Issues" class="card card-padded sys-section" data-fold="issues" aria-label="GitLab issues">
+    <div class="sys-section__head">{{ section_title('GitLab issues', 'gitlab', none if gi.failed else gi.count) }}</div>
+    <div class="sys-section__body">
+    {% if gi.failed %}{{ failed(gi) }}{% else %}
+        {% if gi.rows %}
+        <div class="rm-items">
+            {% for i in gi.rows %}
+            <div class="rm-item rm-item--gitlab">
+                <div class="rm-item__main">
+                    <div class="rm-item__name" title="{{ i.title }}">{{ icon('gitlab', '13') }}
+                        <a href="{{ i.web_url }}" target="_blank" rel="noopener" class="text-primary">{{ i.project }}#{{ i.iid }}</a> {{ i.title }}</div>
+                    <div class="rm-item__meta">
+                        {% if i.about %}
+                        {% if i.rule_url %}<button type="button" class="rm-item__open" hx-get="{{ i.rule_url }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+                                title="Open this rule">{{ i.about }}</button>
+                        {% else %}<span>{{ i.about }}</span>{% endif %}
+                        {% endif %}
+                        <span class="text-muted">{{ 'Raised' if i.for_rule else 'Raised in Rule Monitoring' }} by {{ i.created_by }} on {{ i.created_at.strftime('%Y-%m-%d') }}{% if i.assignee %}, assigned to {{ i.assignee_name or i.assignee }}{% endif %}</span>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="rm-empty">No open GitLab issue was raised for this client's rules.</p>
+        {% endif %}
+        {{ more_link(gi.url if gi.more else '', 'Show all in GitLab', gi.more, external=true) }}
+    {% endif %}
+    </div>
+</section>
+{% endif %}
+
 </div>
+{% endif %}
 {% endblock %}

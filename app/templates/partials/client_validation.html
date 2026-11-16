@@ -1,0 +1,58 @@
+{# Partial: client_validation.html — a client's Validation section (its Rule settings tab): when a rule's
+   validation turns due soon and expired. Context: client, settings (TIDE's, for the inherited weeks).
+   Its form re-renders this section (management._render_client_settings_partial). #}
+{% from "components/window_ui.html" import section_head %}
+
+{{ section_head('Validation', 'circle-check') }}
+
+<div class="sys-section__body">
+{# Per-tenant rule validation thresholds. Stored on the clients row since schema 48 (4.1.20). Blank
+   inputs clear the override and the global RULE_VALIDATION_*_WEEKS settings take effect.
+   Placeholders show the inherited default so operators can see what they'd revert to. #}
+<form name="Submit Validation Thresholds" hx-post="/api/management/clients/{{ client.id }}/validation-thresholds"
+      hx-target="#client-validation-section" hx-swap="innerHTML"
+    class="flex gap-ms items-start flex-wrap py-0 px-xs">
+    <div class="siem-mode-col">
+        <label class="form-label">Validation mode</label>
+        <select name="rule_validation_mode" class="form-input siem-mode-select" data-change="clientSiems.validationMode">
+            <option value="master" {% if client.rule_validation_mode != 'criticality' %}selected{% endif %}>Master cadence</option>
+            <option value="criticality" {% if client.rule_validation_mode == 'criticality' %}selected{% endif %}>By criticality</option>
+        </select>
+        <label class="flex items-center gap-sm fs-xs mt-sm nowrap">
+            <input type="hidden" name="delete_source_after_promotion" value="false">
+            <input type="checkbox" name="delete_source_after_promotion" value="true"
+                   {% if client.delete_source_after_promotion is not defined or client.delete_source_after_promotion %}checked{% endif %}>
+            Delete source after promotion by default
+        </label>
+    </div>
+    <div class="flex-none">
+        <label class="form-label">Master amber after (weeks)</label>
+        <input type="number" min="1" name="amber_weeks" class="form-input siem-num-input"
+               placeholder="{{ settings.rule_validation_amber_weeks }} (default)"
+               value="{{ client.rule_validation_amber_weeks if client.rule_validation_amber_weeks is not none else '' }}">
+    </div>
+    <div class="flex-none">
+        <label class="form-label">Master expired after (weeks)</label>
+        <input type="number" min="1" name="expired_weeks" class="form-input siem-num-input"
+               placeholder="{{ settings.rule_validation_expired_weeks }} (default)"
+               value="{{ client.rule_validation_expired_weeks if client.rule_validation_expired_weeks is not none else '' }}">
+    </div>
+    <div id="criticality-validation-grid" class="crit-grid"{% if client.rule_validation_mode != 'criticality' %} hidden{% endif %}>
+        {% for severity in ['low', 'medium', 'high', 'critical'] %}
+        <div class="min-w-0">
+            <label class="form-label">{{ severity|title }} amber</label>
+            <input type="number" min="1" name="{{ severity }}_amber_weeks" class="form-input" value="{{ client['rule_validation_' ~ severity ~ '_amber_weeks'] if client['rule_validation_' ~ severity ~ '_amber_weeks'] is not none else '' }}" placeholder="{{ settings.rule_validation_amber_weeks }}">
+        </div>
+        <div class="min-w-0">
+            <label class="form-label">{{ severity|title }} expired</label>
+            <input type="number" min="1" name="{{ severity }}_expired_weeks" class="form-input" value="{{ client['rule_validation_' ~ severity ~ '_expired_weeks'] if client['rule_validation_' ~ severity ~ '_expired_weeks'] is not none else '' }}" placeholder="{{ settings.rule_validation_expired_weeks }}">
+        </div>
+        {% endfor %}
+    </div>
+    <button name="Save thresholds" type="submit" class="btn btn-primary btn-sm mt-lg">Save thresholds</button>
+    <span class="siem-mode-hint">
+        Leave blank to inherit the global default. Criticality mode stores overrides per severity.
+    </span>
+</form>
+
+</div>

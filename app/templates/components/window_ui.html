@@ -6,10 +6,36 @@
   the handle, or arrow keys on it), and remembers the arrangement under the root's data-layout-key.
 #}
 {% from "macros/icons.html" import icon %}
-{% from "macros/menu.html" import more_button %}
+{% from "macros/menu.html" import more_button, manage_menu %}
 
-{% macro collapse_ctl(label) -%}
-<button type="button" class="rm-collapse" data-rm-collapse aria-expanded="true" title="Collapse or expand {{ label }}" aria-label="Collapse or expand {{ label }}">{{ icon('chevron-down', '14') }}</button>
+{# ``open=false``: a section drawn folded (the window opens with fewer: UX.md 9.5); once the user opens
+   it, it opens so from then on (app.js, the fold memory). #}
+{% macro collapse_ctl(label, open=true) -%}
+<button type="button" class="rm-collapse" data-rm-collapse aria-expanded="{{ 'true' if open else 'false' }}" title="Collapse or expand {{ label }}" aria-label="Collapse or expand {{ label }}">{{ icon('chevron-down', '14') }}</button>
+{%- endmacro %}
+
+{# A page section's title (a system's or a client's sections): the whole heading folds it, as a
+   Management section's or a window's does, its chevron showing which way (app.js, data-rm-collapse;
+   the section is a .sys-section[data-fold]). #}
+{% macro section_title(title, icon_name, count=none) -%}
+<h2 class="section-title sys-section__title">
+    <button type="button" class="sys-section__toggle" data-rm-collapse aria-expanded="true" title="Collapse or expand {{ title }}">
+        <span class="sys-section__chev" aria-hidden="true">{{ icon('chevron-down', '16') }}</span>{{ icon(icon_name, '18') }} {{ title }}{% if count is not none %} <span class="rm-fold__count">{{ count }}</span>{% endif %}
+    </button>
+</h2>
+{%- endmacro %}
+
+{# A page section's head, as a system's page has them: its title (which folds it) and its ⋮, where
+   ``item`` opens the section's dialog (``target``; a client's sections). It sits in a
+   .sys-section[data-fold], above a .sys-section__body, under a [data-fold-store] that keeps which
+   are collapsed (app.js). #}
+{% macro section_head(title, icon_name, count=none, item=none, target=none, menu_title='') -%}
+<div class="sys-section__head">
+    {{ section_title(title, icon_name, count) }}
+    {%- if item %}
+    {{ manage_menu(title, item, target, menu_title) }}
+    {%- endif %}
+</div>
 {%- endmacro %}
 
 {% macro drag_ctl(label) -%}

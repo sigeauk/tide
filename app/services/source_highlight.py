@@ -96,9 +96,38 @@ def _yaml(lines: List[str]) -> List[str]:
     return out
 
 
+# A comment or CDATA, a tag's start (``<name`` or ``</name``) or end, an attribute name, ``=``, a quoted value.
+_XML_TOKEN = re.compile(r"<!--.*?-->|<!\[CDATA\[.*?\]\]>|</?[\w:.-]+|/?>|[\w:.-]+(?=\s*=)|=|\"[^\"]*\"|'[^']*'", re.S)
+
+
+def _xml(source: str) -> str:
+    """XML (a Wazuh rule): element names as ``hl-kw``, attributes ``hl-field``, their values ``hl-str``,
+    comments ``hl-comment``; the text between elements as it is. Found by pattern, never parsed."""
+    out: List[str] = []
+    pos, inside = 0, False          # inside: between a tag's ``<name`` and its ``>``
+    for match in _XML_TOKEN.finditer(source):
+        tok, before = match.group(0), str(escape(source[pos:match.start()]))
+        if tok.startswith(("<!--", "<![CDATA[")):
+            out.append(before + _span("comment", tok))
+        elif tok.startswith("<"):
+            lead = "</" if tok.startswith("</") else "<"
+            out.append(before + _span("op", lead) + _span("kw", tok[len(lead):]))
+            inside = True
+        elif not inside:
+            out.append(before + str(escape(tok)))
+        elif tok in (">", "/>"):
+            out.append(before + _span("op", tok))
+            inside = False
+        else:
+            out.append(before + _span("op" if tok == "=" else "str" if tok[0] in "\"'" else "field", tok))
+        pos = match.end()
+    out.append(str(escape(source[pos:])))
+    return "".join(out)
+
+
 def highlight(source: str, language: str) -> Markup:
-    """``source`` as HTML with its syntax coloured; ``language`` is ``toml`` or ``yaml`` (anything
-    else is returned escaped, uncoloured)."""
+    """``source`` as HTML with its syntax coloured; ``language`` is ``toml``, ``yaml`` or ``xml``
+    (anything else is returned escaped, uncoloured)."""
     if not source:
         return Markup("")
     lines = str(source).split("\n")
@@ -107,4 +136,6 @@ def highlight(source: str, language: str) -> Markup:
         return Markup("\n".join(_toml(lines)))
     if lang in ("yaml", "yml"):
         return Markup("\n".join(_yaml(lines)))
+    if lang == "xml":
+        return Markup(_xml(str(source)))
     return Markup(escape(source))

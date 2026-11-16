@@ -275,15 +275,17 @@ def run_rule_log_export(db, siem_id: Optional[str] = None) -> int:
                 ) or "siem"
                 retention = int(siem.get("log_retention_days") or 7)
                 # Per-SIEM target space(s) — stored as comma-separated string.
-                # Empty / missing => discover every space this SIEM owns and
-                # log each one into its own file.
+                # Empty / missing => every space of this SIEM's (linked to a client, or
+                # found by its last Test connection), each logged into its own file. Never
+                # another SIEM's: identical space names on two SIEMs are different spaces.
                 raw_space = (siem.get("log_target_space") or "").strip()
                 target_spaces = [s.strip() for s in raw_space.split(",") if s.strip()]
                 if not target_spaces:
                     try:
-                        target_spaces = db.get_all_kibana_spaces() or []
+                        target_spaces = sorted(set(db.get_siem_spaces(sid) or [])
+                                               | set(db.get_siem_spaces_cached(sid) or []))
                     except Exception as exc:
-                        logger.warning(f"get_all_kibana_spaces failed: {exc}")
+                        logger.warning(f"Could not read the spaces of SIEM {sid}: {exc}")
                         target_spaces = []
                 # Belt-and-braces: if we still have nothing, drop a single
                 # "_all" file holding every rule for the SIEM so the operator

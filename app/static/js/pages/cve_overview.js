@@ -1,71 +1,47 @@
 /*
  * CVE Overview (pages/inventory/cve_overview.html, partials/cve_overview_table.html): the feed
- * uploads, filtering the CVE cards (search, matched only, systems, coverage) and sorting them.
+ * uploads, and asking the server for the CVE cards the filter bar shows (search, matched only,
+ * systems, coverage, sort), 50 at a time.
  */
 (function () {
     'use strict';
 
     function $(id) { return document.getElementById(id); }
-    var sortAsc = false;
 
-    function cards() { return Array.from(document.querySelectorAll('#cve-card-list .cve-card-item')); }
-
-    function filterCards() {
-        var q = (($('kev-search') || {}).value || '').toLowerCase();
-        var matchedOnly = ($('filter-matched') || {}).value === 'matched';
-        var sysCbs = document.querySelectorAll('.sys-filter-cb');
-        var selectedSys = Array.from(sysCbs).filter(function (c) { return c.checked; }).map(function (c) { return c.value; });
-        var allSys = selectedSys.length === sysCbs.length;
-        var covCbs = document.querySelectorAll('.cov-filter-cb');
-        var selectedCov = Array.from(covCbs).filter(function (c) { return c.checked; }).map(function (c) { return c.value; });
-        var allCov = selectedCov.length === covCbs.length;
-
-        var sysLabel = $('sys-filter-label');
-        if (sysLabel) sysLabel.textContent = allSys ? 'All systems' : selectedSys.length + ' system' + (selectedSys.length !== 1 ? 's' : '');
-        var covLabel = $('cov-filter-label');
-        if (covLabel) covLabel.textContent = allCov ? 'All coverage' : selectedCov.length + ' selected';
-
-        var visible = 0;
-        cards().forEach(function (card) {
-            // A card shows when any of its systems is ticked, and its coverage is ticked.
-            var cardSystems = card.dataset.systems ? card.dataset.systems.split(',') : [];
-            var showSys = allSys || cardSystems.some(function (s) { return selectedSys.includes(s); });
-            var showCov = allCov || selectedCov.includes(card.dataset.coverage || '');
-            var show = card.textContent.toLowerCase().includes(q) && (!matchedOnly || card.dataset.matched === '1') && showSys && showCov;
-            card.style.display = show ? '' : 'none';
-            if (show) visible++;
-        });
-        var countEl = $('cve-visible-count');
-        if (countEl) countEl.textContent = visible;
+    // The ticked boxes of a filter: nothing when all are ticked (no filter), "none" when none are.
+    function ticked(cls, query, name) {
+        var boxes = Array.from(document.querySelectorAll('.' + cls));
+        var on = boxes.filter(function (c) { return c.checked; }).map(function (c) { return c.value; });
+        if (on.length === boxes.length) return 'all';
+        (on.length ? on : ['none']).forEach(function (v) { query.append(name, v); });
+        return on.length;
     }
 
-    function sortCards() {
-        var sortField = ($('sort-field') || {}).value || 'cve_id';
+    // The cards are filtered, sorted and paged by the server (50 at a time, the next as the end
+    // scrolls into view): ask it for those the filter bar shows.
+    var timer = null;
+    function filterCards(e) {
+        clearTimeout(timer);
+        timer = setTimeout(load, e && e.type === 'input' ? 250 : 0);
+    }
+    function load() {
         var list = $('cve-card-list');
         if (!list) return;
-        var all = cards();
-        all.sort(function (a, b) {
-            if (sortField === 'matched') {
-                var m = b.dataset.matched.localeCompare(a.dataset.matched);   // matched first
-                return sortAsc ? m : -m;
-            }
-            var field = { cve_id: 'cveId', name: 'name', vendor: 'vendor', date_added: 'dateAdded', due_date: 'dueDate' }[sortField] || 'cveId';
-            var va = a.dataset[field] || a.dataset[sortField] || '', vb = b.dataset[field] || b.dataset[sortField] || '';
-            var cmp = va.localeCompare(vb, undefined, { numeric: true, sensitivity: 'base' });
-            return sortAsc ? cmp : -cmp;
-        });
-        all.forEach(function (c) { list.appendChild(c); });
+        var query = new URLSearchParams();
+        var q = (($('kev-search') || {}).value || '').trim();
+        if (q) query.set('search', q);
+        if (($('filter-matched') || {}).value === 'matched') query.set('matched', 'matched');
+        var sys = ticked('sys-filter-cb', query, 'system');
+        var cov = ticked('cov-filter-cb', query, 'coverage');
+        var sort = (($('sort-field') || {}).value || 'cve_id:desc').split(':');
+        query.set('sort', sort[0]);
+        query.set('dir', sort[1] || 'desc');
+        var sysLabel = $('sys-filter-label');
+        if (sysLabel) sysLabel.textContent = sys === 'all' ? 'Any' : sys + ' system' + (sys !== 1 ? 's' : '');
+        var covLabel = $('cov-filter-label');
+        if (covLabel) covLabel.textContent = cov === 'all' ? 'Any' : cov + ' selected';
+        htmx.ajax('GET', '/api/inventory/cve-overview-cards?' + query.toString(), { target: list, swap: 'innerHTML' });
     }
-
-    // A freshly loaded table: sorted by CVE ID, newest first.
-    TIDE.page('#cve-card-list', function () {
-        sortAsc = false;
-        var sortSel = $('sort-field');
-        if (sortSel) sortSel.value = 'cve_id';
-        var dirIcon = $('sort-dir-icon');
-        if (dirIcon) dirIcon.innerHTML = TIDE.iconHtml('chevron-down', 14);
-        sortCards();
-    });
 
     // Feed uploads: the response replaces the CVE table (or reports into the status line).
     async function upload(e, inp) {
@@ -97,13 +73,7 @@
 
     TIDE.actions('cves', {
         filter: filterCards,
-        sort: sortCards,
-        sortDir: function () {
-            sortAsc = !sortAsc;
-            var icon = $('sort-dir-icon');
-            if (icon) icon.innerHTML = TIDE.iconHtml(sortAsc ? 'chevron-up' : 'chevron-down', 14);   // as every sortable list
-            sortCards();
-        },
+        sort: filterCards,
         // "All" / "None" in a filter dropdown: data-boxes is the class of its checkboxes.
         checkAll: function (e, a) {
             document.querySelectorAll('.' + a.dataset.boxes).forEach(function (c) { c.checked = a.dataset.value === 'true'; });

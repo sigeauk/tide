@@ -21,7 +21,7 @@ Read TIDE's data from other tools (SOAR platforms, dashboards, scripts) over HTT
 
 ## API keys
 
-Create a key in TIDE: your name at the bottom of the sidebar → **Settings → Profile & Preferences → API Key Management** → **Create Key**.
+Create a key in TIDE: your name at the bottom of the sidebar → **Settings → Profile & Preferences → API Key Management** → **Create key**.
 
 - The key is shown **once**, when it's created. Copy it then; TIDE keeps only a hash of it.
 - A key can read the clients its owner belongs to. To give it another client, add its owner to that client in Management.

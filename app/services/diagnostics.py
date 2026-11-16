@@ -75,6 +75,15 @@ def _missing_tenant_db(conn, ctx):
     return ["client", "database file"], rows
 
 
+def _csp_violations(conn, ctx):
+    """What TIDE's Content-Security-Policy blocked (or would block, report-only), as browsers reported it (csp)."""
+    from app.services import csp
+    return ["what", "from", "page", "where", "times", "last seen"], [
+        (v["directive"], v["blocked"], v["page"], v["source"] or "", v["count"],
+         v["last_seen"].strftime("%d %b %Y %H:%M") if v["last_seen"] else "")
+        for v in csp.violations(conn)]
+
+
 def _orphaned_db_files(conn, ctx):
     """Database files in the data folder that belong to no client (client_deletion.orphans)."""
     from app.services import client_deletion
@@ -120,7 +129,7 @@ def _shared_rule_ids(conn, ctx):
 
 
 def _stale_destinations(conn, ctx):
-    """Linked destinations last synced more than STALE_DAYS ago: the Last Synced card's stale count.
+    """Linked destinations last synced more than STALE_DAYS ago: the Last synced card's stale count.
     One never synced holds no rules, so it is under destination_no_rules instead."""
     from app.services import rule_issues
     names = {(siem_id, space): name for siem_id, space, name in ctx["scopes"]}
@@ -343,6 +352,17 @@ CHECKS: List[Check] = [
         _missing_tenant_db,
     ),
     Check(
+        "csp_violations", "What the browser security policy blocked", "install", "warning",
+        "TIDE tells browsers which scripts, styles and connections its pages may use (a Content-Security-Policy), and "
+        "browsers block anything else. Each row is something on a page that a browser blocked, as it reported it "
+        "(or, with CSP_MODE=report-only in .env, would have blocked).",
+        "Report these with TIDE's version. One from TIDE's own pages is a fault in TIDE: if it stops something "
+        "working, set CSP_MODE=report-only in .env and restart TIDE until a release fixes it. One from a browser "
+        "extension (chrome-extension, moz-extension) can be ignored. Once they are dealt with, Clear this list "
+        "empties it: anything still blocked is reported again.",
+        _csp_violations, action=("Clear this list", "/api/diagnostics/csp/preview"),
+    ),
+    Check(
         "orphaned_db_files", "Database files with no client", "install", "warning",
         "Database files in the data folder that belong to no client: left by a client deleted before TIDE 6.4.0, "
         "which deleted only its settings, by a file TIDE couldn't delete with its client, or a client's CTI "
@@ -398,7 +418,7 @@ CHECKS: List[Check] = [
         "destination_stale", f"Destinations not synced for {STALE_DAYS} days", "client", "warning",
         f"TIDE hasn't read this destination's rules from Kibana for more than {STALE_DAYS} days. Its rules, "
         "scores and coverage, Rule Monitoring and exported reports are as of that sync, so they may no longer "
-        "match Kibana. Rule Health's Last Synced card shows it in red.",
+        "match Kibana. Rule Health's Last synced card shows it in red.",
         "Use Sync in Rule Health's ⋮ menu. If the SIEM can't be reached, the destination is listed under "
         "Destinations TIDE could not reach at the last sync.",
         _stale_destinations,

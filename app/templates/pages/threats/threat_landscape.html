@@ -14,7 +14,7 @@
 <div class="page-header sys-header">
     <div class="sys-header__main">
         <h1 class="page-title-hero">Threat Landscape {{ help_button('threat-landscape') }}</h1>
-        <p class="page-subtitle">Maps known threat actor TTPs directly against active SIEM detection rules.</p>
+        <p class="page-subtitle">The threat actors you track, and how much of what each one does your enabled rules detect.</p>
     </div>
     <div class="rh-more" data-more>
         {{ more_button('More actions', title='Sync threats', attrs='name="Threat Landscape Actions"') }}
@@ -56,11 +56,11 @@
     </div>
     
     {% set tl_hx = 'hx-get="/api/threats" hx-trigger="change" hx-target="#threats-grid" hx-swap="innerHTML" hx-include="[name=\'search\'], [name=\'origin\'], [name=\'source\'], [name=\'sort_by\']"' %}
-    {% set origin_opts = [('', 'All origins')] %}
+    {% set origin_opts = [('', 'Any')] %}
     {% for origin in origins %}{% set _ = origin_opts.append((origin, origin)) %}{% endfor %}
     {{ filter_choice('tl-origin', 'origin', 'Origin', origin_opts, '', attrs=tl_hx) }}
 
-    {{ filter_choice('tl-source', 'source', 'Source', [('', 'All sources')] + sources | list, '', attrs=tl_hx) }}
+    {{ filter_choice('tl-source', 'source', 'Source', [('', 'Any')] + sources | list, '', attrs=tl_hx) }}
 
     {{ filter_choice('tl-sort', 'sort_by', 'Sort by', [('ttp_desc', 'TTPs (High → Low)'), ('ttp_asc', 'TTPs (Low → High)'), ('name_asc', 'Name (A → Z)'),
                      ('coverage_desc', 'Coverage (High → Low)'), ('coverage_asc', 'Coverage (Low → High)')], 'ttp_desc', attrs=tl_hx) }}

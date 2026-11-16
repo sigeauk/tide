@@ -29,7 +29,7 @@ from app.config import get_settings
 logger = logging.getLogger(__name__)
 
 # Bump when the reference schema or the way it is populated changes.
-BUILD_VERSION = 6
+BUILD_VERSION = 8
 
 REFERENCE_TABLES = (
     "mitre_campaign_software",
@@ -47,6 +47,13 @@ REFERENCE_TABLES = (
     "mitre_groups",
     "mitre_tactics",
     "mitre_techniques",
+    "mitre_technique_revisions",
+    "mitre_detection_strategies",
+    "mitre_strategy_techniques",
+    "mitre_analytics",
+    "mitre_analytic_log_sources",
+    "mitre_analytic_tuning",
+    "mitre_data_components",
     "nist_capabilities",
     "nist_capability_groups",
     "sigma_rules_index",

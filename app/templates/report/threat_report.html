@@ -100,9 +100,6 @@
 
     --border:  #d0d7de;
     --border-h: #b0b8c1;
-    --row-alt: #f6f8fa;
-    --th-bg:   #1c2128;   /* TIDE --color-bg-action (muted dark header) */
-    --th-tx:   #58a6ff;   /* TIDE --color-primary  (accent text in headers) */
 
     /* Status badges — light variants for white background */
     --gap-bg: #fff0ee;  --gap-bd: #e67e74;  --gap-tx: #c0392b;
@@ -394,47 +391,18 @@ html, body {
     vertical-align: middle;
 }
 
-/* ── Overlap table ──
+/* ── Overlap table ── (its look is every report's: report_tables.html)
    Content width 180mm: ID:16 Name:52 Tactic:32 Actors:56 Count:24 = 180 ✓ */
-.overlap-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 7.5pt;
-    table-layout: fixed;
-    page-break-inside: auto;
-    border: 1px solid var(--border);
-}
-.overlap-table tr { page-break-inside: avoid; }
+.overlap-table { table-layout: fixed; }
 .overlap-table col.ot-id     { width:  9%; }
 .overlap-table col.ot-name   { width: 29%; }
 .overlap-table col.ot-tactic { width: 18%; }
 .overlap-table col.ot-actors { width: 31%; }
 .overlap-table col.ot-count  { width: 13%; }
 
-.overlap-table th {
-    background: var(--th-bg);
-    color: var(--th-tx);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    font-size: 5.5pt;
-    font-weight: 700;
-    padding: 2mm 3mm;
-    text-align: left;
-    border: 1px solid var(--border);
-}
 .overlap-table th:last-child { text-align: center; }
-
-.overlap-table td {
-    padding: 2mm 3mm;
-    border: 1px solid var(--border);
-    vertical-align: top;
-    color: var(--text-2);
-    word-wrap: break-word;
-    overflow-wrap: break-word;
-    hyphens: auto;
-}
+.overlap-table td { color: var(--text-2); hyphens: auto; }
 .overlap-table td:last-child { text-align: center; font-weight: 700; color: var(--primary); }
-.overlap-table tbody tr:nth-child(even) td { background: var(--row-alt); }
 
 /* ══════════════════════════════════════════════════════
    MITRE MATRIX — CSS GRID  (dark landscape page, split × 2)
@@ -602,56 +570,22 @@ html, body {
 .tactic-stat-tile.covered { background: var(--cov-bg);  border-color: var(--cov-bd);  color: var(--cov-tx);  }
 .tactic-stat-tile.defense { background: var(--def-bg);  border-color: var(--def-bd);  color: var(--def-tx);  }
 
-/* ── Detail table ── */
-.detail-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 7.5pt;
-    table-layout: fixed;
-    page-break-inside: auto;
-    border: 1px solid var(--border);
-}
-.detail-table tr { page-break-inside: avoid; }
+/* ── Detail table ── (its look is every report's: report_tables.html) */
+.detail-table { table-layout: fixed; }
 
-/* Standard column widths — percentage-based for consistent overflow control */
+/* Column widths — percentage-based for consistent overflow control; Status and Source fit their
+   headers at the report tables' size */
 .detail-table col.col-id     { width: 10%; }
 .detail-table col.col-name   { width: 20%; }
-.detail-table col.col-status { width: 10%; }
-.detail-table col.col-source { width: 10%; }
-.detail-table col.col-rules  { width: 50%; }
+.detail-table col.col-status { width: 13%; }
+.detail-table col.col-source { width: 13%; }
+.detail-table col.col-rules  { width: 44%; }
 
 /* Sigma variant — split rules column evenly with sigma column */
-.detail-table.has-sigma col.col-id     { width: 10%; }
-.detail-table.has-sigma col.col-name   { width: 20%; }
-.detail-table.has-sigma col.col-status { width: 10%; }
-.detail-table.has-sigma col.col-source { width: 10%; }
-.detail-table.has-sigma col.col-rules  { width: 25%; }
-.detail-table.has-sigma col.col-sigma  { width: 25%; }
+.detail-table.has-sigma col.col-rules  { width: 22%; }
+.detail-table.has-sigma col.col-sigma  { width: 22%; }
 
-.detail-table th {
-    background: var(--th-bg);
-    color: var(--th-tx);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    font-size: 5.5pt;
-    font-weight: 700;
-    padding: 2mm 3mm;
-    text-align: left;
-    border: 1px solid var(--border);
-}
-
-.detail-table td {
-    padding: 2mm 3mm;
-    border: 1px solid var(--border);
-    vertical-align: top;
-    color: var(--text-2);
-    line-height: 1.4;
-    word-wrap: break-word;
-    overflow-wrap: break-word;
-    hyphens: auto;
-}
-
-.detail-table tbody tr:nth-child(even) td { background: var(--row-alt); }
+.detail-table td { color: var(--text-2); hyphens: auto; }
 
 .tech-id   { font-family: var(--ff-mono); font-size: 7pt; font-weight: 700; color: var(--primary); white-space: nowrap; }
 .tech-name { font-weight: 600; color: var(--text); font-size: 7.5pt; }
@@ -805,6 +739,7 @@ ul.rule-list li.rule-item::before { content: none; }
 .ciso-bar-fill.cov-full { background: #1a7f37; }   /* all covered — green */
 .ciso-bar-fill.cov-none { background: #c0392b; }   /* all gaps    — red   */
 </style>
+{% include "report/report_tables.html" %}
 </head>
 <body>
 
@@ -1201,16 +1136,16 @@ ul.rule-list li.rule-item::before { content: none; }
 
     <div class="report-footer">
         Report generated by TIDE — Threat Informed Detection Engine
-        &nbsp;|&nbsp; {{ generated_at }}
-        &nbsp;|&nbsp; {{ classification }} — INTERNAL USE ONLY
+        · {{ generated_at }}
+        · {{ classification }} — INTERNAL USE ONLY
     </div>
 
 </div>
 {% else %}
 <div class="report-footer" style="margin-top:8mm;">
     Report generated by TIDE — Threat Informed Detection Engine
-    &nbsp;|&nbsp; {{ generated_at }}
-    &nbsp;|&nbsp; {{ classification }} — INTERNAL USE ONLY
+    · {{ generated_at }}
+    · {{ classification }} — INTERNAL USE ONLY
 </div>
 {% endif %}
 

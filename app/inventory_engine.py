@@ -2,7 +2,7 @@
 inventory_engine.py - Asset Inventory & CVE Mapping Engine (Phase 2: Enterprise)
 """
 from __future__ import annotations
-import json, logging, os, re, shutil, xml.etree.ElementTree as ET
+import json, logging, os, re, shutil, xml.etree.ElementTree as ET  # nosec B405 # only parse_nessus_xml, after _refuse_dtd
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple
 from app.config import get_settings
@@ -39,7 +39,7 @@ def _cf(alias: str = "", client_id: str = None) -> tuple[str, list]:
 
 def _row_to_system(r):
     return System(id=r[0], name=r[1], description=r[2], created_at=r[3], updated_at=r[4],
-                  classification=r[5] if len(r) > 5 else None)
+                  classification=r[5] if len(r) > 5 else None, platforms=(r[6] if len(r) > 6 else None) or [])
 
 def _row_to_host(r):
     return Host(id=r[0], system_id=r[1], name=r[2], ip_address=r[3],
@@ -91,6 +91,63 @@ def _load_cisa_kev():
                 logger.warning(f"Failed to load CISA KEV from {path}: {exc}")
     logger.warning("No CISA KEV file available.")
     return []
+
+
+def _wazuh_kev_matches(client_id: str = None) -> Dict[str, Dict[str, List[str]]]:
+    """Wazuh's current findings whose CVE is in CISA's catalogue, by device (wazuh_assets); {} when
+    the tenant has none or the tables aren't there."""
+    from app.services import wazuh_assets
+    try:
+        with _get_conn() as conn:
+            return wazuh_assets.kev_matches_by_host(conn)
+    except Exception:
+        logger.debug("No Wazuh findings to add to the KEV matches", exc_info=True)
+        return {}
+
+
+def system_wazuh_figures(system_id: str, client_id: str = None) -> Optional[Dict]:
+    """A system's Vulnerabilities and Hardening cards over its Wazuh devices (wazuh_assets.system_figures);
+    None when it has none, or the tables aren't there."""
+    from app.services import wazuh_assets
+    try:
+        with _get_conn() as conn:
+            return wazuh_assets.system_figures(conn, system_id)
+    except Exception:
+        logger.warning("Could not work out the Wazuh figures of system %s", system_id, exc_info=True)
+        return None
+
+
+def system_wazuh_figures_at(system_id: str, at, client_id: str = None) -> Dict:
+    """The same two cards as they stood at ``at`` (wazuh_assets.system_figures_at); {} when unknown."""
+    from app.services import wazuh_assets
+    try:
+        with _get_conn() as conn:
+            return wazuh_assets.system_figures_at(conn, system_id, at)
+    except Exception:
+        logger.warning("Could not work out the earlier Wazuh figures of system %s", system_id, exc_info=True)
+        return {}
+
+
+def system_wazuh_report(system_id: str, client_id: str = None) -> Tuple[Optional[Dict], List[Dict]]:
+    """The report's Wazuh sections: ``(vulnerabilities, hardening)`` (wazuh_assets.system_vulnerability_report
+    and system_hardening); ``(None, [])`` when the system has no Wazuh device."""
+    from app.services import wazuh_assets
+    try:
+        with _get_conn() as conn:
+            vulns = wazuh_assets.system_vulnerability_report(conn, system_id)
+            return vulns, (wazuh_assets.system_hardening(conn, system_id, shown=5) if vulns else [])
+    except Exception:
+        logger.warning("Could not work out the Wazuh report sections of system %s", system_id, exc_info=True)
+        return None, []
+
+
+def _kev_matches(host, software, kev, wz) -> Dict[str, List[str]]:
+    """A device's KEV matches: the ones made from its packages, plus Wazuh's findings for it (``wz``,
+    from _wazuh_kev_matches) whose CVE is in the catalogue, under the package Wazuh found."""
+    out = dict(_match_software_against_kev(software, kev, host_os=host.os or "")) if (software and kev) else {}
+    for cve, packages in (wz or {}).get(host.id, {}).items():
+        out[cve] = list(dict.fromkeys(list(out.get(cve, [])) + packages))
+    return out
 
 
 def _list_all_hosts_by_system(client_id: str = None) -> Dict[str, List]:
@@ -204,14 +261,18 @@ def _get_covered_techniques(technique_ids, client_id: str = None):
         coverage = {t: 0 for t in technique_ids}
     return coverage
 
-def get_cve_techniques(cve_id, client_id: str = None):
-    mitre_map = _load_mitre_cve_map()
-    technique_ids = list(mitre_map.get(cve_id.upper(), []))
-    # Merge manual DB overrides
-    override_ids = get_cve_technique_overrides(cve_id, client_id=client_id)
-    for t in override_ids:
+def cve_technique_ids(cve_id: str, client_id: str = None) -> List[str]:
+    """The ATT&CK techniques a CVE is exploited through: the bundled KEV mapping's, then those
+    added to it in TIDE."""
+    technique_ids = list(_load_mitre_cve_map().get(cve_id.upper(), []))
+    for t in get_cve_technique_overrides(cve_id, client_id=client_id):
         if t not in technique_ids:
             technique_ids.append(t)
+    return technique_ids
+
+
+def get_cve_techniques(cve_id, client_id: str = None):
+    technique_ids = cve_technique_ids(cve_id, client_id=client_id)
     if not technique_ids:
         return []
     coverage = _get_covered_techniques(technique_ids, client_id=client_id)
@@ -409,13 +470,13 @@ def _move_system_check_inner(system_id, source_client_id, target_client_id, db):
         applied_count = conn.execute(
             "SELECT COUNT(*) FROM applied_detections WHERE system_id = ?", [system_id]).fetchone()[0]
 
-    # SIEM compatibility check: are the source and target clients mapped to
-    # any of the SAME (siem_id, space) production pair? Composite key is
+    # SIEM compatibility check: are the source and target clients linked to
+    # any of the SAME (siem_id, space) destination? Composite key is
     # mandatory — two clients pointing at SIEM_A 'default' and SIEM_B
     # 'default' are NOT compatible even though their space names match
-    # (CLAUDE.md §8.2 g4).
-    source_scopes = set(db.get_client_siem_scopes(source_client_id, "production"))
-    target_scopes = set(db.get_client_siem_scopes(target_client_id, "production"))
+    # (CLAUDE.md §8.2 g4). Every linked destination counts: its name is a label, never a key (§6).
+    source_scopes = set(db.get_client_siem_scopes(source_client_id))
+    target_scopes = set(db.get_client_siem_scopes(target_client_id))
     shared_scopes = source_scopes & target_scopes
     siem_compatible = bool(shared_scopes)
 
@@ -627,7 +688,7 @@ def get_system(system_id, client_id: str = None):
     frag, params = _cf("", client_id)
     with _get_conn() as conn:
         r = conn.execute(
-            "SELECT id, name, description, created_at, updated_at, classification FROM systems WHERE id = ?" + frag,
+            "SELECT id, name, description, created_at, updated_at, classification, platforms FROM systems WHERE id = ?" + frag,
             [system_id] + params).fetchone()
     return _row_to_system(r) if r else None
 
@@ -651,10 +712,12 @@ def edit_system(system_id, data, client_id: str = None):
     name = data.name if data.name is not None else current.name
     desc = data.description if data.description is not None else current.description
     classification = data.classification if data.classification is not None else current.classification
+    platforms = data.platforms if data.platforms is not None else current.platforms
     with _get_conn() as conn:
         row = conn.execute(
-            "UPDATE systems SET name = ?, description = ?, classification = ?, updated_at = now() WHERE id = ? RETURNING id, name, description, created_at, updated_at, classification",
-            [name, desc, classification, system_id]).fetchone()
+            "UPDATE systems SET name = ?, description = ?, classification = ?, platforms = ?, updated_at = now() "
+            "WHERE id = ? RETURNING id, name, description, created_at, updated_at, classification, platforms",
+            [name, desc, classification, platforms or None, system_id]).fetchone()
     return _row_to_system(row) if row else None
 
 def delete_system(system_id, client_id: str = None):
@@ -814,12 +877,29 @@ def delete_software(software_id, client_id: str = None):
     return before > 0
 
 # --- Nessus Parser ---
+def _refuse_dtd(xml_bytes) -> None:
+    """A Nessus file is a user's upload, so it may declare no DOCTYPE or entity: then no entity can be
+    expanded or fetched when it is parsed. A Nessus export never declares one."""
+    import xml.parsers.expat
+
+    def refuse(*_args):
+        raise ValueError("The file declares a DOCTYPE or entities, which a Nessus export never does, so it wasn't imported.")
+    scan = xml.parsers.expat.ParserCreate()
+    scan.StartDoctypeDeclHandler = refuse
+    scan.EntityDeclHandler = refuse
+    try:
+        scan.Parse(xml_bytes, True)
+    except xml.parsers.expat.ExpatError as exc:
+        raise ValueError(f"Invalid XML: {exc}") from exc
+
+
 def parse_nessus_xml(xml_bytes, system_id, client_id: str = None):
     warnings = []
     hosts_created = 0
     software_inserted = 0
+    _refuse_dtd(xml_bytes)
     try:
-        root = ET.fromstring(xml_bytes)
+        root = ET.fromstring(xml_bytes)  # nosec B314 # _refuse_dtd refused any DOCTYPE or entity first
     except ET.ParseError as exc:
         raise ValueError(f"Invalid XML: {exc}") from exc
     for report_host in root.iter("ReportHost"):
@@ -964,7 +1044,8 @@ def get_host_vulnerabilities(host_id, client_id: str = None):
     if not host:
         return []
     software = list_host_software(host_id, client_id=client_id)
-    if not software:
+    wz = _wazuh_kev_matches(client_id)
+    if not software and host.id not in wz:
         return []
 
     detections = list_cve_detections(client_id=client_id)
@@ -978,7 +1059,7 @@ def get_host_vulnerabilities(host_id, client_id: str = None):
     kev_by_id = {k.get("cveID", ""): k for k in (kev or [])}
     matched_map: Dict[str, List[str]] = {}
     if kev:
-        matched_map = _match_software_against_kev(software, kev, host_os=host.os or "")
+        matched_map = _kev_matches(host, software, kev, wz)
 
     out = []
     for cve_id, sw_names in matched_map.items():
@@ -999,6 +1080,7 @@ def get_system_vulnerabilities(system_id, client_id: str = None):
     if not system:
         return []
     kev = _load_cisa_kev()
+    wz = _wazuh_kev_matches(client_id)
     kev_by_id = {k.get("cveID", ""): k for k in (kev or [])}
     detections = list_cve_detections(client_id=client_id)
     combined_sw: Dict[str, List[str]] = {}          # cve_id -> sw names
@@ -1007,13 +1089,13 @@ def get_system_vulnerabilities(system_id, client_id: str = None):
 
     for host in list_hosts(system_id, client_id=client_id):
         software = all_software.get(host.id, list_host_software(host.id, client_id=client_id))
-        if not software or not kev:
+        if not kev or (not software and host.id not in wz):
             continue
         ah = AffectedHost(host_id=host.id, name=host.name, ip_address=host.ip_address,
                           system_id=system.id, system_name=system.name)
 
         # KEV keyword matches for this host
-        for cve_id, sw_names in _match_software_against_kev(software, kev, host_os=host.os or "").items():
+        for cve_id, sw_names in _kev_matches(host, software, kev, wz).items():
             if cve_id not in combined_hosts:
                 combined_hosts[cve_id] = [ah]
                 combined_sw[cve_id] = list(dict.fromkeys(sw_names))
@@ -1041,6 +1123,7 @@ def get_system_vulnerabilities(system_id, client_id: str = None):
 def get_all_cve_overview(client_id: str = None):
     """Return all KEV entries. Matched entries (with affected hosts) come first."""
     kev_entries = _load_cisa_kev()
+    wz = _wazuh_kev_matches(client_id)
     if not kev_entries:
         return []
     detections = list_cve_detections(client_id=client_id)
@@ -1058,9 +1141,9 @@ def get_all_cve_overview(client_id: str = None):
     for system in systems:
         for host in all_hosts.get(system.id, []):
             software = all_software.get(host.id, [])
-            if not software:
+            if not software and host.id not in wz:
                 continue
-            matches = _match_software_against_kev(software, kev_entries, host_os=host.os or "")
+            matches = _kev_matches(host, software, kev_entries, wz)
             for cve_id in matches:
                 cve_dets = detections.get(cve_id, [])
                 cve_bs = all_blind_spots.get(cve_id, [])
@@ -1088,6 +1171,7 @@ def get_all_cve_overview(client_id: str = None):
 
 def get_cve_detail(cve_id, client_id: str = None):
     kev_entries = _load_cisa_kev()
+    wz = _wazuh_kev_matches(client_id)
     kev_entry = next((k for k in kev_entries if k.get("cveID", "").upper() == cve_id.upper()), None)
     if not kev_entry:
         return None
@@ -1103,7 +1187,7 @@ def get_cve_detail(cve_id, client_id: str = None):
     for system in list_systems(client_id=client_id):
         for host in all_hosts.get(system.id, []):
             software = all_software.get(host.id, [])
-            matches = _match_software_against_kev(software, kev_entries, host_os=host.os or "")
+            matches = _kev_matches(host, software, kev_entries, wz)
             if cve_id.upper() in {k.upper() for k in matches}:
                 match_key = next(k for k in matches if k.upper() == cve_id.upper())
                 if not any(a.host_id == host.id for a in all_affected):
@@ -1131,6 +1215,7 @@ def get_system_summaries(client_id: str = None):
     all_hosts = _list_all_hosts_by_system(client_id=client_id)
     all_software = _list_all_software_by_host(client_id=client_id)
     kev = _load_cisa_kev()
+    wz = _wazuh_kev_matches(client_id)
     detections = list_cve_detections(client_id=client_id)
     applied_map = _load_applied_detections(client_id=client_id)
     # Preload baseline assignment counts per system
@@ -1158,11 +1243,11 @@ def get_system_summaries(client_id: str = None):
         has_amber = False
         for host in hosts:
             software = all_software.get(host.id, [])
-            if not software:
+            if not software and host.id not in wz:
                 continue
             host_vulns: set = set()
             if kev:
-                m = _match_software_against_kev(software, kev, host_os=host.os or "")
+                m = _kev_matches(host, software, kev, wz)
                 host_vulns.update(m.keys())
                 vuln_cves.update(m.keys())
             if host_vulns:
@@ -1203,17 +1288,25 @@ def get_host_summaries(system_id, client_id: str = None):
         return []
     all_software = _list_all_software_by_host(client_id=client_id)
     kev = _load_cisa_kev()
+    wz = _wazuh_kev_matches(client_id)
     detections = list_cve_detections(client_id=client_id)
     applied_map = _load_applied_detections(client_id=client_id)
+    from app.services import wazuh_assets
+    try:
+        with _get_conn() as conn:
+            agents = wazuh_assets.host_counts(conn, [h.id for h in hosts])
+    except Exception:
+        logger.debug("No Wazuh agent facts for the devices", exc_info=True)
+        agents = {}
     summaries = []
     for host in hosts:
         software = all_software.get(host.id, [])
         vuln_count = 0
         detected_count = 0
-        if software:
+        if software or host.id in wz:
             vuln_cves: set = set()
             if kev:
-                m = _match_software_against_kev(software, kev, host_os=host.os or "")
+                m = _kev_matches(host, software, kev, wz)
                 vuln_cves.update(m.keys())
             vuln_count = len(vuln_cves)
             # Only count as detected if a detection is actually applied to this host or its system
@@ -1224,7 +1317,8 @@ def get_host_summaries(system_id, client_id: str = None):
                         break
         sw_names = [sw.name for sw in software] if software else []
         summaries.append(HostSummary(host=host, software_count=len(software), vuln_count=vuln_count,
-                                     detected_count=detected_count, software_names=sw_names))
+                                     detected_count=detected_count, software_names=sw_names,
+                                     wazuh=agents.get(host.id)))
     return summaries
 
 # --- Stats for Dashboard ---
@@ -1246,6 +1340,7 @@ def get_inventory_stats(client_id: str = None) -> InventoryStats:
         return InventoryStats()
     # CVE matching is expensive — use overview to count affected hosts
     kev = _load_cisa_kev()
+    wz = _wazuh_kev_matches(client_id)
     if not kev:
         return InventoryStats(environment_count=env_count, host_count=host_count,
                               software_count=sw_count,
@@ -1259,9 +1354,9 @@ def get_inventory_stats(client_id: str = None) -> InventoryStats:
     for system in list_systems(client_id=client_id):
         for host in all_hosts.get(system.id, []):
             sw = all_software.get(host.id, [])
-            if not sw:
+            if not sw and host.id not in wz:
                 continue
-            m = _match_software_against_kev(sw, kev, host_os=host.os or "")
+            m = _kev_matches(host, sw, kev, wz)
             if m:
                 affected_hosts_set.add(host.id)
                 matched_cves.update(m.keys())
@@ -1278,6 +1373,7 @@ def get_cve_overview_stats(cves=None, client_id: str = None) -> CveOverviewStats
     to avoid recomputing the expensive host/software matching.
     """
     kev = _load_cisa_kev()
+    wz = _wazuh_kev_matches(client_id)
     total_kev = len(kev)
     if not total_kev:
         return CveOverviewStats()
@@ -1303,9 +1399,9 @@ def get_cve_overview_stats(cves=None, client_id: str = None) -> CveOverviewStats
         for system in list_systems(client_id=client_id):
             for host in all_hosts.get(system.id, []):
                 sw = all_software.get(host.id, [])
-                if not sw:
+                if not sw and host.id not in wz:
                     continue
-                m = _match_software_against_kev(sw, kev, host_os=host.os or "")
+                m = _kev_matches(host, sw, kev, wz)
                 if m:
                     affected_hosts_set.add(host.id)
                     affected_cves.update(m.keys())
@@ -1393,15 +1489,15 @@ def get_rules_for_cve_techniques(cve_id: str, client_id: str = None) -> Dict[str
 def get_all_siem_rules(client_id: str = None) -> list:
     """Return a list of ALL SIEM rules [{rule_id, name, mitre_ids, severity, enabled}] for dropdowns.
 
-    NOTE (4.1.0): Migration 37 made `detection_rules` per-tenant-scoped — the
-    shared schema no longer carries a `client_id` column. Calling `_cf()` here
-    against a non-multi-DB deployment would produce `WHERE client_id=?` against
-    a column that doesn't exist (BinderException). The table is already tenant-
-    scoped (either by tenant DB routing or by being empty in pre-migration
-    deployments), so we skip the filter unconditionally."""
+    The client's own rules: its database's ``detection_rules``, which holds only them. ``client_id``
+    picks that database (``tenant_context_for``), so a call outside a request, or from another
+    client's, can't read the wrong one. No ``WHERE client_id``: since migration 37 the table has no
+    such column."""
+    from contextlib import nullcontext
     from app.services.database import get_database_service
+    from app.services.tenant_manager import tenant_context_for
     db = get_database_service()
-    with db.get_connection() as conn:
+    with (tenant_context_for(client_id) if client_id else nullcontext()), db.get_connection() as conn:
         rows = conn.execute(
             "SELECT rule_id, name, mitre_ids, severity, enabled, siem_id, space, deprecated "
             "FROM detection_rules ORDER BY name"
@@ -1749,13 +1845,15 @@ def _rules_synced(client_id: Optional[str]) -> str:
 
 
 def build_system_report_data(system_id: str, include_devices: bool = True, client_id: str = None,
-                             baseline_ids: Optional[List[str]] = None, techniques: str = "gaps") -> Optional[Dict]:
+                             baseline_ids: Optional[List[str]] = None, techniques: str = "gaps",
+                             include_wazuh: bool = True) -> Optional[Dict]:
     """Everything a system's report shows, for the chosen baselines (all of them when none are named).
 
     The figures are the system page's own: the same techniques and statuses, the metric strip's
     totals (``step_totals``) over the chosen baselines, and each technique as its window shows it
     (``get_system_step_details``). ``techniques`` picks which get a detail entry: 'gaps' (no
-    coverage or a known gap), 'all' or 'none'.
+    coverage or a known gap), 'all' or 'none'. ``include_wazuh`` adds ``wazuh`` (the Wazuh devices'
+    vulnerabilities) and ``hardening`` (their CIS benchmark results), when the system has such devices.
     """
     system = get_system(system_id, client_id=client_id)
     if not system:
@@ -1825,6 +1923,7 @@ def build_system_report_data(system_id: str, include_devices: bool = True, clien
         "rule_health": _report_rule_health(techs, details, dest_names),
     }
     data.update(_system_device_report(system_id, client_id=client_id) if include_devices else _NO_DEVICES)
+    data["wazuh"], data["hardening"] = system_wazuh_report(system_id, client_id=client_id) if include_wazuh else (None, [])
     return data
 
 
@@ -1893,6 +1992,8 @@ def _report_technique(row: Dict, detail: Dict) -> Dict:
         "attack": detail["techniques"],
         "evidence_score": detail["evidence_score"], "evidence_rule": detail["evidence_rule"],
         "mapped_count": detail["mapped_count"], "uncounted_count": detail["uncounted_count"],
+        # Enabled rules anywhere at the tenant's destinations carrying its ATT&CK ids ("N to consider").
+        "suggestion_count": row.get("suggestion_count") or 0,
         "mark_reason": detail["blind_spot_reason"],
         "coverage": coverage,
         "rule_names": [d["name"] for d in detail["detections"] if d["counts"]],
@@ -1999,6 +2100,7 @@ _NO_DEVICES = {
 def _system_device_report(system_id: str, client_id: str = None) -> Dict:
     """The device sections of a system's report: each host's KEV CVEs with their RAG status."""
     kev = _load_cisa_kev()
+    wz = _wazuh_kev_matches(client_id)
     kev_by_id = {k.get("cveID", ""): k for k in (kev or [])}
     detections = list_cve_detections(client_id=client_id)
     applied_map = _load_applied_detections(client_id=client_id)
@@ -2015,8 +2117,8 @@ def _system_device_report(system_id: str, client_id: str = None) -> Dict:
     for host in hosts:
         software = all_software.get(host.id, [])
         host_cves: List[Dict] = []
-        if software and kev:
-            matches = _match_software_against_kev(software, kev, host_os=host.os or "")
+        if (software or host.id in wz) and kev:
+            matches = _kev_matches(host, software, kev, wz)
             for cve_id, sw_names in matches.items():
                 cve_dets = detections.get(cve_id, [])
                 cve_bs = all_blind_spots.get(cve_id, [])
@@ -2090,6 +2192,7 @@ def _system_device_report(system_id: str, client_id: str = None) -> Dict:
 def build_cve_report_data(cve_id: str, search_filter: str = "", client_id: str = None) -> Optional[Dict]:
     """Build all data needed for the CVE Audit Report."""
     kev_entries = _load_cisa_kev()
+    wz = _wazuh_kev_matches(client_id)
     kev_entry = next((k for k in kev_entries if k.get("cveID", "").upper() == cve_id.upper()), None)
     if not kev_entry:
         return None
@@ -2116,9 +2219,9 @@ def build_cve_report_data(cve_id: str, search_filter: str = "", client_id: str =
                 if q not in host.name.lower() and q not in (host.ip_address or "").lower():
                     continue
             software = all_software.get(host.id, [])
-            if not software:
+            if not software and host.id not in wz:
                 continue
-            matches = _match_software_against_kev(software, kev_entries, host_os=host.os or "")
+            matches = _kev_matches(host, software, kev_entries, wz)
             if cve_id.upper() not in {k.upper() for k in matches}:
                 continue
             status, rule_names = _compute_coverage_status(host.id, system.id, cve_dets, applied_map, cve_blind_spots)
@@ -3157,12 +3260,69 @@ def _step_detail_context(system_id: str, steps: List[PlaybookStep], client_id: s
         "applied_ids": _applied_detection_ids(system_id, client_id=client_id),
         "blind_spots": _step_blind_spots(step_ids, system_id, client_id=client_id),
         "watched": get_step_coverage(step_ids),
+        "hardening": _step_hardening(step_ids, system_id),
+        "has_hardening_source": _has_sca(system_id),
         "rules_now": rules_now, "dest_names": dest_names,
         "recorded_names": _recorded_rule_names(step_ids),
         "baseline_names": {pid: _playbook_name(pid) for pid in {st.playbook_id for st in steps}},
         "history": {sid: get_technique_history(sid, system_id, client_id=client_id) for sid in step_ids}
                    if with_history else None,
     }
+
+
+def _step_hardening(step_ids: List[str], system_id: str) -> Dict[str, List[Dict]]:
+    """Each technique's hardening checks on this system (wazuh_assets.step_hardening); {} on a tenant
+    without the table."""
+    from app.services import wazuh_assets
+    try:
+        with _get_conn() as conn:
+            return wazuh_assets.step_hardening(conn, step_ids, system_id)
+    except Exception:
+        logger.debug("No hardening checks for the technique window", exc_info=True)
+        return {}
+
+
+def _has_sca(system_id: str) -> bool:
+    """Whether any of the system's devices has SCA results to name checks from."""
+    try:
+        with _get_conn() as conn:
+            if "host_sca_policies" not in {r[0] for r in conn.execute("SELECT table_name FROM duckdb_tables()").fetchall()}:
+                return False
+            return bool(conn.execute("SELECT 1 FROM host_sca_policies p JOIN hosts h ON h.id = p.host_id WHERE h.system_id = ? LIMIT 1",
+                                     [system_id]).fetchone())
+    except Exception:
+        return False
+
+
+def add_technique_hardening(step_id: str, system_id: str, policy_id: str, check_id: str, note: str = "",
+                            actor: str = None, client_id: str = None) -> bool:
+    """Name a hardening check on a technique on this system, in its history. False when the check isn't on
+    the system's devices or is already named."""
+    from app.services import wazuh_assets
+    with _get_conn() as conn:
+        row = wazuh_assets.add_step_hardening(conn, step_id, system_id, policy_id, check_id, note, actor)
+        if not row:
+            return False
+        _record_technique_event(conn, "hardening_added", step_id=step_id, system_id=system_id, source="wazuh",
+                                reason=note or None, detail=_hardening_label(row), actor=actor, client_id=client_id)
+    return True
+
+
+def remove_technique_hardening(hardening_id: str, step_id: str, system_id: str, actor: str = None,
+                               client_id: str = None) -> bool:
+    from app.services import wazuh_assets
+    with _get_conn() as conn:
+        row = wazuh_assets.remove_step_hardening(conn, hardening_id, step_id, system_id)
+        if not row:
+            return False
+        _record_technique_event(conn, "hardening_removed", step_id=step_id, system_id=system_id, source="wazuh",
+                                detail=_hardening_label(row), actor=actor, client_id=client_id)
+    return True
+
+
+def _hardening_label(row: Dict) -> str:
+    cis = ", ".join(row.get("cis_ids") or [])
+    return f"CIS {cis}: {row.get('title')}" if cis else str(row.get("title") or "")
 
 
 def _rule_display_name(rule, d, recorded: Dict[Tuple[str, str], str]) -> str:
@@ -3282,6 +3442,9 @@ def _step_detail(step: PlaybookStep, ctx: Dict) -> Dict:
         "not_effective_why": _not_effective_why(covering) if not working else [],
         # Dashboards, reports and logs watching it (non-alerting coverage).
         "watched": watched,
+        # Hardening checks named on it (Wazuh SCA / CIS): mitigation beside coverage, never counted in it.
+        "hardening": ctx.get("hardening", {}).get(step_id, []),
+        "has_hardening_source": ctx.get("has_hardening_source", False),
         "risk_labels": {"priority": dict(STEP_PRIORITIES), "category": dict(STEP_CATEGORIES),
                         "coverage_kind": dict(COVERAGE_KINDS)},
         "detections": live,
@@ -3816,7 +3979,8 @@ def step_totals(steps: List[Dict]) -> Dict[str, int]:
     """The system page's metric strip for these techniques: Covered is ``covered / (total - na)``,
     Effective ``effective / (total - na)``: covered, less those covered only by rules a Rule
     Monitoring finding stops working (``not_effective``, partly covered ones included) (#79).
-    ``gap`` counts every technique with a known gap, ``partial`` those of them partly covered."""
+    ``gap`` counts every technique with a known gap, ``partial`` those of them partly covered;
+    ``none_critical`` those with no coverage whose priority is Critical (No coverage shows red)."""
     return {
         "total": len(steps),
         "covered": sum(1 for s in steps if s["status"] == "green"),
@@ -3826,6 +3990,7 @@ def step_totals(steps: List[Dict]) -> Dict[str, int]:
         "partial": sum(1 for s in steps if s.get("partial")),
         "na": sum(1 for s in steps if s["status"] == "grey"),
         "none": sum(1 for s in steps if s["status"] == "red"),
+        "none_critical": sum(1 for s in steps if s["status"] == "red" and s.get("priority") == "critical"),
         "unmapped": sum(1 for s in steps if not s.get("mapped_count")),
         "uncounted": sum(1 for s in steps if s.get("uncounted_count")),
     }
@@ -4354,6 +4519,7 @@ _EVENT_KIND = {
     "gap_added": "gaps", "gap_removed": "gaps", "na_added": "gaps", "na_removed": "gaps",
     "gap_edited": "gaps", "na_edited": "gaps",
     "sigma_dismissed": "technique", "sigma_restored": "technique",
+    "hardening_added": "hardening", "hardening_removed": "hardening",
     "technique_added": "technique", "technique_edited": "technique", "risks_edited": "technique",
     "siem_coverage": "coverage", "siem_counted": "coverage", "siem_uncounted": "coverage",
 }
@@ -4464,6 +4630,81 @@ def remove_step_detection(detection_row_id: str, client_id: str = None, actor: s
                 actor=actor, client_id=client_id,
             )
     return cnt > 0
+
+
+def attack_id_suggestions(system_id: str, client_id: str = None, include_disabled: bool = False) -> Dict[str, Any]:
+    """Map rules by ATT&CK id… (a system's Baselines ⋮): each of this system's techniques with no rule
+    mapped and not N/A, with the rules carrying one of its ATT&CK ids (the same exact match as the
+    rule picker's suggestions and a card's "N to consider"), Wazuh's and Elastic's, current and enabled
+    (``include_disabled``: disabled ones too), at the destinations the system counts (every destination
+    of the client while it counts none). Enabled first, then the best scored. Nothing is mapped here, and
+    nothing is ticked by default: a person ticks which to map (``map_rules_by_attack``).
+
+    ``{"items": [{step, rules: [{key, rule_id, siem_id, space, name, score, enabled, wazuh, destination,
+    color}]}], "destinations": [names], "undefined": the system counts no destination yet}``."""
+    from app.services.database import get_database_service
+    counted = set(get_system_coverage_destinations(system_id, client_id=client_id))
+    linked = get_database_service().get_client_siems(client_id) or [] if client_id else []
+    allowed = {(d["id"], d.get("space") or "default"): d for d in linked
+               if not counted or (d["id"], d.get("space") or "default") in counted}
+    out: Dict[str, Any] = {"items": [], "undefined": not counted,
+                           "destinations": [d.get("name") or d.get("space") for d in allowed.values()]}
+    if not allowed:
+        return out
+    steps = [s for s in get_system_steps(system_id, client_id=client_id)["steps"]
+             if not s.get("mapped_count") and s.get("status") != "grey"]
+    if not steps:
+        return out
+    pairs = sorted(allowed)
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT rule_id, siem_id, space, name, score, mitre_ids, COALESCE(enabled, 0) = 1, rule_type = 'wazuh' "
+            "FROM detection_rules r WHERE NOT COALESCE(deprecated, false) "
+            + ("" if include_disabled else "AND COALESCE(enabled, 0) = 1 ") +
+            "AND EXISTS (SELECT 1 FROM (SELECT unnest(?::VARCHAR[]) AS s, unnest(?::VARCHAR[]) AS sp) x "
+            "WHERE x.s = r.siem_id AND x.sp = r.space)",
+            [[p[0] for p in pairs], [p[1] for p in pairs]],
+        ).fetchall()
+    by_id: Dict[str, List[Dict]] = {}
+    for rule_id, siem_id, space, name, score, mitre_ids, enabled, wazuh in rows:
+        dest = allowed[(siem_id, space)]
+        rule = {"key": f"{rule_id}|{siem_id}|{space}", "rule_id": rule_id, "siem_id": siem_id, "space": space,
+                "name": name or rule_id, "score": score, "enabled": enabled, "wazuh": wazuh,
+                "destination": dest.get("name") or space, "color": dest.get("color")}
+        for mid in mitre_ids or []:
+            by_id.setdefault(str(mid).upper(), []).append(rule)
+    for step in steps:
+        rules, seen = [], set()
+        for tid in step.get("display_technique_ids") or []:
+            for rule in by_id.get(str(tid).upper(), []):
+                if rule["key"] not in seen:
+                    seen.add(rule["key"])
+                    rules.append(rule)
+        if rules:
+            rules.sort(key=lambda r: (not r["enabled"], -(r["score"] or 0), r["name"].lower(), r["destination"]))
+            out["items"].append({"step": step, "rules": rules})
+    return out
+
+
+def map_rules_by_attack(system_id: str, picks: List[str], client_id: str = None, actor: str = None) -> int:
+    """Map the ticked suggestions of ``attack_id_suggestions`` (``"<step_id>|<rule key>"`` each), each
+    as a rule mapped by hand from the technique's window: the destination's copy, in the technique's
+    history, applied to the system, and unmapped as any other. A pick that isn't a suggestion now
+    (mapped since, or not one of this system's) is left out; a disabled rule ticked with Include disabled
+    rules is one. Returns how many were mapped."""
+    offered = {f"{item['step']['step_id']}|{rule['key']}": (item["step"]["step_id"], rule)
+               for item in attack_id_suggestions(system_id, client_id=client_id, include_disabled=True)["items"]
+               for rule in item["rules"]}
+    mapped = 0
+    for pick in dict.fromkeys(picks):
+        if pick not in offered:
+            continue
+        step_id, rule = offered[pick]
+        det = add_step_detection(step_id, rule["rule_id"], note=rule["name"], source="siem", client_id=client_id,
+                                 siem_id=rule["siem_id"], space=rule["space"], created_by=actor)
+        apply_detection(det.id, system_id=system_id, client_id=client_id)
+        mapped += 1
+    return mapped
 
 
 def parse_technique_ids(raw: str) -> List[str]:

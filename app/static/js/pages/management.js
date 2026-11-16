@@ -43,7 +43,7 @@
             var resp = await fetch(url, { method: 'POST', body: formData });
             result.innerHTML = await resp.text();
         } catch (ex) {
-            result.innerHTML = '<span class="badge badge-danger">Network error</span>';
+            result.innerHTML = '<span class="badge badge-danger">' + TIDE.UNREACHABLE + '</span>';
         }
         btn.disabled = false;
     }
@@ -58,19 +58,27 @@
     }
 
     // ── SIEM dialog: fields per type ──
+    // Wazuh's: form name wazuh_<field>, input siem-form-wazuh-<field-with-dashes>. The card carries
+    // the URLs and users; a password left blank keeps the saved one.
+    var WAZUH_FIELDS = ['manager_url', 'api_user', 'api_password', 'indexer_url', 'indexer_user', 'indexer_password'];
+    function wazuhId(f) { return 'siem-form-wazuh-' + f.replace(/_/g, '-'); }
+    function appendWazuh(fd) {
+        WAZUH_FIELDS.forEach(function (f) { fd.append('wazuh_' + f, $(wazuhId(f)).value); });
+    }
     function updateSiemFields() {
         var type = $('siem-form-type').value;
         $('siem-fields-elastic').style.display = type === 'elastic' ? '' : 'none';
+        $('siem-fields-wazuh').style.display = type === 'wazuh' ? '' : 'none';
         $('siem-fields-splunk').style.display = type === 'splunk' ? '' : 'none';
         $('siem-fields-sentinel').style.display = type === 'sentinel' ? '' : 'none';
-        // Only show Test Connection for elastic
-        $('siem-test-btn').style.display = type === 'elastic' ? '' : 'none';
+        // Test Connection is for the SIEMs TIDE reads
+        $('siem-test-btn').style.display = type === 'elastic' || type === 'wazuh' ? '' : 'none';
         $('siem-test-result').innerHTML = '';
     }
     function clearSiemFields() {
         ['siem-form-es-url', 'siem-form-kb-url', 'siem-form-token',
          'siem-form-splunk-url', 'siem-form-splunk-token',
-         'siem-form-sentinel-url', 'siem-form-sentinel-token'].forEach(function (id) {
+         'siem-form-sentinel-url', 'siem-form-sentinel-token'].concat(WAZUH_FIELDS.map(wazuhId)).forEach(function (id) {
             var el = $(id);
             if (el) el.value = '';
         });
@@ -89,6 +97,11 @@
         if (s.type === 'elastic') {
             $('siem-form-es-url').value = s.esUrl || '';
             $('siem-form-kb-url').value = s.kbUrl || '';
+        } else if (s.type === 'wazuh') {
+            $(wazuhId('manager_url')).value = s.managerUrl || '';
+            $(wazuhId('api_user')).value = s.apiUser || '';
+            $(wazuhId('indexer_url')).value = s.indexerUrl || '';
+            $(wazuhId('indexer_user')).value = s.indexerUser || '';
         } else if (s.type === 'splunk') {
             $('siem-form-splunk-url').value = s.kbUrl || '';
         } else if (s.type === 'sentinel') {
@@ -110,6 +123,8 @@
             fd.append('elasticsearch_url', $('siem-form-es-url').value);
             fd.append('kibana_url', $('siem-form-kb-url').value);
             fd.append('api_token', $('siem-form-token').value);
+        } else if (type === 'wazuh') {
+            appendWazuh(fd);
         } else if (type === 'splunk') {
             fd.append('kibana_url', $('siem-form-splunk-url').value);
             fd.append('api_token', $('siem-form-splunk-token').value);
@@ -120,11 +135,15 @@
         submitTo(id ? '/api/management/siems/' + id : '/api/management/siems', id ? 'PUT' : 'POST', fd, closeSiem, 'mgmt-integrations');
     }
     function testSiem() {
-        var fd = new FormData();
+        var fd = new FormData(), type = $('siem-form-type').value;
         fd.append('siem_id', $('siem-form-id').value);
-        fd.append('kibana_url', $('siem-form-kb-url').value);
-        fd.append('api_token', $('siem-form-token').value);
-        fd.append('siem_type', $('siem-form-type').value);
+        if (type === 'wazuh') {
+            appendWazuh(fd);
+        } else {
+            fd.append('kibana_url', $('siem-form-kb-url').value);
+            fd.append('api_token', $('siem-form-token').value);
+        }
+        fd.append('siem_type', type);
         fd.append('tls_verify', checked('siem-form-tls-verify'));
         testConnection('siem-test-btn', 'siem-test-result', '/api/management/siems/test-connection', fd);
     }

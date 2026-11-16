@@ -39,7 +39,7 @@
         document.querySelectorAll('.ttp-card').forEach(function (cell) {
             var matches = !q || (cell.dataset.techId || '').toLowerCase().includes(q)
                 || (cell.dataset.techName || '').toLowerCase().includes(q)
-                || (cell.getAttribute('title') || '').toLowerCase().includes(q);
+                || TIDE.titleOf(cell).toLowerCase().includes(q);
             var hit = !!q && matches;
             cell.style.opacity = matches ? '1' : '0.2';
             cell.style.transform = hit ? 'scale(1.08)' : '';

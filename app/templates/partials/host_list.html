@@ -31,24 +31,27 @@
         <input name="Host Search" id="host-search" class="form-input" type="search" placeholder="Search by name, IP, OS or package…"
                data-input="hosts.filter">
     </div>
-    {{ filter_choice('host-cve-filter', 'cve', 'Risk status', [('all', 'All statuses'), ('cve', 'CVE Found'), ('clean', 'Clean')], 'all', attrs='data-change="hosts.filter"') }}
-    {{ filter_choice('host-sort', 'sort', 'Sort', [('name', 'Name'), ('vuln', 'CVE count'), ('status', 'Status')], 'name', attrs='data-change="hosts.sort"') }}
+    {{ filter_choice('host-cve-filter', 'cve', 'Risk status', [('all', 'Any'), ('cve', 'CVE found'), ('clean', 'Clean')], 'all', attrs='data-change="hosts.filter"') }}
+    {{ filter_choice('host-sort', 'sort', 'Sort by', [('name', 'Name'), ('vuln', 'CVE count'), ('status', 'Status')], 'name', attrs='data-change="hosts.sort"') }}
 </form>
 
 <div id="host-search-count" class="text-muted fs-md mb-sm"></div>
 
-<div class="cve-list" id="host-card-grid">
+<div class="cve-list" id="host-card-grid" data-fold-store="tide.deviceFolds">
     {% for hs in host_summaries %}
     {% set h = hs.host %}
-    {# RAG status: 0=green, 1=amber, 2=red #}
+    {# RAG status: 0=green, 1=amber, 2=red. A Wazuh device's findings count for Risk status and CVE count
+       whether or not CISA lists them (vuln_count is its known exploited ones). #}
     {% if hs.vuln_count == 0 %}{% set rag = 0 %}{% elif hs.detected_count >= hs.vuln_count %}{% set rag = 1 %}{% else %}{% set rag = 2 %}{% endif %}
+    {% set found = hs.wazuh.total if hs.wazuh else hs.vuln_count %}
     <details class="cve-card-item cve-card-item--available host-cve-card block"
-             data-collapse-key="system-host-{{ h.id }}"
+             data-fold="{{ h.id }}"
+             data-source="{{ h.source }}"
              data-name="{{ (h.name or '') | lower }}"
              data-ip="{{ (h.ip_address or '') | lower }}"
              data-os="{{ (h.os or '') | lower }}"
-             data-cve="{{ 'cve' if hs.vuln_count > 0 else 'clean' }}"
-             data-vuln-count="{{ hs.vuln_count }}"
+             data-cve="{{ 'cve' if found > 0 else 'clean' }}"
+             data-vuln-count="{{ found }}"
              data-rag="{{ rag }}"
              data-software="{{ hs.software_names | join(',') | lower }}">
         <summary class="cursor-pointer list-none">
@@ -63,19 +66,26 @@
                 </div>
                 <div class="cve-card-item__right">
                     <div class="cve-card-item__meta">
+                        {% if hs.wazuh %}
+                        <span class="status-pill status-{{ 'success' if hs.wazuh.status == 'active' else 'muted' }}" title="Wazuh agent {{ hs.wazuh.agent_id }}{% if hs.wazuh.last_seen %}, last seen {{ hs.wazuh.last_seen.strftime('%Y-%m-%d %H:%M') }}{% endif %}"><span class="status-dot"></span>{{ hs.wazuh.status | capitalize or 'Unknown' }}</span>
+                        <span title="Wazuh's vulnerability findings: {% for s, n in hs.wazuh.by_severity.items() %}{{ s }} {{ n }}{{ ', ' if not loop.last }}{% endfor %}">{{ hs.wazuh.total }} vulnerabilit{{ 'y' if hs.wazuh.total == 1 else 'ies' }}{% if hs.wazuh.by_severity.Critical %} · {{ hs.wazuh.by_severity.Critical }} critical{% endif %}{% if hs.wazuh.by_severity.High %} · {{ hs.wazuh.by_severity.High }} high{% endif %}</span>
+                        {% if hs.wazuh.kev %}<span class="text-danger">{{ hs.wazuh.kev }} known exploited</span>{% endif %}
+                        {% else %}
                         <span>{{ hs.software_count }} package{{ 's' if hs.software_count != 1 else '' }}</span>
                         <span>{{ hs.vuln_count }} CVE{{ 's' if hs.vuln_count != 1 else '' }}</span>
                         {% if hs.detected_count is defined %}<span>{{ hs.detected_count }} detected</span>{% endif %}
+                        {% endif %}
                     </div>
                 </div>
             </div>
         </summary>
         <div class="cve-card-item__meta mt-sm grid gap-xs">
-            <div><strong>Description:</strong> {{ 'Imported from Nessus scan.' if h.source == 'nessus' else 'Manually tracked device.' }}</div>
+            <div><strong>Description:</strong> {{ 'Imported from Nessus scan.' if h.source == 'nessus' else ('Wazuh agent ' ~ hs.wazuh.agent_id ~ ', refreshed at each sync.' if hs.wazuh else 'Manually tracked device.') }}</div>
             <div><strong>Platform:</strong> {{ h.os or 'Not recorded' }}</div>
             <div><strong>Package Count:</strong> {{ hs.software_count }}</div>
             {% if h.hardware_vendor or h.model %}<div><strong>Hardware:</strong> {{ h.hardware_vendor or 'Unknown vendor' }}{% if h.model %} / {{ h.model }}{% endif %}</div>{% endif %}
         </div>
+        {% if not hs.wazuh %}
         <div class="mt-sm flex justify-end">
                 <button name="Delete Hosts" class="btn btn-danger btn-sm"
                         hx-delete="/api/inventory/hosts/{{ h.id }}?system_id={{ system_id }}"
@@ -86,6 +96,7 @@
                     {{ icon('trash-2', '11') }}
                 </button>
         </div>
+        {% endif %}
     </details>
     {% endfor %}
 </div>

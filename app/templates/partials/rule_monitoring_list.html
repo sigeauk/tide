@@ -9,7 +9,7 @@
 {% from "components/ui/loading_state.html" import loading_state %}
 
 {% if oob %}
-<div class="metrics-grid metrics-grid--7" id="rmon-metrics" hx-swap-oob="true">{% include "partials/rule_monitoring_metrics.html" %}</div>
+<div class="metrics-grid" id="rmon-metrics" hx-swap-oob="true">{% include "partials/rule_monitoring_metrics.html" %}</div>
 {% endif %}
 
 {# An issue's action: Raise issue, every cause of it as listed here (its path): for an index or field
@@ -24,13 +24,13 @@
 {%- endmacro %}
 
 {# ``node.mem`` (rule_monitoring.remember_keys): where it is listed, so each group is opened or closed
-   as this browser last left it (data-remember), whatever the list redraws. A large group
+   as this browser last left it (data-fold), whatever the list redraws. A large group
    (``node.lazy``, rule_monitoring.INLINE_ROWS) loads its own rules (rule_monitoring.rows) once it is
    open and in view, however it was opened, so a long list doesn't draw thousands of rules nobody
    has opened; the rest are drawn with the page and open at once. #}
 {% macro group_block(node, level) -%}
 {% set opened = node.kind in ('issue', 'fixer', 'destination') and level == 'outer' or (node.kind == 'issue' and level == 'inner') %}
-<details class="sys-group sys-group--{{ level }}" data-remember="{{ node.mem }}"{% if opened %} open{% endif %}>
+<details class="sys-group sys-group--{{ level }}" data-fold="{{ node.mem }}"{% if opened %} open{% endif %}>
     <summary class="sys-group__head">
         <span class="sys-group__chev">{{ icon('chevron-down', '14') }}</span>
         <span class="sys-group__label">{{ node.label }}</span>

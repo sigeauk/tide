@@ -1,11 +1,13 @@
 {% from "macros/metrics.html" import metric_card %}
-{% set keys = metric_keys | default(none) %}{% set link = metric_link | default(none) %}
-{% from "macros/icons.html" import icon %}
+{# Threat Landscape shows four cards: Unique TTPs on Global coverage, Fully covered on Tracked actors. A Dashboard
+   section passes the ones it chose (dashboards.SOURCES). Coverage is a share, not a fault: nothing here is red. #}
+{% set keys = metric_keys | default(['actors', 'coverage', 'gaps', 'last_synced']) %}{% set link = metric_link | default(none) %}
 <!-- Threat Landscape Metrics Row -->
-{% call metric_card('actors', keys, link) %}
+{% call metric_card('actors', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value">{{ metrics.total_actors }}</p>
-    <p class="metric-label">Tracked Actors</p>
-    <p class="metric-sub">{{ metrics.origin_breakdown | length }} origins</p>
+    <p class="metric-label">Tracked actors</p>
+    <p class="metric-sub">{{ metrics.fully_covered_actors }} fully covered · {{ metrics.partially_covered_actors }} partly</p>
+    <div class="metric-tip" role="tooltip">Threat actors from {{ metrics.origin_breakdown | length }} origin{{ '' if metrics.origin_breakdown | length == 1 else 's' }}. Beneath: those whose every TTP has a rule, and those with some</div>
 {% endcall %}
 
 {% call metric_card('ttps', keys, link) %}
@@ -14,28 +16,25 @@
     <p class="metric-sub">{{ metrics.total_ttps }} total instances</p>
 {% endcall %}
 
-{% call metric_card('coverage', keys, link) %}
-    <p class="metric-value {% if metrics.global_coverage_pct >= 70 %}success{% elif metrics.global_coverage_pct >= 40 %}warning{% else %}danger{% endif %}">{{ metrics.global_coverage_pct }}%</p>
-    <p class="metric-label">Global Coverage</p>
-    <p class="metric-sub">{{ metrics.covered_ttps }} covered</p>
+{% call metric_card('coverage', keys, link, 'metric-card--tip', tip=true) %}
+    <p class="metric-value {% if metrics.global_coverage_pct >= 70 %}success{% elif metrics.global_coverage_pct >= 40 %}warning{% endif %}">{{ metrics.global_coverage_pct }}%</p>
+    <p class="metric-label">Global coverage</p>
+    <p class="metric-sub">{{ metrics.covered_ttps }} of {{ metrics.unique_ttps }} TTPs</p>
+    <div class="metric-tip" role="tooltip">The tracked actors' TTPs an enabled rule covers, of the {{ metrics.unique_ttps }} they use between them ({{ metrics.total_ttps }} counting each actor's own)</div>
 {% endcall %}
 
 {% call metric_card('gaps', keys, link, 'metric-card--tip', tip=true) %}
-    <p class="metric-value {% if metrics.uncovered_ttps < 20 %}success{% elif metrics.uncovered_ttps < 50 %}warning{% else %}danger{% endif %}">{{ metrics.uncovered_ttps }}</p>
-    <p class="metric-label">Coverage Gaps</p>
+    <p class="metric-value {% if metrics.uncovered_ttps < 20 %}success{% else %}warning{% endif %}">{{ metrics.uncovered_ttps }}</p>
+    <p class="metric-label">Coverage gaps</p>
     <div class="metric-tip" role="tooltip">TTPs without rules</div>
 {% endcall %}
 
 {% call metric_card('fully_covered', keys, link) %}
     <p class="metric-value {% if metrics.fully_covered_actors > metrics.uncovered_actors %}success{% else %}warning{% endif %}">{{ metrics.fully_covered_actors }}</p>
-    <p class="metric-label">Fully Covered</p>
+    <p class="metric-label">Fully covered</p>
     <p class="metric-sub">{{ metrics.partially_covered_actors }} partial</p>
 {% endcall %}
 
-{% call metric_card('last_synced', keys, link) %}
-    <p class="metric-value fs-title">
-        {{ icon('refresh-cw', '24') }}
-    </p>
-    <p class="metric-label">Last Synced</p>
-    <p class="metric-sub">{{ last_sync_time | default('Never') }}</p>
-{% endcall %}
+{# Last synced: the client's newest sync, the same card as Rule Health's (rule_issues.freshness), which
+   reads the threat actors from its connectors too. It said "Never" after every restart (UX.md 5.7). #}
+{% include "partials/last_synced_card.html" %}

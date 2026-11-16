@@ -1,7 +1,7 @@
 {#  Partial: partials/baselines_metrics.html -- the Dashboard's Baselines cards.
     Context: baselines_overview (the templates), baselines_rollup (the systems' own baselines);
     metric_keys / metric_link as macros/metrics.html takes them; a Dashboard section comparing with
-    an earlier day adds the change in Rules Mapped, Uncovered and Fully Covered (changes).
+    an earlier day adds the change in Rules mapped, Uncovered and Fully covered (changes).
 #}
 {% from "macros/icons.html" import icon_text %}
 {% from "macros/metrics.html" import metric_card, metric_change, metric_change_tip %}
@@ -17,19 +17,19 @@
     {% set ns_tactics = namespace(total=0) %}
     {% for bl in baselines_overview %}{% set ns_tactics.total = ns_tactics.total + bl.tactic_count %}{% endfor %}
     <p class="metric-value">{{ ns_tactics.total }}</p>
-    <p class="metric-label">Techniques Defined</p>
+    <p class="metric-label">Techniques defined</p>
     <div class="metric-tip" role="tooltip">Baseline techniques</div>
 {% endcall %}
 {# Coverage lives on each system's own baselines, not on the templates they came from. #}
 {% set ru = baselines_rollup or {'baselines': 0, 'rules_mapped': 0, 'red': 0, 'green': 0} %}
 {% call metric_card('system_baselines', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value">{{ ru.baselines }}</p>
-    <p class="metric-label">System Baselines</p>
+    <p class="metric-label">System baselines</p>
     <div class="metric-tip" role="tooltip">Baselines on systems</div>
 {% endcall %}
 {% call metric_card('rules_mapped', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value {{ 'success' if ru.rules_mapped > 0 else '' }}">{{ ru.rules_mapped }}</p>
-    <p class="metric-label">Rules Mapped</p>
+    <p class="metric-label">Rules mapped</p>
     {{ metric_change(changes.rules_mapped) }}
     <div class="metric-tip" role="tooltip">Detection rules{{ metric_change_tip(changes.rules_mapped) }}</div>
 {% endcall %}
@@ -41,13 +41,13 @@
 {% endcall %}
 {% call metric_card('fully_covered', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value {{ 'success' if ru.green > 0 else '' }}">{{ ru.green }}</p>
-    <p class="metric-label">Fully Covered</p>
+    <p class="metric-label">Fully covered</p>
     {{ metric_change(changes.fully_covered) }}
     <div class="metric-tip" role="tooltip">All techniques monitored{{ metric_change_tip(changes.fully_covered) }}</div>
 {% endcall %}
 {% call metric_card('not_effective', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value {{ 'warning' if ru.not_effective else '' }}">{{ ru.not_effective | default(0) }}</p>
-    <p class="metric-label">Not Effective</p>
+    <p class="metric-label">Not effective</p>
     <div class="metric-tip" role="tooltip">System baselines with a technique covered only by rules that can't work now (a Rule Monitoring error, or a field they match on missing or empty)</div>
 {% endcall %}
 {% else %}

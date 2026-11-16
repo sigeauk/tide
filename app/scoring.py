@@ -124,6 +124,27 @@ COMPONENTS = (
      "Full points when alert suppression is configured, which cuts down duplicate alerts."),
 )
 COMPONENT_BY_KEY = {c[0]: c for c in COMPONENTS}
+
+# A Wazuh rule (app.services.wazuh_sync) is scored on MITRE mapping, author, description and enabled;
+# these checks can't be judged for it, so they are not applicable (none of them counts for or against it).
+WAZUH_RULE_TYPE = "wazuh"
+WAZUH_NOT_SCORED = {
+    "mapping": "Not scored: a Wazuh rule matches decoded fields, which have no index mapping to check.",
+    "field_type": "Not scored: a Wazuh rule matches decoded fields, which have no index mapping to check.",
+    "search_time": "Not scored: Wazuh doesn't report how long a rule takes.",
+    "language": "Not scored for a Wazuh rule.",
+    "execution": "Not scored: a Wazuh rule doesn't run on a schedule.",
+    "schedule": "Not scored: a Wazuh rule doesn't run on a schedule.",
+    "freshness": "Not scored: Wazuh keeps no last-updated date for a rule.",
+    "note": "Not scored: a Wazuh rule has no investigation guide.",
+    "override": "Not scored: a Wazuh rule has no timestamp override.",
+    "highlights": "Not scored for a Wazuh rule.",
+    "references": "Not scored for a Wazuh rule.",
+    "false_positives": "Not scored for a Wazuh rule.",
+    "tags": "Not scored for a Wazuh rule.",
+    "setup": "Not scored for a Wazuh rule.",
+    "suppression": "Not scored for a Wazuh rule.",
+}
 DEFAULT_WEIGHTS: Dict[str, int] = {c[0]: c[3] for c in COMPONENTS}
 MAX_WEIGHT = 100
 
@@ -488,6 +509,10 @@ def score_rule(rule_data: Dict[str, Any], weights: Optional[Dict[str, Any]] = No
     put("setup", 1.0 if has_setup else 0.0, "Setup guide written." if has_setup else "No setup guide.")
     grouped = bool(isinstance(raw.get("alert_suppression"), dict) and raw["alert_suppression"].get("group_by"))
     put("suppression", 1.0 if grouped else 0.0, "Alert suppression configured." if grouped else "No alert suppression.")
+
+    if raw.get("type") == WAZUH_RULE_TYPE:
+        for key, why in WAZUH_NOT_SCORED.items():
+            put(key, None, why)
 
     detail, columns = _finish([out[key] for key in DEFAULT_WEIGHTS], resolve_weights(weights))
     rule_data.update(columns)

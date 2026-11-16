@@ -1,0 +1,77 @@
+{#
+  The Detection Backlog's rows (api.backlog.page_context): one fold per ATT&CK technique, most urgent
+  first, each the Systems page's group (sys-group). Its head says how many systems, which statuses,
+  KEV CVEs and threat actors; its body, the ATT&CK technique (pill: side panel; name: its window),
+  the rules ready, the KEV CVEs, and each system's baseline technique as its card (step_card: opens
+  that technique's window on that system). Each fold opens or closes as this browser last left it.
+#}
+{% from "macros/icons.html" import icon, tactic_icon %}
+{% from "macros/modal.html" import empty_state %}
+{% from "components/mitre_pill.html" import mitre_pill %}
+
+{% macro counted(n, one, many='') -%}{{ n }} {{ one if n == 1 else (many or one ~ 's') }}{%- endmacro %}
+
+{# Its baseline techniques by status, as a system's page counts them: a known gap with coverage
+   beside it (Partial coverage) is a known gap; Not effective counts partly covered ones too. #}
+{% macro statuses(r) -%}
+{%- set parts = [] -%}
+{%- if r.counts.red %}{% set _ = parts.append(r.counts.red ~ ' no coverage') %}{% endif -%}
+{%- if r.counts.amber %}{% set _ = parts.append(counted(r.counts.amber, 'known gap')) %}{% endif -%}
+{%- if r.counts.not_effective %}{% set _ = parts.append(r.counts.not_effective ~ ' not effective') %}{% endif -%}
+{{ parts | join(', ') }}
+{%- endmacro %}
+
+{% if rows %}
+{% for r in rows %}
+<details name="Backlog Technique" class="sys-group sys-group--outer" data-fold="{{ r.tid or 'none' }}">
+    <summary class="sys-group__head">
+        <span class="sys-group__chev">{{ icon('chevron-down', '14') }}</span>
+        <span class="sys-group__label">{% if r.tid %}<span class="backlog-id">{{ r.tid }}</span> {{ r.name or 'Not in ATT&CK' }}{% else %}No ATT&amp;CK technique{% endif %}</span>
+        {% if r.priority %}<span class="status-pill sm-priority sm-priority--{{ r.priority }}" title="The highest priority set on one of its baseline techniques">{{ r.priority | capitalize }}</span>{% endif %}
+        {% if r.due %}<span class="status-pill status-warning" title="{{ counted(r.due, 'known gap') }} on it {{ 'is' if r.due == 1 else 'are' }} past {{ 'its' if r.due == 1 else 'their' }} Review by date">{{ icon('calendar', '11') }} <span class="status-pill__text">Review due</span></span>{% endif %}
+        <span class="sys-group__meta">
+            {{ counted(r.systems, 'system') }} · {{ statuses(r) }}
+            {%- if r.tid %} · {{ counted(r.kev | length, 'KEV CVE') }} · {{ counted(r.actors, 'threat actor') }}{% endif %}
+        </span>
+    </summary>
+    <div class="sys-group__body">
+        {% if r.tid %}
+        <dl class="rm-facts">
+            <div><dt>ATT&amp;CK</dt><dd>{{ mitre_pill(r.tid, neutral=true, clickable=true, size='sm') }}
+                {% if r.name and can.mitre %}<button type="button" class="rm-item__open" title="Open {{ r.tid }} in MITRE ATT&amp;CK"
+                        hx-get="/api/mitre/window/technique/{{ r.tid | urlencode }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">{{ r.name }}</button>
+                {% else %}{{ r.name }}{% endif %}</dd></div>
+            {% if r.tactic %}<div><dt>Tactic</dt><dd><span class="sys-tactic">{{ tactic_icon(r.tactic, '12') }} {{ r.tactic }}</span></dd></div>{% endif %}
+            <div title="The client's threat actors (Threat Landscape) that use {{ r.tid }}"><dt>Threat actors</dt><dd>{{ r.actors }}</dd></div>
+            <div title="Known exploited CVEs on these systems' devices that are exploited through {{ r.tid }}"><dt>KEV CVEs</dt><dd>
+                {%- for c in r.kev %}{% if can.cves %}<a href="/cve/{{ c | urlencode }}">{{ c }}</a>{% else %}{{ c }}{% endif %}{{ ', ' if not loop.last }}{% else %}None{% endfor -%}
+            </dd></div>
+            <div title="Enabled rules at the client's destinations that carry {{ r.tid }}: one may only need mapping to these techniques"><dt>Your rules</dt><dd>
+                {%- if r.ready.rules and can.mitre %}<button type="button" class="rm-item__open" hx-get="/api/mitre/window/technique/{{ r.tid | urlencode }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">{{ counted(r.ready.rules, 'rule') }}</button>
+                {%- else %}{{ r.ready.rules or 'None' }}{% endif -%}
+            </dd></div>
+            <div title="Elastic's detection rules for {{ r.tid }} that aren't deprecated, to deploy"><dt>Elastic rules</dt><dd>
+                {%- if r.ready.elastic and can.elastic %}<a href="/elastic?technique={{ r.tid | urlencode }}">{{ r.ready.elastic }}</a>{% else %}{{ r.ready.elastic or 'None' }}{% endif -%}
+            </dd></div>
+            <div title="SigmaHQ's rules for {{ r.tid }} that aren't deprecated or unsupported, to convert"><dt>Sigma rules</dt><dd>
+                {%- if r.ready.sigma and can.sigma %}<a href="/sigma?technique={{ r.tid | urlencode }}">{{ r.ready.sigma }}</a>{% else %}{{ r.ready.sigma or 'None' }}{% endif -%}
+            </dd></div>
+        </dl>
+        {% else %}
+        <p class="text-muted rmon-meaning">These baseline techniques have no ATT&amp;CK technique, so no threat actor, CVE or rule can be matched to them. Give each one in its window's <strong>Description</strong>.</p>
+        {% endif %}
+        <div class="steps-grid">
+            {% for step in r.entries %}{% with system_id=step.system_id %}{% include "components/step_card.html" %}{% endwith %}{% endfor %}
+        </div>
+    </div>
+</details>
+{% endfor %}
+{% elif narrowed %}
+    {% call empty_state('search') %}<p>Nothing in the backlog matches the filters.</p>{% endcall %}
+{% elif not has_systems %}
+    {% call empty_state('server') %}<p>No systems yet. Add one on the <a href="/systems">Systems</a> page and give it a baseline.</p>{% endcall %}
+{% elif not baseline_techniques %}
+    {% call empty_state('layers') %}<p>No system has a baseline yet. Add one from a system's page.</p>{% endcall %}
+{% else %}
+    {% call empty_state('circle-check') %}<p>Nothing to build: every baseline technique on every system is covered, or doesn't apply.</p>{% endcall %}
+{% endif %}

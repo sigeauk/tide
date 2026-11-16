@@ -13,10 +13,10 @@
 <div class="page-header flex items-start justify-between gap-md">
     <div>
         <h1 class="page-title-hero">
-            Coverage Heatmap
+            Heatmap
             {{ help_button('heatmap') }}
         </h1>
-        <p class="page-subtitle">Visualize your detection coverage against adversary techniques used by tracked threat actors.</p>
+        <p class="page-subtitle">The techniques the threat actors you pick use, and which of them your rules detect.</p>
     </div>
     <div class="rh-more shrink-0" data-more>
         {{ more_button('More actions', title='Export a report, create a baseline', attrs='name="Heatmap Actions"') }}
@@ -87,7 +87,7 @@
     </div>
 
     <!-- Source Filter -->
-    {{ filter_multi('source', 'source_filter', 'Source', sources, [], 'All sources', input_attrs='data-change="heatmap.redraw"') }}
+    {{ filter_multi('source', 'source_filter', 'Source', sources, [], 'Any', input_attrs='data-change="heatmap.redraw"') }}
 
 </div>
 
@@ -111,7 +111,7 @@
         <!-- Header -->
         <div class="modal-header">
             <h3 class="modal-title">
-                Export Threat Report
+                Export threat report
             </h3>
             {{ close_button('name="Close Export Modal" data-click="heatmap.exportClose"') }}
         </div>
@@ -173,7 +173,7 @@
         <div class="modal-header">
             <h3 class="modal-title">
                 {{ icon('check-square', '16', 'modal-title__icon') }}
-                Create Assurance Baseline
+                Create assurance baseline
             </h3>
             {{ close_button('name="Close Baseline Generate Modal" data-click="heatmap.baselineClose"') }}
         </div>
@@ -214,7 +214,7 @@
                     Cancel
                 </button>
                 <button name="Generate Baseline" type="submit" class="btn btn-primary">
-                    Generate Baseline
+                    Generate baseline
                 </button>
             </div>
         </form>

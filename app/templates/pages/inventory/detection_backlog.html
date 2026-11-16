@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{#
+  Detection Backlog: every ATT&CK technique a system's baseline techniques still need covered, most
+  urgent first (app/services/backlog.py). Context: api.backlog.page_context. Laid out as Rule
+  Monitoring: the header, figures and filter bar stay put and the list scrolls under them. The
+  filter bar refreshes #backlog-list on every change, and the address keeps its choices; a change
+  made in a technique's window (stepsChanged) refreshes it too.
+#}
+{% from "macros/filters.html" import filter_choice, filter_multi %}
+{% from "macros/help.html" import help_button with context %}
+
+{% block title %}Detection Backlog | TIDE{% endblock %}
+
+{% block content %}
+<div class="rule-browser-page">
+<div class="page-header">
+    <div>
+        <h1 class="page-title-hero">Detection Backlog {{ help_button('detection-backlog') }}</h1>
+        <p class="page-subtitle">What to build next: the ATT&amp;CK techniques your systems' baselines still need covered, most urgent first.</p>
+    </div>
+</div>
+
+{% set bl_hx = 'hx-get="/api/backlog/list" hx-trigger="change" hx-target="#backlog-list" hx-swap="innerHTML" hx-include="' ~ filter_include ~ '"' %}
+
+<div class="rule-browser-controls">
+<div class="metrics-grid" id="backlog-metrics">
+    {% include "partials/backlog_metrics.html" %}
+</div>
+
+<div class="divider"></div>
+
+<div class="filters-bar" id="backlog-filters">
+    <div class="filter-group grow">
+        <label class="form-label" for="backlog-search">Search</label>
+        <input type="text" id="backlog-search" name="search" value="{{ filters.search }}" class="form-input"
+               placeholder="ATT&amp;CK id or name, technique, system…" autocomplete="off"
+               hx-get="/api/backlog/list" hx-trigger="keyup changed delay:300ms" hx-target="#backlog-list"
+               hx-swap="innerHTML" hx-include="{{ filter_include }}">
+    </div>
+    {{ filter_multi('backlog-system', 'system', 'System', system_options, filters.system, 'Any', none, bl_hx) }}
+    {{ filter_multi('backlog-status', 'status', 'Coverage', status_options, filters.status, 'Any', none, bl_hx, status_titles) }}
+    {{ filter_choice('backlog-sort', 'sort', 'Sort by', sort_options, filters.sort, none, bl_hx, sort_titles) }}
+</div>
+</div>
+
+<div class="rule-scroll-region">
+<div id="backlog-list" class="rmon-list backlog-list" data-fold-store="tide.backlogFolds" data-rule-list data-keep-url="/backlog" hx-get="/api/backlog/list" hx-trigger="stepsChanged from:body"
+     hx-swap="innerHTML" hx-include="{{ filter_include }}">
+    {% include "partials/backlog_list.html" %}
+</div>
+</div>
+</div>
+
+<!-- Required for mitre_pill slide panel -->
+<div id="slide-panel-container"></div>
+{% endblock %}

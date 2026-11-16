@@ -53,8 +53,8 @@
     TIDE.actions('ui', {
         // A list row that opens its page (data-href).
         go: function (e, el) { window.location = el.dataset.href; },
-        // Expand / Collapse all the remembered sections under data-scope.
-        expandAll: function (e, el) { window.setAllRememberedCollapsibles(el.dataset.scope, el.dataset.expand === 'true'); },
+        // Expand / Collapse all the folds under data-scope, remembered.
+        expandAll: function (e, el) { window.tideSetFolds(el.dataset.scope, el.dataset.expand === 'true'); },
         closePanel: function (e, el) { el.closest('.slide-panel-overlay').remove(); },
         // Diagnostics: the look-up's placeholder follows its kind; Support needs a client.
         lookupKind: function (e, sel) { sel.form.q.placeholder = sel.selectedOptions[0].dataset.hint; },

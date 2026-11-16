@@ -29,8 +29,8 @@ class RuleLanguage(str, Enum):
 # Health's Type and Language filters and Type column, and every message that names a rule type).
 RULE_TYPES = (("query", "Custom query"), ("saved_query", "Saved query"), ("eql", "EQL"), ("esql", "ES|QL"),
               ("threshold", "Threshold"), ("new_terms", "New terms"), ("threat_match", "Indicator match"),
-              ("machine_learning", "Machine learning"))
-RULE_LANGUAGES = (("kuery", "KQL"), ("lucene", "Lucene"), ("eql", "EQL"), ("esql", "ES|QL"))
+              ("machine_learning", "Machine learning"), ("wazuh", "Wazuh rule"))
+RULE_LANGUAGES = (("kuery", "KQL"), ("lucene", "Lucene"), ("eql", "EQL"), ("esql", "ES|QL"), ("wazuh_xml", "Wazuh XML"))
 
 
 def rule_type_name(rule_type: Optional[str], in_sentence: bool = False) -> str:

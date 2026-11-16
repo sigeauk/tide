@@ -601,6 +601,82 @@ def _reachable_spaces(db, elastic_helper, siem: dict, kibana_url: str, token: st
     return reachable
 
 
+def _fetch_wazuh(db, client_id: str, siem: dict, spaces: list, weights, frames: list, attempted: dict,
+                 synced: dict, diagnostics: dict) -> None:
+    """A Wazuh SIEM's part of a sync (app.services.wazuh_sync): its destinations' rules as a frame like
+    Kibana's, their diagnostics, whether the manager answered, and each destination's alert counts."""
+    import pandas as _pd
+    from app.elastic_helper import ALERT_DAYS
+    from app.services import rule_alerts, sync_runs, wazuh_sync
+    siem_id = siem["id"]
+    full = db.get_siem_inventory_item(siem_id) or {}
+    all_rules = {d["space"] for d in db.get_client_siems(client_id) or [] if d.get("id") == siem_id and d.get("all_rules")}
+    with db.get_shared_connection() as conn:
+        techniques = conn.execute("SELECT id, name, tactic FROM mitre_techniques").fetchall()
+    tactic_of = {t[0]: t[2] for t in techniques if t[0] and t[2]}
+    name_of = {t[0]: t[1] for t in techniques if t[0] and t[1]}
+    attempted[siem_id] = set(spaces)
+    result = wazuh_sync.fetch(full, spaces, all_rules, weights, tactic_of, name_of, ALERT_DAYS,
+                              db.get_technique_revisions())
+    diagnostics[siem_id] = result["diagnostics"]
+    for space in spaces:
+        try:
+            db.record_siem_space_status(siem_id, space, not result["error"], result["error"])
+        except Exception:
+            logger.warning("Could not store reachability for SIEM '%s' space '%s'", siem.get("label"), space, exc_info=True)
+    if result["error"]:
+        logger.warning("Could not read the rules of Wazuh SIEM '%s': %s; keeping its rules as they are.",
+                       siem.get("label"), result["error"])
+        sync_runs.step_failed(f"Wazuh rules of {siem.get('label')}", result["error"])
+    try:
+        with db.get_connection() as conn:
+            for space, read in result["alerts"].items():
+                rule_alerts.store(conn, siem_id, space, read)
+    except Exception as exc:
+        logger.warning("Could not store the alert counts of Wazuh SIEM '%s'", siem.get("label"), exc_info=True)
+        sync_runs.step_failed("Alert counts", exc)
+    # Rules Wazuh still has that a destination no longer holds (Include every Wazuh rule turned off):
+    # removed, not marked deprecated, which says a rule is gone from its SIEM.
+    from app.services.database import RULE_REMOVED_NOT_HELD
+    try:
+        with db.get_connection() as conn:
+            for space, ids in result["dropped"].items():
+                where = "siem_id = ? AND space = ? AND list_contains(?::VARCHAR[], rule_id)"
+                params = [siem_id, space, sorted(ids)]
+                if ids and conn.execute(f"SELECT count(*) FROM detection_rules WHERE {where}", params).fetchone()[0]:
+                    db.record_rule_removals(conn, where, params, RULE_REMOVED_NOT_HELD, client_id=client_id)
+                    conn.execute(f"DELETE FROM detection_rules WHERE {where}", params)
+    except Exception as exc:
+        logger.warning("Could not remove the rules a Wazuh destination no longer holds", exc_info=True)
+        sync_runs.step_failed("Wazuh rules no longer held", exc)
+    # The destinations' agents as the systems' devices, with their vulnerabilities and alerts (phase 3).
+    if not result["error"]:
+        from app.services import wazuh, wazuh_assets
+        s = wazuh.settings(full)
+        manager, indexer = wazuh.Manager.from_settings(s), wazuh.Indexer.from_settings(s)
+        for space in spaces:
+            try:
+                assets = wazuh_assets.refresh_destination(db, client_id, siem_id, space, manager, indexer)
+            except Exception as exc:  # noqa: BLE001 - the sync carries on
+                logger.warning("Could not refresh the devices of Wazuh destination %s", space, exc_info=True)
+                sync_runs.step_failed(f"Wazuh devices of {space}", exc)
+                continue
+            if assets["error"]:    # kept on the destination: Rule Monitoring's Wazuh read incomplete (D13)
+                logger.warning("Wazuh destination %s: %s", space, assets["error"])
+            elif assets["hosts"]:
+                logger.info("Wazuh destination %s: %d device(s), %d vulnerabilit%s, %d removed.", space, assets["hosts"],
+                            assets["vulnerabilities"], "y" if assets["vulnerabilities"] == 1 else "ies", assets["removed"])
+    if result["records"]:
+        df = _pd.DataFrame(result["records"])
+        df["siem_id"] = siem_id
+        synced[siem_id] = set(df["space_id"].dropna().unique())
+        frames.append(df)
+    else:
+        synced[siem_id] = set()
+    logger.info("Read %d rule(s) from Wazuh SIEM '%s' for %d destination(s).", len(result["records"]),
+                siem.get("label"), len(spaces))
+
+
 def _record_space_fetch(db, siem_id: str, space: str, diag: dict) -> None:
     """``record_space_fetch`` for Diagnostics; never fails the sync."""
     try:
@@ -736,10 +812,12 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False, only_siem_id: 
             if force_mapping:
                 logger.info("[perf] Force mapping enabled — refreshing the field catalogue for every index pattern")
 
-            # Active SIEMs filtered to this tenant's mappings.
+            # Active SIEMs filtered to this tenant's mappings: Elastic ones read through Kibana, Wazuh
+            # ones through their manager and indexer (_fetch_wazuh). Nothing reads the other kinds yet.
+            from app.services.siem_kinds import is_elastic, is_wazuh
             siems = [
                 s for s in db.list_siem_inventory()
-                if s.get("is_active") and s.get("id") in client_scope
+                if s.get("is_active") and s.get("id") in client_scope and (is_elastic(s) or is_wazuh(s))
             ]
             if not siems:
                 logger.warning(
@@ -771,6 +849,11 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False, only_siem_id: 
             # authoritative source of truth; partial fetch == preserve.
             siem_diagnostics: dict = {}
             for siem in siems:
+                if is_wazuh(siem):
+                    if client_scope.get(siem["id"]):
+                        _fetch_wazuh(db, client_id, siem, sorted(client_scope[siem["id"]]), scoring_weights, frames,
+                                     siem_spaces_attempted, siem_spaces_synced, siem_diagnostics)
+                    continue
                 # Re-read to get the encrypted/raw token (list_siem_inventory omits it)
                 full = db.get_siem_inventory_item(siem["id"]) or {}
                 kurl = full.get("kibana_url") or siem.get("kibana_url")
@@ -1148,6 +1231,19 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False, only_siem_id: 
                 except Exception:  # noqa: BLE001 - the sync carries on
                     logger.warning(f"GitLab issues not refreshed for client_id={client_id}", exc_info=True)
 
+                # Elastic's own validator on the custom rules whose query, indexes or fields changed (#7).
+                try:
+                    from app.services import elastic_validator
+                    elastic_ids = {s["id"] for s in siems if is_elastic(s)}
+                    checked = elastic_validator.check_synced(
+                        db, client_id, {(sid, sp) for sid, sp in synced_scopes if sid in elastic_ids})
+                    if checked["checked"]:
+                        logger.info(f"Elastic's validator checked {checked['checked']} of {checked['rules']} custom "
+                                    f"rules for client_id={client_id}: {checked['problems']} problems")
+                except Exception as _elastic_exc:  # noqa: BLE001 - the sync carries on
+                    logger.warning(f"Elastic's validator didn't run for client_id={client_id}", exc_info=True)
+                    sync_runs.step_failed("Elastic's validation", _elastic_exc)
+
                 # What needs action in the destinations this sync covered (Rule Monitoring).
                 from app.services import rule_issues
                 rule_issues.refresh_tenant(db, client_id, scopes=synced_scopes)
@@ -1158,8 +1254,7 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False, only_siem_id: 
                 # No rules returned from Elastic — this is likely a connectivity or auth issue.
                 # DO NOT delete existing rules — preserve the baseline to avoid data loss.
                 logger.warning("No rules fetched from any SIEM — preserving existing rules in database. "
-                               "Check the per-SIEM kibana_url, api_token, and space configuration "
-                               "in the Management page.")
+                               "Check each SIEM's settings and its destinations in the Management page.")
                 return 0
         finally:
             os.chdir(original_cwd)

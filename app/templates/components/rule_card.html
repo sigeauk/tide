@@ -1,5 +1,5 @@
 {% from "macros/icons.html" import icon, icon_text %}
-{% from "macros/rule_ui.html" import state_badge, upstream_badge, problems_badge %}
+{% from "macros/rule_ui.html" import state_badge, upstream_badge, problems_badge, issues_badge %}
 {% from "components/mitre_pill.html" import mitre_pill %}
 {#
   Rule Card — THE one rule card (Rule Health grid, MITRE side panel, validate refresh).
@@ -32,7 +32,7 @@
     {% if dest_color %}style="--edge: {{ dest_color }};"{% endif %}
     data-rule-open role="button" tabindex="0" aria-label="Open rule: {{ rule.name }}"
     hx-get="/api/rules/{{ rule.rule_id }}/history-modal?space={{ rule.space | default('default') }}{% if rule.siem_id %}&siem_id={{ rule.siem_id }}{% endif %}"
-    hx-trigger="click[!event.target.closest('.bulk-check')], keyup[key=='Enter' && !event.target.closest('.bulk-check')]"
+    hx-trigger="tide-open" data-opens data-opens-ignore=".bulk-check"
     hx-target="#modal-container"
     hx-swap="innerHTML"
     hx-include="unset">
@@ -67,8 +67,9 @@
     {% set _state = state_badge(lifecycle_state, lifecycle_titles.get(lifecycle_key, "") if lifecycle_titles is defined else "") %}
     {% set _upstream = upstream_badge(upstream_states.get(lifecycle_key) if upstream_states is defined else none, only_news=true) %}
     {% set _problems = problems_badge(rule_problems.get(lifecycle_key) if rule_problems is defined else none) %}
-    {% if _state | trim or _upstream | trim or _problems | trim %}
-    <div class="rc-flags">{{ _problems }}{{ _state }}{{ _upstream }}</div>
+    {% set _issues = issues_badge(rule_gitlab_issues.get(lifecycle_key) if rule_gitlab_issues is defined else none) %}
+    {% if _state | trim or _upstream | trim or _problems | trim or _issues | trim %}
+    <div class="rc-flags">{{ _problems }}{{ _issues }}{{ _state }}{{ _upstream }}</div>
     {% endif %}
 
     <div class="rc-foot">

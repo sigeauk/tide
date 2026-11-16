@@ -1,0 +1,49 @@
+{# Partial: technique_hardening_options.html -- the checks a technique can name (Hardening checks › Add
+   hardening check), in the rule picker's shape (siem_rule_options.html): ``suggested`` (the system's devices' checks
+   whose Wazuh ATT&CK ids include one of the technique's), then ``others`` matching the search. One click
+   names a check. Context: suggested, others, named (the (policy_id, check_id) already on the technique),
+   query, step_url. #}
+{% macro check_option(c) -%}
+{% set on = (c.policy_id, c.check_id) in named %}
+<form hx-post="{{ step_url }}/hardening" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
+    <input type="hidden" name="policy_id" value="{{ c.policy_id }}">
+    <input type="hidden" name="check_id" value="{{ c.check_id }}">
+    <button name="Pick Check" type="submit" class="siem-rule-option u-bg-none siem-rule-opt"
+            {% if on %}disabled title="Already named on this technique"{% else %}title="Name this check on the technique"{% endif %}>
+        <div class="grow min-w-0">
+            <div class="fw-600 overflow-hidden ellipsis nowrap" title="{{ c.title }}">
+                {% if c.cis_ids %}<span class="mono">CIS {{ c.cis_ids | join(', ') }}</span> {% endif %}{{ c.title }}
+            </div>
+            <div class="flex items-center gap-xs mt-xs flex-wrap">
+                <span class="status-pill status-{{ 'success' if c.devices and c.passed == c.devices else ('danger' if c.failed else 'muted') }}">Passed on {{ c.passed }} of {{ c.devices }}</span>
+                <span class="text-muted fs-2xs">{{ c.policy }}</span>
+                {% if on %}<span class="text-muted fs-2xs">named</span>{% endif %}
+            </div>
+        </div>
+    </button>
+</form>
+{%- endmacro %}
+{% if suggested or others %}
+<div class="siem-rule-scroll">
+    {% if suggested %}
+    <div class="u-bg-green-06 siem-rule-group">
+        Carry this technique's ATT&amp;CK IDs
+    </div>
+    {% for c in suggested %}{{ check_option(c) }}{% endfor %}
+    {% endif %}
+    {% if others %}
+    <div class="u-bg-level-3 siem-rule-group siem-rule-group--muted">
+        Other checks matching "{{ query }}"
+    </div>
+    {% for c in others %}{{ check_option(c) }}{% endfor %}
+    {% endif %}
+</div>
+{% elif query %}
+<div class="p-md text-center text-muted fs-md">
+    No check matches "{{ query }}"
+</div>
+{% else %}
+<div class="p-md text-center text-muted fs-md">
+    None of the devices' checks carries this technique's ATT&amp;CK IDs. Search by CIS id or title.
+</div>
+{% endif %}

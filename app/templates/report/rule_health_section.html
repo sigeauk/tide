@@ -3,16 +3,14 @@
   Monitoring findings on the rules the report counts, grouped by what is wrong, worst first, with who
   fixes each (rule_issues.report_rule_health), and when the rules were last synced. A technical report
   names each rule, where it is and what the finding is about; an executive one says how many.
-  Its styles are its own (rhs-), as the two reports' are not the same.
+  Its styles are its own (rhs-), as the two reports' are not the same; its table looks like every
+  report's (report_tables.html).
 #}
 {% macro rule_health_section(health, synced, technical) -%}
 <style>
 .rhs-summary { font-size: 8pt; margin: 0 0 2mm; }
 .rhs-synced { font-size: 7pt; color: #6b7280; margin: 0 0 3mm; }
-table.rhs-table { width: 100%; border-collapse: collapse; font-size: 7pt; margin-bottom: 6mm; }
-table.rhs-table th, table.rhs-table td { text-align: left; padding: 1.5mm 2mm; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
-table.rhs-table th { font-size: 6.5pt; text-transform: uppercase; letter-spacing: 0.04em; color: #6b7280; }
-table.rhs-table tr { page-break-inside: avoid; }
+table.rhs-table { margin-bottom: 6mm; }
 .rhs-sev { font-weight: 700; font-size: 6.5pt; text-transform: uppercase; letter-spacing: 0.03em; }
 .rhs-sev--error { color: #b91c1c; }
 .rhs-sev--warning { color: #b45309; }
@@ -27,8 +25,9 @@ table.rhs-table tr { page-break-inside: avoid; }
 <p class="rhs-summary">{{ health.summary }}</p>
 {% if synced %}<p class="rhs-synced">Rules last synced: {{ synced }}</p>{% endif %}
 {% if health.groups %}
-<table class="rhs-table">
-    <thead><tr><th style="width:30%">What's wrong</th><th style="width:10%">Severity</th><th style="width:12%">Who fixes</th><th>{{ 'Rules' if technical else 'Rules affected' }}</th></tr></thead>
+<table class="rhs-table cols">
+    <colgroup><col class="w-30"/><col class="w-13"/><col class="w-16"/><col/></colgroup>
+    <thead><tr><th>What's wrong</th><th>Severity</th><th>Who fixes</th><th>{{ 'Rules' if technical else 'Rules affected' }}</th></tr></thead>
     <tbody>
         {% for g in health.groups %}
         <tr>

@@ -166,37 +166,43 @@ def resolve_discoverable_spaces(
                     siem_id, exc,
                 )
                 row = {}
+            if row.get("siem_type") == "wazuh":
+                # A Wazuh destination's space is an agent group on the manager, or * for all agents.
+                from app.services import wazuh
+                groups = wazuh.agent_groups(row)
+                return _settle(db, siem_id, set(groups) if groups is not None else None, persisted,
+                               has_creds=bool(wazuh.settings(row)["manager_url"]))
             kibana_url = kibana_url or row.get("kibana_url")
             api_token = api_token or row.get("api_token_enc")
 
         if not kibana_url or not api_token:
-            if persisted:
-                return persisted, REASON_PERSISTED
-            return set(), REASON_NO_CREDS
-
-        live = _live_lookup(kibana_url, api_token)
-        if live is None:
-            # Live failed — return persisted if we have it, otherwise an
-            # explicit failure reason.
-            if persisted:
-                return persisted, REASON_PERSISTED
-            return set(), REASON_LIVE_FAILED
-        if not live:
-            return set(), REASON_NO_SPACES
-
-        # Best-effort persist so the next caller benefits.
-        try:
-            db.save_siem_spaces(siem_id, sorted(live))
-        except Exception as exc:  # noqa: BLE001
-            logger.debug(
-                "space_resolver(%s): save_siem_spaces failed: %r",
-                siem_id, exc,
-            )
-        return live, REASON_LIVE
+            return _settle(db, siem_id, None, persisted, has_creds=False)
+        return _settle(db, siem_id, _live_lookup(kibana_url, api_token), persisted)
 
     if persisted:
         return persisted, REASON_PERSISTED
     return set(), REASON_NO_CREDS
+
+
+def _settle(db, siem_id: str, live: Optional[Set[str]], persisted: Set[str],
+            has_creds: bool = True) -> Tuple[Set[str], str]:
+    """A live lookup's answer (None: it failed or couldn't run), saved when it found spaces. Without
+    one, the persisted list stands in."""
+    if live is None:
+        if persisted:
+            return persisted, REASON_PERSISTED
+        return set(), (REASON_LIVE_FAILED if has_creds else REASON_NO_CREDS)
+    if not live:
+        return set(), REASON_NO_SPACES
+    # Best-effort persist so the next caller benefits.
+    try:
+        db.save_siem_spaces(siem_id, sorted(live))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            "space_resolver(%s): save_siem_spaces failed: %r",
+            siem_id, exc,
+        )
+    return live, REASON_LIVE
 
 
 def resolve_mapped_spaces(db, siem_id: str) -> Tuple[Set[str], str]:

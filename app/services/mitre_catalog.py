@@ -202,20 +202,27 @@ def _plural(n: int, word: str, plural: Optional[str] = None) -> str:
     return f"{n} {word if n == 1 else (plural or word + 's')}"
 
 
+def _subs(card: dict) -> List[str]:
+    sub = card.get("sub")
+    return [sub] if isinstance(sub, str) else list(sub or [])
+
+
 def _coverage_metrics(items: List[dict], first: dict, second: dict, avg_tip: str) -> List[dict]:
-    """The metric strip of a kind scored by coverage_of: its own first two cards, then fully,
-    partly and not covered, then the average coverage of those with techniques to cover."""
+    """The metric strip of a kind scored by coverage_of, four cards (UX.md 9.3): its own first card
+    with its second beneath, fully covered with partly beneath, not covered, then the average
+    coverage of those with techniques to cover. Coverage is a share, not a fault: none is red."""
     levels = {k: 0 for k in COVERAGE_LEVELS}
     for it in items:
         levels[_coverage_key(it)] += 1
     scored = [it["coverage"]["pct"] for it in items if it.get("coverage")]
     avg = round(sum(scored) / len(scored)) if scored else None
+    tips = [t for t in (first.get("tip"), f"{second['label']}: {second['tip']}" if second.get("tip") else "") if t]
     return [
-        first,
-        second,
-        {"value": levels["full"], "label": "Fully covered", "tip": "Every technique has a rule", "tone": "success" if levels["full"] else ""},
-        {"value": levels["partial"], "label": "Partly covered", "tip": "Some techniques have rules", "tone": "warning" if levels["partial"] else ""},
-        {"value": levels["none"], "label": "Not covered", "tip": "No technique has a rule", "tone": "danger" if levels["none"] else ""},
+        {**first, "sub": _subs(first) + [f"{second['value']} {second['label'][0].lower()}{second['label'][1:]}"],
+         "tip": ". ".join(tips)},
+        {"value": levels["full"], "label": "Fully covered", "sub": f"{levels['partial']} partly covered",
+         "tip": "Every technique has a rule. Beneath: those where some have", "tone": "success" if levels["full"] else ""},
+        {"value": levels["none"], "label": "Not covered", "tip": "No technique has a rule"},
         {"value": f"{avg}%" if avg is not None else "—", "label": "Average coverage", "tip": avg_tip},
     ]
 
@@ -405,13 +412,15 @@ def _techniques_metrics(items: List[dict]) -> List[dict]:
     subs = sum(1 for it in items if it["is_sub"])
     used_gaps = sum(1 for it in items if it["coverage"]["level"] != "full" and it["group_count"])
     pct = round(100 * levels["full"] / len(items)) if items else None
+    # Four cards (UX.md 9.3): coverage is a share, not a fault, so none is red.
     return [
         {"value": len(items), "label": "Techniques", "sub": f"{len(items) - subs} techniques, {subs} sub-techniques"},
-        {"value": levels["full"], "label": "Covered", "tip": "An enabled rule carries the id", "tone": "success" if levels["full"] else ""},
-        {"value": levels["partial"], "label": "Through sub-techniques", "tip": "Only some sub-techniques have rules", "tone": "warning" if levels["partial"] else ""},
-        {"value": levels["none"], "label": "Not covered", "tip": "No enabled rule", "tone": "danger" if levels["none"] else ""},
-        {"value": used_gaps, "label": "Gaps groups use", "tip": "Not fully covered, used by a known group", "tone": "danger" if used_gaps else ""},
-        {"value": f"{pct}%" if pct is not None else "—", "label": "Coverage", "tip": "Of the techniques shown"},
+        {"value": levels["full"], "label": "Covered",
+         "sub": [f"{levels['partial']} through sub-techniques", f"{pct}% of those shown" if pct is not None else "none shown"],
+         "tip": "An enabled rule carries the id. Beneath: those where only some sub-techniques have rules, and the share covered",
+         "tone": "success" if levels["full"] else ""},
+        {"value": levels["none"], "label": "Not covered", "tip": "No enabled rule"},
+        {"value": used_gaps, "label": "Gaps groups use", "tip": "Not fully covered, used by a known group", "tone": "warning" if used_gaps else ""},
     ]
 
 
@@ -479,7 +488,11 @@ def _techniques_window(db, client_id, detail: dict, covered: set, counts: dict) 
         nist = []
     groups = [{"id": p["group_id"], "name": p["group_name"], "use": p["use"], "url": p["url"]}
               for p in detail.get("procedure_examples") or []]
+    from app.services import attack_detection
+    with db.get_shared_connection(read_only=True) as conn:
+        detection = attack_detection.for_platforms(attack_detection.strategies(conn, [tid], domain=domain), [])
     return {
+        "detection": detection,
         "coverage": technique_coverage(tid, subs, covered, counts),
         "rules": rules,
         **technique_rule_cards(db, client_id, tid, rules),
@@ -990,7 +1003,7 @@ PAGE_SIZE = 48
 # these names (a campaign filter called "group" read group=none as "unattributed").
 GRID_PARAMS = {"q", "src", "sort", "dir", "group", "view", "page", "in_group", "open"}
 for _spec in KINDS.values():
-    assert not GRID_PARAMS & set(_spec.filters), f"{_spec.key}: filter named like a grid parameter"
+    assert not GRID_PARAMS & set(_spec.filters), f"{_spec.key}: filter named like a grid parameter"  # nosec B101 # checks TIDE's own constants at import
 
 # The kinds a baseline can be made from (their window's Create baseline): the techniques of a
 # group, software or campaign are an adversary's. A mitigation's are what it mitigates.

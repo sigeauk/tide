@@ -1,5 +1,6 @@
 {# System report: each chosen baseline's coverage at the end of each week, from the technique
-   history (report.trend, inventory_engine._coverage_trend). Included by report/system_report.html. #}
+   history (report.trend, inventory_engine._coverage_trend). Included by report/system_report.html,
+   and by the executive briefing (system_report_ciso.html) with trend_table false: the chart alone. #}
 {% if report.trend and (report.include_baselines is not defined or report.include_baselines) %}
 {%- set ns_trend = namespace(baselines={}, days=[], colors=['#3b82f6','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#06b6d4','#84cc16']) -%}
 {%- for p in report.trend -%}
@@ -24,6 +25,7 @@
     <div class="section-banner-sub">Each baseline's coverage at the end of each week, from {{ report.system.name }}'s history</div>
 </div>
 
+<div class="avoid-break">
 <div style="text-align:center;margin:3mm 0 5mm;">
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {{ chart_w }} {{ chart_h }}" style="width:100%;max-width:{{ chart_w }}px;font-family:'Liberation Sans',Arial,sans-serif;">
   {% for pct in [0, 25, 50, 75, 100] %}
@@ -75,6 +77,8 @@
   {%- set ns_li.i = ns_li.i + 1 -%}
   {% endfor %}
 </div>
+</div>
+{% if trend_table is not defined or trend_table %}
 
 {# The weeks where something changed (and each baseline's first), newest first. #}
 {%- set ns_rows = namespace(rows=[]) -%}
@@ -86,9 +90,10 @@
     {%- endif -%}
   {%- endfor -%}
 {% endfor %}
-<table style="margin-bottom:4mm;">
+<table class="cols" style="margin-bottom:4mm;">
+    <colgroup><col class="w-14"/><col/><col class="w-13"/><col class="w-11"/><col class="w-11"/><col class="w-12"/><col class="w-8"/></colgroup>
     <thead>
-        <tr><th>Week ending</th><th>Baseline</th><th>Coverage</th><th style="text-align:center;">Covered</th><th style="text-align:center;">Known gap</th><th style="text-align:center;">No coverage</th><th style="text-align:center;">N/A</th></tr>
+        <tr><th>Week ending</th><th>Baseline</th><th>Coverage</th><th class="c">Covered</th><th class="c">Known gap</th><th class="c">No coverage</th><th class="c">N/A</th></tr>
     </thead>
     <tbody>
         {% for p in ns_rows.rows | sort(attribute='day', reverse=True) %}
@@ -105,4 +110,5 @@
     </tbody>
 </table>
 <p style="font-size:6pt;color:var(--text-3);margin:0 0 4mm;">Weeks where nothing changed are left out of the table.</p>
+{% endif %}
 {% endif %}

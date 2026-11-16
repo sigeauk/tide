@@ -1,0 +1,73 @@
+{#
+  Map rules by ATT&CK id…, from a system page's Baselines ⋮: each of the system's techniques with no rule
+  mapped (and not N/A), with the Wazuh and Elastic rules carrying one of its ATT&CK ids at the destinations
+  the system counts, enabled first and best scored first, none ticked (a broad id matches hundreds).
+  Include disabled rules reloads the dialog with disabled ones too. Map maps the ticked ones as if each were
+  mapped by hand from the technique's window (inventory_engine.map_rules_by_attack), then the page reloads;
+  each is unmapped there as usual.
+  Context: system_id, items ([{step, rules}]), destinations, undefined, rule_count, include_disabled.
+#}
+{% from "macros/icons.html" import icon, icon_text %}
+{% from "macros/modal.html" import close_button, empty_state %}
+{% from "components/mitre_pill.html" import mitre_pill %}
+<div name="Map Rules By ATT&CK Id Dialog" class="modal-overlay" data-rm-overlay>
+    <div class="modal-content modal-lg" role="dialog" aria-modal="true" aria-labelledby="sys-map-title">
+        <div class="modal-header">
+            <h3 class="modal-title" id="sys-map-title">{{ icon('link', '16') }} Map rules by ATT&amp;CK id</h3>
+            {{ close_button('name="Close" data-rm-close') }}
+        </div>
+        {% if destinations %}
+        <label class="flex items-center gap-sm fs-base text-body mb-sm cursor-pointer">
+            <input name="disabled" type="checkbox" value="true" class="accent-primary"{% if include_disabled %} checked{% endif %}
+                   hx-get="/api/systems/{{ system_id }}/map-by-attack" hx-trigger="change" hx-target="#modal-container"
+                   hx-swap="innerHTML" hx-include="unset"> Include disabled rules
+        </label>
+        {% endif %}
+        {% if items %}
+        <p class="rule-help">
+            These techniques have no rule mapped. The rules under each carry one of its ATT&amp;CK ids
+            ({{ destinations | join(', ') }}); {{ rule_count }} in all, enabled first, then the best scored.
+            Tick the ones that detect what the technique asks for, then <strong>Map</strong>: each is mapped
+            as if you had picked it in the technique's window, recorded in its history, and can be unmapped there.
+            {% if include_disabled %}A disabled rule counts towards coverage once it's enabled.{% endif %}
+            {% if undefined %}This system doesn't count any destination yet: choose them in <strong>SIEM coverage</strong> for its coverage to count.{% endif %}
+        </p>
+        <form hx-post="/api/systems/{{ system_id }}/map-by-attack" hx-swap="none" hx-include="unset" class="sys-dialog__form">
+            {% for item in items %}
+            <div class="mb-md">
+                <p class="section-subhead">{{ item.step.title }}
+                    {% for tid in item.step.display_technique_ids %}{{ mitre_pill(tid, neutral=true, clickable=false) }}{% endfor %}
+                    <span class="text-muted fs-sm">{{ item.step.baseline_name }}</span></p>
+                {% for r in item.rules %}
+                <label class="sys-dialog__row">
+                    <input type="checkbox" name="pick" value="{{ item.step.step_id }}|{{ r.key }}">
+                    <span>{{ r.name }}</span>
+                    <span class="status-pill{% if r.color %} dest-tinted{% endif %}"{% if r.color %} style="--dest: {{ r.color }}"{% endif %}>{{ r.destination }}</span>
+                    {% if not r.enabled %}<span class="siem-rule-state siem-rule-state--off state-dot">Disabled</span>{% endif %}
+                    {% if r.score is not none %}<span class="text-muted fs-sm" title="The rule's score">{{ r.score }}%</span>{% endif %}
+                    {% if r.wazuh %}<span class="text-muted mono fs-sm" title="Wazuh rule id">{{ r.rule_id }}</span>{% endif %}
+                </label>
+                {% endfor %}
+            </div>
+            {% endfor %}
+            <div class="modal-actions">
+                <button name="Cancel" type="button" class="btn btn-secondary" data-rm-close>Cancel</button>
+                <button name="Map Rules" type="submit" class="btn btn-primary">{{ icon_text('link', 'Map', '13') }}</button>
+            </div>
+        </form>
+        {% else %}
+        {% call empty_state('link') %}
+            {% if not destinations %}
+            <p>This system counts no destination. Link one to the client, then choose it in <strong>SIEM coverage</strong>.</p>
+            {% elif include_disabled %}
+            <p>No technique without a rule has a rule carrying one of its ATT&amp;CK ids.</p>
+            {% else %}
+            <p>No technique without a rule has an enabled rule carrying one of its ATT&amp;CK ids. Tick <strong>Include disabled rules</strong> to see disabled ones.</p>
+            {% endif %}
+        {% endcall %}
+        <div class="modal-actions">
+            <button name="Close" type="button" class="btn btn-secondary" data-rm-close>Close</button>
+        </div>
+        {% endif %}
+    </div>
+</div>

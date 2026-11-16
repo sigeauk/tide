@@ -183,10 +183,9 @@ def destinations_for(db, client_id: str) -> List[Dict[str, Any]]:
     """The tenant's destinations a hunt can run on and be saved to: ``{value ("<siem_id>|<space>"),
     label, siem_id, space, index}``. A run uses the destination's SIEM (Elasticsearch has no spaces);
     Save to Kibana its space."""
+    from app.services.siem_kinds import elastic_only
     out = []
-    for s in db.get_client_siems(client_id) or []:
-        if s.get("siem_type", "elastic") not in ("elastic", "elasticsearch", None, ""):
-            continue
+    for s in elastic_only(db.get_client_siems(client_id)):
         space = str(s.get("space") or "default")
         out.append({"value": f"{s['id']}|{space}", "label": s.get("name") or space, "siem_id": s["id"],
                     "space": space, "index": str(s.get("default_index") or "")})

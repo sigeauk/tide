@@ -1,0 +1,36 @@
+{% from "macros/metrics.html" import metric_card %}
+{#
+  The Detection Backlog's figures, for the whole backlog whatever the filters show (as a system's
+  page's strip). Context: totals (backlog.totals). The baseline techniques are counted as a system's
+  page counts them: Known gaps includes Partial coverage, Not effective partly covered ones. No
+  coverage is red only when a Critical technique has none, as on a system's page.
+#}
+{% set t = totals %}
+
+{% call metric_card('techniques', tip=true, classes='metric-card--tip') %}
+    <p class="metric-value">{{ t.techniques }}</p>
+    <p class="metric-label">Techniques to cover</p>
+    <p class="metric-sub">on {{ t.systems }} system{{ 's' if t.systems != 1 }}</p>
+    <div class="metric-tip" role="tooltip">ATT&amp;CK techniques with a baseline technique on a system that still needs covering{% if t.unmapped %}; {{ t.unmapped }} baseline technique{{ 's have' if t.unmapped != 1 else ' has' }} no ATT&amp;CK technique{% endif %}</div>
+{% endcall %}
+
+{% call metric_card('no_coverage', tip=true, classes='metric-card--tip') %}
+    <p class="metric-value {{ 'danger' if t.none_critical else 'warning' if t.none }}">{{ t.none }}</p>
+    <p class="metric-label">No coverage</p>
+    {% if t.none_critical %}<p class="metric-sub">{{ t.none_critical }} critical</p>{% endif %}
+    <div class="metric-tip" role="tooltip">Baseline techniques nothing catches yet{% if t.none_critical %}; {{ t.none_critical }} of them {{ 'has' if t.none_critical == 1 else 'have' }} Critical priority{% endif %}</div>
+{% endcall %}
+
+{% call metric_card('known_gaps', tip=true, classes='metric-card--tip') %}
+    <p class="metric-value {{ 'warning' if t.gap }}">{{ t.gap }}</p>
+    <p class="metric-label">Known gaps</p>
+    {% if t.partial %}<p class="metric-sub">{{ t.partial }} partly covered</p>{% endif %}
+    <p class="metric-sub">{{ t.not_effective }} not effective</p>
+    <div class="metric-tip" role="tooltip">Baseline techniques with a known gap, accepted with a reason{% if t.partial %}. {{ t.partial }} {{ 'has' if t.partial == 1 else 'have' }} coverage beside {{ 'its gaps' if t.partial == 1 else 'their gaps' }}: Partial coverage{% endif %}. Not effective: covered, or partly, only by rules a Rule Monitoring finding stops working</div>
+{% endcall %}
+
+{% call metric_card('kev', tip=true, classes='metric-card--tip') %}
+    <p class="metric-value {{ 'danger' if t.kev }}">{{ t.kev }}</p>
+    <p class="metric-label">KEV CVEs</p>
+    <div class="metric-tip" role="tooltip">Known exploited CVEs on these systems' devices that are exploited through one of these ATT&amp;CK techniques</div>
+{% endcall %}

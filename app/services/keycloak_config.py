@@ -28,9 +28,9 @@ ENV_FIELDS = {
     "keycloak_internal_url": "internal_url",
     "keycloak_realm": "realm",
     "keycloak_client_id": "client_id",
-    "keycloak_client_secret": "client_secret",
-    "keycloak_password_grant_client_id": "pg_client_id",
-    "keycloak_password_grant_client_secret": "pg_client_secret",
+    "keycloak_client_secret": "client_secret",  # nosec B105 # a setting's name, not a value
+    "keycloak_password_grant_client_id": "pg_client_id",  # nosec B105 # a setting's name, not a value
+    "keycloak_password_grant_client_secret": "pg_client_secret",  # nosec B105 # a setting's name, not a value
 }
 SECRETS = {"client_secret", "pg_client_secret"}
 

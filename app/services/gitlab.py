@@ -158,17 +158,19 @@ def project_info(link: Dict[str, Any]) -> Dict[str, Any]:
     return _send(link, "get", f"/projects/{link['project_id']}", "read the project").json() or {}
 
 
-def branch_exists(link: Dict[str, Any], branch: str) -> bool:
+def branch_head(link: Dict[str, Any], branch: str) -> Optional[str]:
+    """The commit at the head of ``branch`` (its id; "" if GitLab didn't say), or None when GitLab has
+    no such branch, or no such project (``project_info`` tells which). Raises GitLabError."""
     try:
         resp = _session(link).get(_api(link, f"/projects/{link['project_id']}/repository/branches/{quote(branch, safe='')}"),
                                   timeout=TIMEOUT)
     except requests.RequestException as exc:
         raise GitLabError(tls.describe_error(exc) or f"GitLab didn't answer: {str(exc)[:200]}") from exc
     if resp.status_code == 404:
-        return False
+        return None
     if resp.status_code != 200:
         raise GitLabError(_why(resp, "read the branch"))
-    return True
+    return str(((resp.json() or {}).get("commit") or {}).get("id") or "")
 
 
 def tree(link: Dict[str, Any], path: str, ref: str, recursive: bool = True) -> Dict[str, str]:
@@ -195,13 +197,14 @@ def tree(link: Dict[str, Any], path: str, ref: str, recursive: bool = True) -> D
 
 def commit(link: Dict[str, Any], branch: str, message: str, actions: list, start_branch: Optional[str] = None) -> Dict[str, Any]:
     """One commit of ``actions`` (create / update / delete / move) on ``branch``; ``start_branch``
-    makes ``branch`` from it first. ``{"id", "short_id", "web_url"}``. Raises GitLabError."""
+    makes ``branch`` from it first. ``{"id", "short_id", "web_url", "parent_ids"}``. Raises GitLabError."""
     body = {"branch": branch, "commit_message": message, "actions": actions}
     if start_branch:
         body["start_branch"] = start_branch
     result = _send(link, "post", f"/projects/{link['project_id']}/repository/commits", "commit to the project",
                    timeout=120, json=body).json() or {}
-    return {"id": result.get("id"), "short_id": result.get("short_id"), "web_url": result.get("web_url")}
+    return {"id": result.get("id"), "short_id": result.get("short_id"), "web_url": result.get("web_url"),
+            "parent_ids": list(result.get("parent_ids") or [])}
 
 
 def last_change(link: Dict[str, Any], path: str, ref: str) -> Optional[Dict[str, Any]]:
@@ -267,7 +270,7 @@ def check(link: Dict[str, Any], today: Optional[date] = None) -> Dict[str, Any]:
     today = today or datetime.now(timezone.utc).date()
     used = uses(link) or ["issues"]
     backup = "backup" in used
-    out: Dict[str, Any] = {"status": "ok", "message": "", "project": link.get("project"), "project_id": None,
+    out: Dict[str, Any] = {"status": "ok", "message": "", "project": link.get("project"), "project_id": None,  # nosec B105 # a result's field names, not a token
                            "project_url": None, "token_expires_at": None}
     fails, warns, notes = [], [], []
 

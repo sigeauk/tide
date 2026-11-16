@@ -1,5 +1,5 @@
 /*
- * The New Client dialog (#client-modal) on Management's Clients tab, and where Delete client goes
+ * The New client dialog (#client-modal) on Management's Clients tab, and where Delete client goes
  * after deleting (a client's own page; its Edit client has its own dialog). What follows a save or a
  * delete is the control's data-after: "tab" refreshes Management's Clients tab, a path opens that
  * page, anything else reloads the page.
@@ -17,7 +17,7 @@
 
     function openModal(id, name, desc) {
         var editing = !!id;
-        $('client-modal-title').textContent = editing ? 'Edit Client' : 'New Client';
+        $('client-modal-title').textContent = editing ? 'Edit client' : 'New client';
         $('client-form-submit').textContent = editing ? 'Save' : 'Create';
         $('client-form-id').value = id || '';
         $('client-form-name').value = name || '';

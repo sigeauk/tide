@@ -38,7 +38,7 @@
           hx-post="/api/inventory/cve/{{ cve_id }}/techniques"
           hx-target="#cve-mitre-section"
           hx-swap="outerHTML"
-          hx-on::after-request="this.reset();">
+          data-done-reset>
         <input class="form-input cve-mitre-input"
                name="technique_id"
                placeholder="e.g. T1566.001"

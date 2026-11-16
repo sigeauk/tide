@@ -40,7 +40,9 @@ class Settings(BaseSettings):
     app_url: str = Field(default="http://localhost:8000", alias="APP_URL")
     sync_interval_minutes: int = Field(default=60, alias="SYNC_INTERVAL_MINUTES")
     debug: bool = Field(default=False, alias="DEBUG")
-    
+    # "report-only" stops browsers blocking what TIDE's Content-Security-Policy refuses (app/services/csp.py)
+    csp_mode: str = Field(default="enforce", alias="CSP_MODE")
+
     # --- BRAND CUSTOMIZATION ---
     # Change this value (0-360) to restyle the entire app
     # 0=Red, 30=Orange, 145=Green, 220=Blue (default), 280=Purple

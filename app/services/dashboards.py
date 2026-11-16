@@ -46,33 +46,34 @@ RULE_STATES = (("unlinked", "Unlinked"), ("linked", "Linked"), ("offline", "SIEM
 
 SOURCES: Dict[str, Source] = {
     "rule_health": Source("Rule Health", "shield-check", (
-        ("total", "Total Rules"), ("enabled", "Enabled"), ("validated", "Validated"),
-        ("quality", "Avg Quality"), ("severity", "Severity"), ("last_synced", "Last Synced"),
+        ("total", "Total rules"), ("enabled", "Enabled"), ("validated", "Validated"),
+        ("quality", "Avg quality"), ("severity", "Severity"), ("last_synced", "Last synced"),
     ), ("space", "enabled", "state", "min_score", "max_score", "validated_from", "validated_to", "search"), "/rules"),
     "rule_monitoring": Source("Rule Monitoring", "triangle-alert", (
-        ("rules", "Rules Needing Action"), ("errors", "Errors"), ("warnings", "Warnings"), ("info", "Info"),
-        ("causes", "Things to Fix"), ("resolved", "Resolved"), ("last_synced", "Last Synced"),
+        ("rules", "Rules needing action"), ("errors", "Errors"), ("warnings", "Warnings"), ("info", "Info"),
+        ("causes", "Things to fix"), ("resolved", "Resolved"), ("last_synced", "Last synced"),
     ), ("scope", "severity", "fixer", "issue", "rules", "search"), "/rule-monitoring"),
     "system": Source("System", "server", (
         ("covered", "Covered"), ("effective", "Effective"), ("techniques", "Techniques"), ("no_coverage", "No coverage"),
         ("known_gaps", "Known gaps"), ("unmapped", "Unmapped"), ("not_counted", "Not counted"),
+        ("vulnerabilities", "Vulnerabilities"), ("hardening", "Hardening"),
     ), ("system_id",), "/systems"),
     "threat_landscape": Source("Threat Landscape", "target", (
-        ("actors", "Tracked Actors"), ("ttps", "Unique TTPs"), ("coverage", "Global Coverage"),
-        ("gaps", "Coverage Gaps"), ("fully_covered", "Fully Covered"), ("last_synced", "Last Synced"),
+        ("actors", "Tracked actors"), ("ttps", "Unique TTPs"), ("coverage", "Global coverage"),
+        ("gaps", "Coverage gaps"), ("fully_covered", "Fully covered"), ("last_synced", "Last synced"),
     ), (), "/threats"),
     "baselines": Source("Baselines", "shield", (
-        ("templates", "Templates"), ("techniques", "Techniques Defined"), ("system_baselines", "System Baselines"),
-        ("rules_mapped", "Rules Mapped"), ("uncovered", "Uncovered"), ("fully_covered", "Fully Covered"),
-        ("not_effective", "Not Effective"),
+        ("templates", "Templates"), ("techniques", "Techniques defined"), ("system_baselines", "System baselines"),
+        ("rules_mapped", "Rules mapped"), ("uncovered", "Uncovered"), ("fully_covered", "Fully covered"),
+        ("not_effective", "Not effective"),
     ), (), "/baselines"),
     "asset_inventory": Source("Asset Inventory", "server", (
         ("systems", "Systems"), ("devices", "Devices"), ("packages", "Packages"),
-        ("cve_matches", "CVE Matches"), ("affected_devices", "Affected Devices"), ("baseline_assignments", "Baseline Assignments"),
+        ("cve_matches", "CVE matches"), ("affected_devices", "Affected devices"), ("baseline_assignments", "Baseline assignments"),
     ), (), "/systems"),
     "cve_overview": Source("CVE Overview", "shield-alert", (
-        ("total", "Total CVEs"), ("matched", "CVEs Matched"), ("affected_devices", "Affected Devices"),
-        ("ransomware", "Ransomware CVEs"), ("detected", "Detected"), ("ransom_undetected", "Ransom Undetected"),
+        ("total", "Total CVEs"), ("matched", "CVEs matched"), ("affected_devices", "Affected devices"),
+        ("ransomware", "Ransomware CVEs"), ("detected", "Detections in place"), ("ransom_undetected", "Ransomware undetected"),
     ), (), "/cve-overview"),
     "connected_services": Source("Connected Services", "settings", (
         ("siems", "SIEMs"), ("opencti", "OpenCTI"), ("gitlab", "GitLab"), ("logging", "Logging"),
@@ -90,6 +91,11 @@ _BEFORE_6_4_0 = {
     "system": ("covered", "techniques", "no_coverage", "known_gaps", "unmapped", "not_counted"),
     "baselines": ("templates", "techniques", "system_baselines", "rules_mapped", "uncovered", "fully_covered"),
     "rule_monitoring": ("rules", "errors", "warnings", "causes", "resolved", "last_synced"),
+}
+# A System section saved showing every card it had before 7.0.0 also shows the two its Wazuh devices add
+# (Vulnerabilities and Hardening), which show only while the system has such devices.
+_BEFORE_7_0_0 = {
+    "system": ("covered", "effective", "techniques", "no_coverage", "known_gaps", "unmapped", "not_counted"),
 }
 TEXT_CARDS = {"title": 120, "text": 2000}      # type -> most characters
 NAME_LIMIT = 80                                # a section's or a dashboard's name
@@ -214,8 +220,9 @@ def clean(cards) -> List[dict]:
             keys = [k for k, _ in SOURCES[source].metrics]
             chosen = card.get("metrics") if isinstance(card.get("metrics"), list) else keys
             name = _one_line(card.get("name"), NAME_LIMIT, "A section's name")
-            if source in _BEFORE_6_4_0 and set(_BEFORE_6_4_0[source]) <= set(chosen):
-                chosen = keys      # saved showing every card before 6.4.0 added its new ones: show them too
+            for before in (_BEFORE_6_4_0, _BEFORE_7_0_0):
+                if source in before and set(before[source]) <= set(chosen):
+                    chosen = keys  # saved showing every card before a release added new ones: show them too
             if source == "repositories":
                 if {"elastic", *_REPOSITORIES_BEFORE_6_1_3} <= set(chosen):
                     chosen = keys  # saved showing every card before 6.1.3 added three: show them too
@@ -262,7 +269,10 @@ def link_for(card: dict) -> str:
         return f"/systems/{quote(filters['system_id'])}" if filters.get("system_id") else ""
     if not source.page:
         return ""
-    query = urlencode({k: v for k, v in filters.items() if k in source.filters}, doseq=True)
+    shown = {k: v for k, v in filters.items() if k in source.filters}
+    if card["source"] == "rule_health":
+        shown.setdefault("enabled", "")     # Rule Health opens on enabled rules; a section with no Status counts all
+    query = urlencode(shown, doseq=True)
     return f"{source.page}?{query}" if query else source.page
 
 

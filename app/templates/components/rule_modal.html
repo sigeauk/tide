@@ -1,8 +1,9 @@
 {% from "macros/icons.html" import icon, icon_text %}
 {% from "components/mitre_ui.html" import technique_list %}
-{% from "macros/rule_ui.html" import state_badge, upstream_badge %}
+{% from "macros/rule_ui.html" import state_badge, upstream_badge, severity_icon %}
 {% from "components/window_ui.html" import collapse_ctl, drag_ctl, remove_btn, sections_item, tag, window_menu %}
 {% from "macros/modal.html" import close_button %}
+{% from "components/ui/loading_state.html" import loading_state %}
 {#
   Rule modal — opened by clicking a rule card / table row.
     header : score ring · name · destination/state/Elastic-or-Sigma/severity badges · author |
@@ -24,6 +25,8 @@
 {% set val_status = rule.validation_status | default('never') %}
 {% set val_class = 'success' if val_status == 'valid' else ('warning' if val_status == 'amber' else ('danger' if val_status == 'expired' else 'muted')) %}
 {% set scope_qs = 'space=' ~ (space | urlencode) ~ ('&siem_id=' ~ (siem_id | urlencode) if siem_id else '') %}
+{# A Wazuh rule is read from Wazuh: no edit, move, copy, link, deploy or Kibana run; its own logic instead. #}
+{% set is_wazuh = is_wazuh | default(false) %}
 
 <div name="Dismiss Rule Modal" class="modal-overlay" data-history-modal data-rule-modal data-rm-overlay>
     <div class="modal-content rule-modal" data-layout-key="tide.ruleWindowLayout" data-rule-id="{{ rule.rule_id }}"
@@ -69,18 +72,28 @@
                 </div>
                 {# Edit, then every other action. Sync and Restore re-render this window; the "…" button spins meanwhile. #}
                 {% call window_menu() %}
+                {% if not is_wazuh %}
                 <button name="Open Edit Form" type="button" role="menuitem" class="rh-more__item"
                     hx-get="/api/rules/{{ rule.rule_id }}/edit-form?{{ scope_qs }}"
                     hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
                 {{ icon('pencil', '14') }}<span>Edit</span>
                 </button>
+                {% endif %}
                 <button name="Sync Rule" type="button" role="menuitem" class="rh-more__item"
-                        title="Re-check just this rule against its SIEM: pull it, refresh its index mappings and re-score it"
+                        title="{{ 'Read this rule and the rest of its destination from Wazuh again, with their alerts' if is_wazuh else 'Re-check just this rule against its SIEM: pull it, refresh its index mappings and re-score it' }}"
                         hx-post="/api/rules/{{ rule.rule_id }}/sync?{{ scope_qs }}"
                         hx-target="#modal-container" hx-swap="innerHTML" hx-indicator="closest .rm-overflow"
                         hx-headers='{"X-Return-Modal": "rule"}' hx-include="unset">
                     {{ icon('refresh-cw', '14') }}<span>Sync this rule</span>
                 </button>
+                {% if siem_id %}
+                <button name="Raise Issue" type="button" role="menuitem" class="rh-more__item"
+                        title="Raise a GitLab issue for this rule, with its Rule Monitoring problems, or copy it as Markdown"
+                        hx-get="/api/rule-monitoring/copy?rule_id={{ rule.rule_id | urlencode }}&amp;siem_id={{ siem_id | urlencode }}&amp;space={{ space | urlencode }}&amp;from=window"
+                        hx-target="#modal-container" hx-swap="beforeend" hx-include="unset">
+                    {{ icon('gitlab', '14') }}<span>Raise issue…</span>
+                </button>
+                {% endif %}
                 {% if move_targets %}
                 <button name="Move" type="button" role="menuitem" class="rh-more__item"
                         title="Move or copy this rule to another linked destination"
@@ -89,7 +102,7 @@
                     {{ icon('arrow-right-left', '14') }}<span>Move</span>
                 </button>
                 {% endif %}
-                {% if not rule.deprecated %}
+                {% if not rule.deprecated and not is_wazuh %}
                 <button name="Duplicate" type="button" role="menuitem" class="rh-more__item"
                         title="Make a copy of this rule in {{ scope_label }}, under a new rule id, as Kibana's Duplicate does"
                         hx-get="/api/promotion/{{ rule.rule_id }}/duplicate?{{ scope_qs }}"
@@ -113,7 +126,7 @@
                     {{ icon('git-branch', '14') }}<span>Compare with {{ upstream.source }}{% if upstream.state == 'update' %} (update){% endif %}</span>
                 </button>
                 {% endif %}
-                {% if rule.deprecated %}
+                {% if rule.deprecated and not is_wazuh %}
                 <button name="Restore Rule" type="button" role="menuitem" class="rh-more__item"
                         title="Recreate this rule in its SIEM (disabled) and make it active again"
                         hx-post="/api/promotion/{{ rule.rule_id }}/restore?{{ scope_qs }}"
@@ -130,6 +143,7 @@
                 {% endif %}
                 <div class="rh-more__sep" role="separator"></div>
                 {{ sections_item() }}
+                {% if not is_wazuh or rule.deprecated %}
                 <div class="rh-more__sep" role="separator"></div>
                 <button name="Delete Rule" type="button" role="menuitem" class="rh-more__item rh-more__item--danger"
                         title="Delete this rule from TIDE, and optionally from {{ scope_label }} in Elastic"
@@ -137,6 +151,7 @@
                         data-space="{{ space }}" data-dest-name="{{ scope_label }}" data-deprecated="{{ 'true' if rule.deprecated else 'false' }}">
                     {{ icon('trash-2', '14') }}<span>Delete rule</span>
                 </button>
+                {% endif %}
                 {% endcall %}
                 {{ close_button('name="Close Modal" data-rm-close', title='Close (Esc)') }}
             </div>
@@ -150,9 +165,10 @@
 
             {# ───────── LEFT: activity + score chart ───────── #}
             <section class="rm-col rm-col--history" data-col="left" aria-label="Left column">
-                <div class="rm-panel rm-panel--history" data-fold="history" data-section="history" data-section-label="History">
+                {# History, the score chart and Alerts open folded, so the rule itself comes first (UX.md 9.5). #}
+                <div class="rm-panel rm-panel--history is-collapsed" data-fold="history" data-section="history" data-section-label="History">
                     <div class="rm-panel__head">
-                        {{ collapse_ctl('history') }}
+                        {{ collapse_ctl('history', open=false) }}
                         <h3 class="rm-panel__title">History</h3>
                         {{ drag_ctl('History') }}
                     </div>
@@ -164,7 +180,7 @@
                             <option value="asc">Oldest</option>
                         </select>
                         <select id="history-action-filter" name="Action filter" aria-label="Filter by action">
-                            <option value="">All</option>
+                            <option value="">All actions</option>
                             <option value="validation">Validation</option>
                             <option value="edits">Edits</option>
                         </select>
@@ -234,9 +250,9 @@
                     {% endif %}
                 </div>
 
-                <div class="rm-panel rm-panel--chart" data-fold="chart" data-section="chart" data-section-label="Rule score over time">
+                <div class="rm-panel rm-panel--chart is-collapsed" data-fold="chart" data-section="chart" data-section-label="Rule score over time">
                     <div class="rm-panel__head">
-                        {{ collapse_ctl('score over time') }}
+                        {{ collapse_ctl('score over time', open=false) }}
                         <h3 class="rm-panel__title">Rule score over time</h3>
                         {% if score_chart %}
                         <span class="rm-chart-delta {% if score_chart.delta > 0 %}text-success{% elif score_chart.delta < 0 %}text-danger{% else %}text-muted{% endif %}">
@@ -283,9 +299,9 @@
                    for the count), then those days' alerts by status, and the total since TIDE counts back.
                    As of the last sync. Only once its space's alerts have been read. #}
                 {% if alerts %}
-                <div class="rm-panel rm-panel--chart" data-fold="alerts" data-section="alerts" data-section-label="Alerts">
+                <div class="rm-panel rm-panel--chart is-collapsed" data-fold="alerts" data-section="alerts" data-section-label="Alerts">
                     <div class="rm-panel__head">
-                        {{ collapse_ctl('alerts') }}
+                        {{ collapse_ctl('alerts', open=false) }}
                         <h3 class="rm-panel__title">Alerts</h3>
                         {% set _month = alerts.by_status.values() | sum %}
                         <span class="rm-chart-delta text-muted" title="Alerts in the last {{ alerts.days }} days">{{ '{:,}'.format(_month) }}</span>
@@ -309,9 +325,11 @@
                     </svg>
                     <div class="rm-runfacts-grid rm-alert-facts">
                     <dl class="rm-runfacts">
+                        {% if not is_wazuh %}
                         {% for s, label in (('open', 'Open'), ('acknowledged', 'Acknowledged'), ('closed', 'Closed')) %}
                         <div><dt>{{ label }}</dt><dd>{{ '{:,}'.format(alerts.by_status[s]) }}</dd></div>
                         {% endfor %}
+                        {% endif %}
                         <div><dt>{{ alerts.total_days }} days</dt><dd title="Newest alert: {{ alerts.last_day.strftime('%d %b %Y') if alerts.last_day else 'none' }}">{{ '{:,}'.format(alerts.total) }}</dd></div>
                     </dl>
                     </div>
@@ -381,7 +399,25 @@
                     <dl class="rm-facts">
                         {% if details.risk_score is not none %}<div><dt>Risk score</dt><dd>{{ details.risk_score }}</dd></div>{% endif %}
                         {% if rule.query_language %}<div><dt>Language</dt><dd>{{ rule.query_language | rule_language_name }}</dd></div>{% endif %}
+                        {% if is_wazuh %}
+                        <div><dt>Level</dt><dd>{{ wazuh.level }}</dd></div>
+                        {% if wazuh.file %}<div><dt>File</dt><dd class="mono">{{ wazuh.file }}</dd></div>{% endif %}
+                        {% endif %}
                     </dl>
+                    {% if is_wazuh %}
+                    {% for label, values in [('Groups', wazuh.groups)] + wazuh.compliance %}
+                    {% if values %}
+                    <div class="rm-chips" title="{{ label }}">
+                        <span class="rm-chips__label">{{ label }}</span>
+                        {% for v in values[:12] %}<span class="rm-chip{% if label != 'Groups' %} rm-chip--mono{% endif %}">{{ v }}</span>{% endfor %}
+                        {% if values | length > 12 %}<span class="rm-chip rm-chip--more" title="{{ values[12:] | join(', ') }}">+{{ values | length - 12 }}</span>{% endif %}
+                    </div>
+                    {% endif %}
+                    {% endfor %}
+                    {% if wazuh.renumbered %}
+                    <p class="text-muted fs-sm">ATT&amp;CK has renumbered {{ 'this technique' if wazuh.renumbered | length == 1 else 'these techniques' }} since this rule was written: {% for old, new in wazuh.renumbered %}{{ old }} is now {{ new }}{{ ', ' if not loop.last }}{% endfor %}. TIDE counts the current {{ 'id' if wazuh.renumbered | length == 1 else 'ids' }}.</p>
+                    {% endif %}
+                    {% endif %}
                     {% if details.indexes %}
                     <div class="rm-chips" title="Index patterns">
                         <span class="rm-chips__label">Indexes</span>
@@ -402,7 +438,10 @@
                 {# What Rule Monitoring found on this rule (rule_issues.rule_findings), only when it found
                    something: each in full -- severity, issue, cause, what was found, who fixes it and
                    since when -- unmuted first; a muted one says by whom and why. The count is of those
-                   not muted. Acting on them is Rule Monitoring's: the link opens it on this rule. #}
+                   not muted. Who can change Rule Health (``can_fix``) can Mute rule… each here, as on
+                   Rule Monitoring's rows (its dialog opens over the window, which comes back as it is
+                   then), Unmute rule one muted on its own, and Raise issue for the rule (#106); the rest
+                   is Rule Monitoring's: the link opens it on this rule. #}
                 {% if monitoring %}
                 {% set _live = monitoring | rejectattr('muted') | list %}
                 <details class="rm-fold" open data-fold="monitoring" data-section="monitoring" data-section-label="Rule Monitoring">
@@ -412,7 +451,7 @@
                         {% for f in monitoring %}
                         <div class="rm-item rm-item--{{ 'muted' if f.muted else {'error': 'error', 'info': 'info'}.get(f.severity, 'warn') }}">
                             <div class="rm-item__main">
-                                <div class="rm-item__name" title="{{ f.title }}">{{ icon('triangle-alert', '13') }} {{ f.title }}</div>
+                                <div class="rm-item__name" title="{{ f.title }}">{{ severity_icon(f.severity) }} {{ f.title }}</div>
                                 {% if f.cause %}<p class="rm-item__text mono">{{ f.cause }}</p>{% endif %}
                                 {% if f.detail %}<p class="rm-item__text">{{ f.detail }}</p>{% endif %}
                                 <div class="rm-item__meta">
@@ -422,9 +461,28 @@
                                     {% if f.muted %}<span class="text-muted">Muted{{ ' with its cause' if f.muted.what == 'cause' }} by {{ f.muted.by }} on {{ f.muted.at.strftime('%Y-%m-%d') }}{% if f.muted.note %}: {{ f.muted.note }}{% endif %}</span>{% endif %}
                                 </div>
                             </div>
+                            {% if can_fix and siem_id %}
+                            {% if f.muted and f.muted.what == 'rule' %}
+                            <button name="Unmute Rule" type="button" class="btn-icon"
+                                    hx-post="/api/rule-monitoring/unmute" hx-vals='{{ {"rule_id": rule.rule_id, "siem_id": siem_id, "space": space, "issue": f.muted.issue, "cause": f.muted.cause} | tojson }}'
+                                    hx-headers='{"X-Return-Modal": "rule"}' hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+                                    title="Unmute rule" aria-label="Unmute rule">{{ icon('bell', '14') }}</button>
+                            {% elif not f.muted %}
+                            <button name="Mute Rule" type="button" class="btn-icon"
+                                    hx-get="/api/rule-monitoring/mute-form?rule_id={{ rule.rule_id | urlencode }}&amp;siem_id={{ siem_id | urlencode }}&amp;space={{ space | urlencode }}&amp;issue={{ f.issue | urlencode }}&amp;cause={{ (f.cause or '') | urlencode }}&amp;name={{ rule.name | urlencode }}&amp;where={{ scope_label | urlencode }}&amp;from=window"
+                                    hx-target="#modal-container" hx-swap="beforeend" hx-include="unset"
+                                    title="Mute rule…: this problem, every problem on it, or its cause" aria-label="Mute rule…">{{ icon('bell-off', '14') }}</button>
+                            {% endif %}
+                            {% endif %}
                         </div>
                         {% endfor %}
                     </div>
+                    {% if siem_id %}
+                    <button name="Raise Issue" type="button" class="btn btn-secondary btn-sm mt-sm"
+                            hx-get="/api/rule-monitoring/copy?rule_id={{ rule.rule_id | urlencode }}&amp;siem_id={{ siem_id | urlencode }}&amp;space={{ space | urlencode }}&amp;from=window"
+                            hx-target="#modal-container" hx-swap="beforeend" hx-include="unset"
+                            title="Raise a GitLab issue for this rule, with these problems, or copy it as Markdown">{{ icon_text('plus-circle', 'Raise issue', '13') }}</button>
+                    {% endif %}
                     <p class="text-muted fs-sm">{% if not rule.enabled %}The rule is disabled: these would stop it working if it were switched on. {% endif %}As of
                         the last sync. Act on them in <a href="/rule-monitoring?rules=all&amp;group=rule&amp;search={{ rule.name | urlencode }}"
                         title="Open Rule Monitoring on this rule">Rule Monitoring</a>.</p>
@@ -432,9 +490,42 @@
                 </details>
                 {% endif %}
 
+                {# The GitLab issues about this rule (gitlab_issues.about_rules, #106): raised for it, or in Rule
+                   Monitoring for a cause it has; open, and closed in the last week, with their state and
+                   assignee as GitLab had them when TIDE last looked. Only when there are some; the count is
+                   of the open ones. #}
+                {% if gitlab_issues %}
+                {% set _open_issues = gitlab_issues | selectattr('state', 'equalto', 'opened') | list %}
+                <details class="rm-fold" open data-fold="gitlab-issues" data-section="gitlab-issues" data-section-label="GitLab issues">
+                    <summary><span>GitLab issues{% if _open_issues %} <span class="rm-fold__count">{{ _open_issues | length }}</span>{% endif %}</span>{{ drag_ctl('GitLab issues') }}</summary>
+                    <div class="rm-about">
+                    <div class="rm-items">
+                        {% for i in gitlab_issues %}
+                        <div class="rm-item rm-item--{{ 'gitlab' if i.state == 'opened' else 'muted' }}">
+                            <div class="rm-item__main">
+                                <div class="rm-item__name" title="{{ i.title }}">{{ icon('gitlab', '13') }}
+                                    <a href="{{ i.web_url }}" target="_blank" rel="noopener" class="text-primary">{{ i.project }}#{{ i.iid }}</a> {{ i.title }}</div>
+                                <div class="rm-item__meta">
+                                    {% if i.state == 'opened' %}<span class="badge badge-success badge--xs">Open</span>
+                                    {% elif i.state == 'closed' %}<span class="badge badge-grey badge--xs">Closed</span>
+                                    {% else %}<span class="badge badge-warning badge--xs">Gone from GitLab</span>{% endif %}
+                                    <span class="text-muted">{{ 'Raised for this rule' if i.for_rule else 'Raised in Rule Monitoring for a cause it has' }}
+                                        by {{ i.created_by }} on {{ i.created_at.strftime('%Y-%m-%d') }}{% if i.assignee %}, assigned to {{ i.assignee_name or i.assignee }}{% endif %}</span>
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    <p class="text-muted fs-sm">As GitLab had them when TIDE last looked: at the last sync, or <strong>Sync this rule</strong>. Raise
+                        another, or comment on one of these, with <strong>Raise issue…</strong> in the window's menu.</p>
+                    </div>
+                </details>
+                {% endif %}
+
                 {# The rule's last run in Kibana, as of TIDE's last sync of it (#63): the run in one row, how
                    it is scheduled in the next, then Kibana's message and Test. Per destination, so
                    Compare leaves it out. #}
+                {% if not is_wazuh %}
                 {% if last_run %}{% set run_label, run_tone = last_run.label, last_run.tone %}
                 {% elif not rule.enabled %}{% set run_label, run_tone = 'Disabled', 'muted' %}
                 {% else %}{% set run_label, run_tone = 'No run', 'muted' %}{% endif %}
@@ -500,7 +591,53 @@
                     {% endif %}
                     </div>
                 </details>
+                {% endif %}
 
+                {% if is_wazuh %}
+                {# A Wazuh rule's logic: its XML, read from the manager as the window opens and highlighted as a
+                   Kibana query is, then (wazuh_sync.window_details) the rules or groups it follows, how often they
+                   must match, and the fields it matches. #}
+                {% macro wazuh_rule_ref(pid) -%}
+                {% if pid in wazuh.held %}<button type="button" class="rm-item__open mono" data-rule-open hx-get="/api/rules/{{ pid | urlencode }}/history-modal?{{ scope_qs }}"
+                    hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset" title="Open rule {{ pid }}">{{ pid }}</button>{% else %}<span class="mono" title="Not one of this destination's rules in TIDE">{{ pid }}</span>{% endif %}
+                {%- endmacro %}
+                <div class="rm-panel rm-panel--logic" data-fold="logic" data-section="logic" data-section-label="Rule logic">
+                    <div class="rm-panel__head">
+                        {{ collapse_ctl('rule logic') }}
+                        <h3 class="rm-panel__title">Rule logic <span class="rm-lang">{{ 'wazuh_xml' | rule_language_name }}</span></h3>
+                        <span class="rm-panel__tools">
+                            <button name="Copy Query" type="button" class="btn btn-secondary btn-sm" data-rm-copy="#rm-wazuh-xml">
+                                {{ icon_text('copy', 'Copy', '12') }}
+                            </button>
+                            {{ drag_ctl('Rule logic') }}
+                        </span>
+                    </div>
+                    <div id="rm-wazuh-xml-slot" hx-get="/api/rules/{{ rule.rule_id | urlencode }}/wazuh-xml?{{ scope_qs }}"
+                         hx-trigger="load" hx-swap="innerHTML" hx-include="unset">
+                        {{ loading_state("Reading the rule's XML from Wazuh…", inline=true) }}
+                    </div>
+                    {% set wz = wazuh %}
+                    {% if wz.parents or wz.parent_groups or wz.matched_parents or wz.matched_groups or wz.ignore %}
+                    <dl class="rm-facts rm-logic-part">
+                        {% if wz.parents %}<div><dt>After rule</dt><dd>{% for pid in wz.parents %}{{ wazuh_rule_ref(pid) }}{% if not loop.last %}, {% endif %}{% endfor %}</dd></div>{% endif %}
+                        {% if wz.parent_groups %}<div><dt>After a rule in group</dt><dd class="mono">{{ wz.parent_groups | join(', ') }}</dd></div>{% endif %}
+                        {% if wz.matched_parents or wz.matched_groups %}
+                        <div><dt>Fires when</dt><dd>{% if wz.matched_parents %}rule {% for pid in wz.matched_parents %}{{ wazuh_rule_ref(pid) }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}a rule in group <span class="mono">{{ wz.matched_groups | join(', ') }}</span>{% endif %}
+                            matched {{ wz.frequency or 'several' }} times{% if wz.timeframe %} within {{ wz.timeframe }} s{% endif %}{% if wz.same %}, with the same {{ wz.same | join(', ') }}{% endif %}</dd></div>
+                        {% endif %}
+                        {% if wz.ignore %}<div><dt>Then quiet for</dt><dd>{{ wz.ignore }} s</dd></div>{% endif %}
+                    </dl>
+                    {% endif %}
+                    {% if wz.conditions %}
+                    <div class="rm-logic-part">
+                        <span class="rm-label">Matches</span>
+                        {% for c in wz.conditions %}
+                        <div class="rm-logic-map"><span class="mono">{{ c.field }}</span> <span class="tm-op">{{ 'does not match' if c.negate else 'matches' }}</span> <span class="mono">{{ c.pattern }}</span>{% if c.type %} <span class="rm-lang">{{ c.type }}</span>{% endif %}</div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </div>
+                {% else %}
                 <div class="rm-panel rm-panel--logic" data-fold="logic" data-section="logic" data-section-label="Rule logic">
                     <div class="rm-panel__head">
                         {{ collapse_ctl('rule logic') }}
@@ -574,6 +711,7 @@
                     </div>
                     {% endif %}
                 </div>
+                {% endif %}
 
                 {# The items of the exception lists the rule uses (#75), as the last sync read them: each
                    item's conditions (an event is excepted when all of them hold), who added it and when.
@@ -668,7 +806,7 @@
                     <p class="rm-mapping-age">Checked against the SIEM's index mappings {{ mapping_info.label }}{% if mapping_info.known < mapping_info.patterns %} · {{ mapping_info.patterns - mapping_info.known }} pattern(s) not checked yet{% endif %}. Use Sync this rule to re-check now.</p>
                     {% endif %}
                 </details>
-                {% elif rule.score_mapping == 0 %}
+                {% elif rule.score_mapping == 0 and not is_wazuh %}
                 <div class="rm-note rm-note--danger">{{ icon_text('triangle-alert', 'Field mapping issues: index fields missing or not checked.', '14') }}</div>
                 {% endif %}
 
@@ -729,6 +867,7 @@
 
                 {# Upstream: the Elastic or Sigma rule this came from (rule_origins) and whether a newer
                    version of it is built into TIDE; Review update opens the section-by-section dialog. #}
+                {% if not is_wazuh %}
                 <div class="rm-panel rm-panel--upstream" data-fold="upstream" data-section="upstream" data-section-label="Upstream">
                     <div class="rm-panel__head">
                         {{ collapse_ctl('Upstream') }}
@@ -904,6 +1043,7 @@
                     </form>
                     {% endif %}
                 </div>
+                {% endif %}
             </aside>
         </div>
     </div>

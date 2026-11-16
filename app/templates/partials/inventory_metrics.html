@@ -1,10 +1,10 @@
 {% from "macros/metrics.html" import metric_card %}
-{% set keys = metric_keys | default(none) %}{% set link = metric_link | default(none) %}
+{# Systems shows four cards, Packages and CVE matches on Devices; a Dashboard section passes the ones it chose (dashboards.SOURCES). #}
+{% set keys = metric_keys | default(['systems', 'devices', 'affected_devices', 'baseline_assignments']) %}{% set link = metric_link | default(none) %}
 
 {#  Partial: partials/inventory_metrics.html
     Context:  stats (InventoryStats)
 #}
-{% from "macros/icons.html" import icon_text %}
 
 {% call metric_card('systems', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value">{{ stats.environment_count }}</p>
@@ -14,7 +14,8 @@
 {% call metric_card('devices', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value">{{ stats.host_count }}</p>
     <p class="metric-label">Devices</p>
-    <div class="metric-tip" role="tooltip">Physical &amp; virtual</div>
+    <p class="metric-sub">{{ stats.software_count }} package{{ '' if stats.software_count == 1 else 's' }} · {{ stats.unique_vuln_count }} CVE match{{ '' if stats.unique_vuln_count == 1 else 'es' }}</p>
+    <div class="metric-tip" role="tooltip">Physical and virtual devices. Beneath: the packages installed on them, and the known exploited CVEs (CISA's catalogue) those match</div>
 {% endcall %}
 {% call metric_card('packages', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value">{{ stats.software_count }}</p>
@@ -22,17 +23,17 @@
     <div class="metric-tip" role="tooltip">Installed packages</div>
 {% endcall %}
 {% call metric_card('cve_matches', keys, link, 'metric-card--tip', tip=true) %}
-    <p class="metric-value {{ 'danger' if stats.unique_vuln_count > 0 else '' }}">{{ stats.unique_vuln_count }}</p>
-    <p class="metric-label">CVE Matches</p>
+    <p class="metric-value">{{ stats.unique_vuln_count }}</p>
+    <p class="metric-label">CVE matches</p>
     <div class="metric-tip" role="tooltip">Unique CVEs matched</div>
 {% endcall %}
 {% call metric_card('affected_devices', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value {{ 'danger' if stats.affected_host_count > 0 else '' }}">{{ stats.affected_host_count }}</p>
-    <p class="metric-label">Affected Devices</p>
-    <div class="metric-tip" role="tooltip">Devices with CVE match</div>
+    <p class="metric-label">Affected devices</p>
+    <div class="metric-tip" role="tooltip">Devices with a known exploited CVE</div>
 {% endcall %}
 {% call metric_card('baseline_assignments', keys, link) %}
     <p class="metric-value">{{ stats.baseline_assignment_count }}</p>
-    <p class="metric-label">Baseline Assignments</p>
+    <p class="metric-label">Baseline assignments</p>
     <p class="metric-sub">{{ stats.baseline_count }} baselines</p>
 {% endcall %}

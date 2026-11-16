@@ -48,7 +48,7 @@ class SIEMInventoryItem(BaseModel):
 
 class SIEMInventoryCreate(BaseModel):
     """Create a SIEM in the centralized inventory."""
-    siem_type: str = Field(..., pattern=r"^(elastic|splunk|sentinel)$")
+    siem_type: str = Field(..., pattern=r"^(elastic|wazuh|splunk|sentinel)$")
     label: str = Field(..., min_length=1, max_length=200)
     elasticsearch_url: Optional[str] = None
     kibana_url: Optional[str] = None
@@ -106,7 +106,7 @@ class SIEMConfig(BaseModel):
 
 class SIEMConfigCreate(BaseModel):
     """Create a SIEM connection for a client."""
-    siem_type: str = Field(..., pattern=r"^(elastic|splunk|sentinel)$")
+    siem_type: str = Field(..., pattern=r"^(elastic|wazuh|splunk|sentinel)$")
     label: str = Field(..., min_length=1, max_length=200)
     base_url: Optional[str] = None
     api_token: Optional[str] = None  # Plaintext — encrypted before storage

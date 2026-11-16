@@ -1,10 +1,10 @@
 {% from "macros/metrics.html" import metric_card %}
-{% set keys = metric_keys | default(none) %}{% set link = metric_link | default(none) %}
+{# CVE Overview shows four cards, the catalogue's totals beneath them; a Dashboard section passes the ones it chose (dashboards.SOURCES). #}
+{% set keys = metric_keys | default(['matched', 'affected_devices', 'detected', 'ransom_undetected']) %}{% set link = metric_link | default(none) %}
 
-{#  Partial: partials/cve_metrics.html
+{#  Partial: partials/cve_metrics.html, on CVE Overview and a Dashboard's CVE Overview section.
     Context:  stats (CveOverviewStats)
 #}
-{% from "macros/icons.html" import icon_text %}
 
 {% call metric_card('total', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value">{{ stats.total_kev }}</p>
@@ -12,14 +12,15 @@
     <div class="metric-tip" role="tooltip">CISA catalogue</div>
 {% endcall %}
 {% call metric_card('matched', keys, link, 'metric-card--tip', tip=true) %}
-    <p class="metric-value {{ 'danger' if stats.matched_count > 0 else '' }}">{{ stats.matched_count }}</p>
-    <p class="metric-label">CVEs Matched</p>
-    <div class="metric-tip" role="tooltip">In your systems</div>
+    <p class="metric-value">{{ stats.matched_count }}</p>
+    <p class="metric-label">CVEs matched</p>
+    <p class="metric-sub">of {{ stats.total_kev }} in CISA's catalogue</p>
+    <div class="metric-tip" role="tooltip">Known exploited CVEs matched on your devices, of every CVE in CISA's catalogue</div>
 {% endcall %}
 {% call metric_card('affected_devices', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value {{ 'danger' if stats.affected_hosts > 0 else '' }}">{{ stats.affected_hosts }}</p>
-    <p class="metric-label">Affected Devices</p>
-    <div class="metric-tip" role="tooltip">Devices with matches</div>
+    <p class="metric-label">Affected devices</p>
+    <div class="metric-tip" role="tooltip">Devices with a known exploited CVE</div>
 {% endcall %}
 {% call metric_card('ransomware', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value {{ 'warning' if stats.ransomware_count > 0 else '' }}">{{ stats.ransomware_count }}</p>
@@ -28,11 +29,12 @@
 {% endcall %}
 {% call metric_card('detected', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value {{ 'success' if stats.detected_count > 0 else '' }}">{{ stats.detected_count }}</p>
-    <p class="metric-label">Detected</p>
-    <div class="metric-tip" role="tooltip">Marked as detected</div>
+    <p class="metric-label">Detections in place</p>
+    <div class="metric-tip" role="tooltip">CVEs marked as detected</div>
 {% endcall %}
 {% call metric_card('ransom_undetected', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value {{ 'danger' if stats.ransomware_undetected > 0 else 'success' }}">{{ stats.ransomware_undetected }}</p>
-    <p class="metric-label">Ransom Undetected</p>
-    <div class="metric-tip" role="tooltip">Ransom without coverage</div>
+    <p class="metric-label">Ransomware undetected</p>
+    <p class="metric-sub">of {{ stats.ransomware_count }} ransomware CVEs</p>
+    <div class="metric-tip" role="tooltip">CVEs with known ransomware use and no detection marked, of every one in CISA's catalogue</div>
 {% endcall %}

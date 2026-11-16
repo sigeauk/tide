@@ -108,6 +108,18 @@ KNOWN: Dict[str, Issue] = {i.id: i for i in (
     Issue("query_invalid", "Query refused by Elasticsearch", "author", "error", "rule",
           "Elasticsearch refused the rule's query (an unknown function, or a query it can't run).",
           "Correct the query; Kibana's message says what Elasticsearch objected to."),
+    Issue("elastic_query", "Query fails Elastic's validation", "author", "error", "rule",
+          "Elastic's own validator, which Elastic checks its prebuilt rules with, can't parse the rule's query, or "
+          "finds a value or comparison that doesn't fit its field's type. Kibana keeps such a rule, but its searches "
+          "fail or match nothing. A warning instead when Kibana has run the query as it stands without error: the "
+          "rule then still counts as effective.",
+          "Correct the query where Elastic's message points. TIDE names this when the rule is saved or deployed from "
+          "TIDE, and stops the save when the client's page has Stop saves Elastic's validator refuses ticked."),
+    Issue("elastic_field", "Field in no Elastic schema", "author", "warning", "rule",
+          "The query uses a field that is in none of Elastic's schemas (ECS, its integrations' and Endpoint's) and that "
+          "TIDE hasn't seen in the rule's indexes. It may be misspelled, or come from data this SIEM doesn't have yet.",
+          "Check the field's name against the data the rule is for. If it is right, nothing is needed: once the rule's "
+          "indexes have the field, it is no longer listed."),
     Issue("privileges", "Missing index privileges", "engineer", "warning", "rule",
           "The user whose API key runs the rule may lack read privileges on some of its indexes, or Kibana "
           "couldn't check them.",
@@ -164,6 +176,18 @@ KNOWN: Dict[str, Issue] = {i.id: i for i in (
           "The rule raised far more alerts in a day than it usually does. A rise like this usually follows a change: "
           "an edit, a new data source, or an exception removed. The change TIDE recorded just before it is named.",
           "Look at the change named, and at the new alerts in Kibana: tune the rule if they are false positives."),
+    Issue("wazuh_agents_disconnected", "Wazuh agents disconnected", "engineer", "warning", "destination",
+          "Agents of this destination haven't reported to the Wazuh manager within the time the client expects new "
+          "data, so nothing they see is alerted on or scanned. It is an error when none of them has, as the "
+          "destination is blind, and a warning when some still report.",
+          "Check the agents named: that they are running, can reach the manager and are enrolled. A retired agent "
+          "can be removed from Wazuh, or from the group."),
+    Issue("wazuh_read_incomplete", "Wazuh read incomplete", "engineer", "warning", "destination",
+          "At the last sync TIDE read this destination's rules, but couldn't read all of its agents, vulnerability "
+          "findings or SCA results, so its devices, their findings and their hardening are as the last complete "
+          "read left them.",
+          "Check that the manager's and the indexer's read-only users have the permissions TIDE needs (Test "
+          "connection in Integrations names what is missing) and that the indexer is up, then sync again."),
     Issue("alerts_unreadable", "Alerts couldn't be read", "engineer", "warning", "destination",
           "TIDE couldn't read this space's alerts at the last sync, so it can't tell which rules are noisy or silent here.",
           "Give the SIEM's API key read access to the space's alerts index (.alerts-security.alerts-<space>), then "
@@ -407,6 +431,37 @@ def catalogue_findings(rule: Dict[str, Any], entries: Dict[str, Any],
             if entry and entry.status == OK and override not in (entry.fields or {}):
                 out.append(("override_missing", f"{override} in {p}", KNOWN["override_missing"].severity,
                             f"No index matching {p} maps {override}, the rule's timestamp override."))
+    return out
+
+
+def ran_as_it_stands(last: Dict[str, Any], updated_at) -> bool:
+    """Whether Kibana's last run of a rule succeeded after the rule last changed: its query as it
+    stands ran without error."""
+    if str((last or {}).get("status") or "").lower() != "succeeded":
+        return False
+    ran, changed = _when(last.get("date")), _when(updated_at)
+    return bool(ran and (changed is None or ran >= changed))
+
+
+def elastic_findings(problems: List[Dict[str, Any]], kibana_issues: Set[str],
+                     missing: Set[str], ran: bool = False) -> List[Tuple[str, str, str, str]]:
+    """What Elastic's validator found in a rule's query at its last check (``elastic_validator``). A
+    query Kibana's last run already refused, and a field the catalogue already lists as not mapped
+    (``missing``) or Kibana as unknown, aren't repeated: theirs is the more exact report. A query Kibana
+    has run as it stands without error (``ran``: ``ran_as_it_stands``) is a warning, not an error, so
+    the validator alone never leaves a rule Kibana runs not effective."""
+    from app.services.elastic_validator import describe
+    out: List[Tuple[str, str, str, str]] = []
+    for p in problems or []:
+        if p.get("kind") == "error":
+            if ran:
+                out.append(("elastic_query", "", "warning", describe(p) + " Kibana has run the query as it stands "
+                            "without error, so the rule still counts as effective."))
+            elif not kibana_issues & {"query_syntax", "query_invalid"}:
+                out.append(("elastic_query", "", KNOWN["elastic_query"].severity, describe(p)))
+        elif p.get("kind") == "warning" and p.get("field"):
+            if p["field"] not in missing and "unknown_field" not in kibana_issues:
+                out.append(("elastic_field", str(p["field"]), KNOWN["elastic_field"].severity, describe(p)))
     return out
 
 
@@ -753,7 +808,9 @@ _RULES_SQL = """
            lower(COALESCE(json_extract_string(raw_data, '$.severity'), 'low')) AS rule_severity,
            COALESCE(json_extract_string(raw_data, '$.rule_id'), rule_id) AS validation_key,
            COALESCE(json_extract_string(raw_data, '$.name'), '') AS rule_name,
-           json_extract(raw_data, '$.exceptions_list')::VARCHAR AS exceptions_list
+           json_extract(raw_data, '$.exceptions_list')::VARCHAR AS exceptions_list,
+           COALESCE(json_extract_string(raw_data, '$.type'), '') AS source_type,
+           COALESCE(TRY_CAST(json_extract(raw_data, '$.custom') AS BOOLEAN), false) AS custom
     FROM detection_rules WHERE NOT COALESCE(deprecated, false)
 """
 
@@ -916,12 +973,24 @@ def _expired_weeks(db, client_id: Optional[str]) -> Callable[[str], int]:
     return weeks
 
 
-def _enabled_since(created: Optional[str], changes: List[Tuple[datetime, str, str, Dict[str, Any]]]) -> Optional[datetime]:
+def _enabled_since(created: Optional[str], changes: List[Tuple[datetime, str, str, Dict[str, Any]]],
+                   first_seen: Optional[datetime] = None) -> Optional[datetime]:
     """When a rule was last switched on, from its history (enabled, restored, re-created, or an edit
-    of ``enabled``), else when Kibana created it."""
+    of ``enabled``), else when Kibana created it, else when TIDE first read it (``first_seen``: a Wazuh
+    rule has no creation time of its own)."""
     on = [when for when, action, _a, detail in changes if action in _SWITCHED_ON
           or (action == "edited" and "enabled" in str(detail.get("changed_fields") or ""))]
-    return max(on) if on else _when(created)
+    return max(on) if on else (_when(created) or first_seen)
+
+
+def _first_seen(conn, siem_id: str) -> Dict[Tuple[str, str], datetime]:
+    """When TIDE first read each of a SIEM's rules, ``{(rule_id, space): when}``, from its history."""
+    if not conn.execute("SELECT 1 FROM duckdb_tables() WHERE table_name = 'rule_lifecycle_history' "
+                        "AND database_name = current_database()").fetchone():
+        return {}
+    return {(r[0], r[1]): r[2] for r in conn.execute(
+        "SELECT rule_id, space, min(created_at) FROM rule_lifecycle_history WHERE siem_id = ? AND action = 'created' "
+        "GROUP BY 1, 2", [siem_id]).fetchall()}
 
 
 def _json(text, default):
@@ -1008,12 +1077,12 @@ def detect(db, conn, scopes: Optional[Set[Tuple[str, str]]] = None,
         parsed = []
         for (rule_id, _s, space, enabled, last, idx, results, override, updated_at, last_updated,
              run_interval, lookback_from, fallback_disabled, kibana_id, kibana_created, rule_severity, validation_key,
-             rule_name, exceptions_list) in siem_rules:
+             rule_name, exceptions_list, source_type, custom) in siem_rules:
             rule = {"index": _json(idx, []), "results": _json(results, []), "timestamp_override": override,
                     "timestamp_override_fallback_disabled": bool(fallback_disabled),
                     "interval": run_interval, "from": lookback_from, "kibana_id": kibana_id or "",
                     "created": kibana_created, "severity": rule_severity, "validation_key": validation_key,
-                    "name": rule_name, "exceptions": exceptions_list}
+                    "name": rule_name, "exceptions": exceptions_list, "source": source_type, "custom": bool(custom)}
             parsed.append((rule_id, space, enabled, _json(last, {}), rule, updated_at, last_updated))
             for issue, cause, severity, detail in schedule_findings(run_interval, lookback_from, override):
                 add(issue, cause, siem_id, space, rule_id, severity, detail)
@@ -1043,10 +1112,12 @@ def detect(db, conn, scopes: Optional[Set[Tuple[str, str]]] = None,
         # Each rule's alerts per day, and each space's (#68); its recent changes (#69, #70).
         alerts = rule_alerts.daily(conn, {(siem_id, sp) for _r, sp, *_x in parsed})
         history = _rule_history(conn, siem_id)
+        first_seen = _first_seen(conn, siem_id)
         searches = _search_samples(conn, siem_id)      # each rule's search times (#76)
         utc_now = datetime.now(timezone.utc).replace(tzinfo=None)
-        from app.services import rule_exceptions
+        from app.services import elastic_validator, rule_exceptions
         exception_items = rule_exceptions.items_by_list(conn, siem_id)    # the exception lists' items (#75)
+        elastic_checks = elastic_validator.problems_by_rule(conn, siem_id)   # Elastic's validator (#7)
         # The same detection deployed twice in one space (#78), over every enabled rule in it.
         try:
             spaces = {sp for _r, sp, *_x in parsed}
@@ -1071,7 +1142,13 @@ def detect(db, conn, scopes: Optional[Set[Tuple[str, str]]] = None,
             kibana = kibana_findings(last) if enabled else []
             for issue, cause, severity, detail in kibana:
                 add(issue, cause, siem_id, space, rule_id, severity, detail)
-            for issue, cause, severity, detail in catalogue_findings(rule, entries, {f[0] for f in kibana}):
+            catalogued = catalogue_findings(rule, entries, {f[0] for f in kibana})
+            for issue, cause, severity, detail in catalogued:
+                add(issue, cause, siem_id, space, rule_id, severity, detail)
+            missing = {cause.split(" in ", 1)[0] for issue, cause, *_x in catalogued if issue == "field_missing"}
+            for issue, cause, severity, detail in elastic_findings(elastic_checks.get((rule_id, space), []),
+                                                                   {f[0] for f in kibana}, missing,
+                                                                   enabled and ran_as_it_stands(last, updated_at)):
                 add(issue, cause, siem_id, space, rule_id, severity, detail)
             for issue, cause, severity, detail in freshness_findings(rule, newest, hours_for):
                 add(issue, cause, siem_id, space, rule_id, severity, detail)
@@ -1104,12 +1181,15 @@ def detect(db, conn, scopes: Optional[Set[Tuple[str, str]]] = None,
             if enabled and (alert_reads.get((siem_id, space)) or {}).get("ok"):
                 counts = alerts.get((siem_id, space, rule["kibana_id"]), {})
                 changes = history.get((rule_id, space), [])
-                explained = _explains_silence(rule_found.get((siem_id, space, rule_id), {}))
+                # Silence is no finding on Wazuh's own ruleset, most of which never fires (D12): only a
+                # custom Wazuh rule, or a Kibana rule, can be silent.
+                explained = (_explains_silence(rule_found.get((siem_id, space, rule_id), {}))
+                             or (rule["source"] == "wazuh" and not rule["custom"]))
+                since = _enabled_since(rule["created"], changes, first_seen.get((rule_id, space)))
                 for issue, cause, severity, detail in (
                         alert_findings(counts, space_alerts.get(space, {}), limits, until)
                         + spike_findings(counts, changes, until)
-                        + ([] if explained else silent_findings(counts, _enabled_since(rule["created"], changes),
-                                                                 limits, until, datetime.now()))):
+                        + ([] if explained else silent_findings(counts, since, limits, until, datetime.now()))):
                     add(issue, cause, siem_id, space, rule_id, severity, detail)
 
     tables = {r[0] for r in conn.execute("SELECT table_name FROM duckdb_tables()").fetchall()}
@@ -1193,12 +1273,37 @@ def detect(db, conn, scopes: Optional[Set[Tuple[str, str]]] = None,
                 "SELECT siem_id, space, reason FROM siem_space_status WHERE NOT reachable").fetchall():
             if wanted(siem_id, space):
                 add("siem_offline", "", siem_id, space, "", KNOWN["siem_offline"].severity, reason or "")
+    # Wazuh destinations (D13): agents of the group not seen within the client's data window, and a read
+    # of its agents, findings or SCA that failed at the last sync.
+    if rule_keys is None:
+        from app.services import wazuh_assets
+        for (siem_id, space), read in wazuh_assets.destination_reads(conn).items():
+            if not wanted(siem_id, space):
+                continue
+            if read["error"]:
+                when = f" at the sync of {read['read_at']:%Y-%m-%d %H:%M}" if read["read_at"] else ""
+                add("wazuh_read_incomplete", "", siem_id, space, "", KNOWN["wazuh_read_incomplete"].severity,
+                    f"{read['error']}{when}.")
+            agents = wazuh_assets.disconnected_agents(conn, siem_id, space, default_hours)
+            if agents["gone"]:
+                gone, total = agents["gone"], agents["total"]
+                names = ", ".join(f"{a['name']} ({a['status'] or 'unknown'})" for a in gone[:5])
+                more = f" and {len(gone) - 5} more" if len(gone) > 5 else ""
+                add("wazuh_agents_disconnected", "", siem_id, space, "", "error" if len(gone) == total else "warning",
+                    f"{'All' if len(gone) == total else len(gone)} of the {total} agent{'s' if total != 1 else ''} "
+                    f"not seen in {data_freshness.hours_text(default_hours)}: {names}{more}.")
     # A space whose alerts the SIEM's key couldn't read at the last sync (#68).
     if rule_keys is None:
-        for (siem_id, space), read in rule_alerts.reads(conn).items():
+        reads = rule_alerts.reads(conn)
+        try:
+            wazuh_ids = {s["id"] for s in db.list_siem_inventory() if s.get("siem_type") == "wazuh"} if reads else set()
+        except Exception:                     # no SIEM list to tell them apart: Kibana's wording
+            wazuh_ids = set()
+        for (siem_id, space), read in reads.items():
             if not read["ok"] and wanted(siem_id, space):
+                source = "Wazuh" if siem_id in wazuh_ids else "Kibana"
                 add("alerts_unreadable", "", siem_id, space, "", KNOWN["alerts_unreadable"].severity,
-                    f"Kibana didn't give its alerts at the last sync: {read['error'] or 'no answer'}.")
+                    f"{source} didn't give its alerts at the last sync: {read['error'] or 'no answer'}.")
     return found
 
 
@@ -1777,18 +1882,22 @@ def rule_findings(conn, keys: Iterable[Tuple[str, str, str]],
 
 
 def card_problems(found: List[Dict[str, Any]], enabled: bool) -> Optional[Dict[str, Any]]:
-    """What a rule's card flags of its findings (``rule_findings``): every one not muted.
-    ``{severity, count, disabled, lines}``, or None. ``severity`` is the worst of those the page lists
-    by default -- on an enabled rule, or TIDE's own (its rule id) on any rule, which matter either way
-    -- or "muted" when a disabled rule has only others: they would stop it working only if it were
-    switched on, so its card shows them in grey."""
+    """What a rule's card flags of its findings (``rule_findings``): every one not muted, as a pill
+    for each severity among them, errors first (#107). ``{disabled, pills}``, each pill
+    ``{severity, tone, count, lines}``, or None. A pill's ``tone`` is its severity on an enabled rule,
+    and on a disabled one when TIDE's own (its rule id) are among them, which matter either way; else
+    "muted": they would stop the rule working only if it were switched on, so its card shows them in grey."""
     shown = [f for f in found if not f["muted"]]
     if not shown:
         return None
-    live = [f for f in shown if enabled or f["fixer"] == "tide"]
-    severity = min((f["severity"] for f in live), key=lambda s: _SEVERITY_ORDER.get(s, 3)) if live else "muted"
-    return {"severity": severity, "count": len(shown), "disabled": not enabled,
-            "lines": [f"{f['severity'].title()}: {f['title']}" + (f" ({f['cause']})" if f["cause"] else "") for f in shown]}
+    pills = []
+    for severity, _ in SEVERITIES:
+        these = [f for f in shown if f["severity"] == severity]
+        if these:
+            live = enabled or any(f["fixer"] == "tide" for f in these)
+            pills.append({"severity": severity, "tone": severity if live else "muted", "count": len(these),
+                          "lines": [f["title"] + (f" ({f['cause']})" if f["cause"] else "") for f in these]})
+    return {"disabled": not enabled, "pills": pills}
 
 
 FLOW_CARDS = ("rules", "errors", "warnings", "info", "causes")
@@ -1907,6 +2016,13 @@ def _cause_key(f: Dict[str, Any]) -> Tuple[str, str, str, str]:
     """A cause on one SIEM record (what Mute cause mutes): the issue and its cause on a SIEM, or a
     problem without a cause per destination."""
     return (f["issue"], f["cause"], f["siem_id"], "" if f["cause"] else f["space"])
+
+
+def cause_keys(found: Dict[Tuple[str, str, str], List[Dict[str, Any]]],
+               rules: Iterable[Tuple[str, str, str]]) -> Dict[Tuple[str, str, str], List[Tuple[str, str, str, str]]]:
+    """Each of ``rules``' cause keys (what Raise issue records) from its findings (``rule_findings``),
+    for the GitLab issues about it (gitlab_issues.about_rules); a rule with none has an empty list."""
+    return {rule: [_cause_key(f) for f in found.get(rule, [])] for rule in rules}
 
 
 def cluster_of(siem: Dict[str, Any]) -> str:
@@ -2315,6 +2431,33 @@ def markdown(nodes: List[Dict[str, Any]], siem_labels: Dict[str, str], now: date
                        for issue, part in by_issue.items()) + "\n"
 
 
+def for_rule(nodes: List[Dict[str, Any]], rule: Tuple[str, str, str]) -> List[Dict[str, Any]]:
+    """Cause nodes as one rule has them (Raise issue for a rule, #106): each cause it has, with only its
+    own finding, on its own SIEM record, and what it affects counted for it alone."""
+    out = []
+    for node in nodes:
+        rows = [f for f in node["rows"] if _item(f) == rule]
+        if rows:
+            extra = {k: v for k, v in node.items() if k not in ("kind", "key", "label", "rows", "count", "rules",
+                                                                "severity", "first_seen", "children")}
+            out.append(_node(node["kind"], node["key"], node["label"], rows,
+                             **{**extra, "siem_id": rule[1], "siem_ids": [rule[1]],
+                                "rule_keys": [{"rule_id": rule[0], "siem_id": rule[1], "space": rule[2]}]}))
+    return out
+
+
+def rule_markdown(name: str, rule_id: str, destination: str, kibana_url: str, enabled: bool) -> str:
+    """The rule an issue raised for it is about (#106): its name, rule id, destination, whether it is
+    enabled and where it is in Kibana. Its Rule Monitoring problems (``markdown`` of ``for_rule``)
+    follow, and what the person raising it wrote goes above."""
+    lines = [f"### Rule: {_md(name)}",
+             f"- **Rule id:** `{_md(rule_id)}`",
+             f"- **Destination:** {_md(destination)} ({'enabled' if enabled else 'disabled'})"]
+    if kibana_url:
+        lines.append(f"- **In Kibana:** {kibana_url}")
+    return "\n".join(lines) + "\n"
+
+
 def _metrics(conn, open_rows, resolved_rows, names, scope: str, all_rules: bool, now: datetime) -> Dict[str, Any]:
     """Rule Monitoring's stat cards, for the filters shown (always of what is open, whichever Show
     is chosen)."""
@@ -2438,7 +2581,7 @@ def node_at(groups: List[Dict[str, Any]], path: Any, field: str = "path") -> Opt
 
 def remember_keys(groups: List[Dict[str, Any]], trail: str) -> None:
     """Each group's ``mem``: the groups it is in, then its own kind and key. The list remembers a group
-    open or closed by it (data-remember), and finds the group again by it when it is opened."""
+    open or closed by it (data-fold), and finds the group again by it when it is opened."""
     for node in groups:
         key = node["key"]
         node["mem"] = f"{trail}/{node['kind']}:{key if isinstance(key, str) else '|'.join(map(str, key))}"

@@ -5,7 +5,7 @@ Children are indented, slightly muted, icon-free.
 -->
 {% from "macros/icons.html" import icon %}
 {% from "macros/avatar.html" import sidebar_identity %}
-<aside class="sidebar" id="sidebar">
+<aside class="sidebar" id="sidebar" data-fold-store="tide.navFolds">
     <div class="sidebar-header">
         <img src="/static/icons/tide 48x48.png?v={{ cache_bust }}" alt="TIDE" class="sidebar-logo">
         <span class="sidebar-title">TIDE</span>
@@ -33,28 +33,18 @@ Children are indented, slightly muted, icon-free.
         </a>
         {% endif %}
         
-        {% if not user or user.can_read('page:systems') %}
-        <a name="Systems" href="/systems" class="nav-item {% if active_page == 'systems' %}active{% endif %}" data-tooltip="Systems">
-            <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/>
-                <line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/>
-            </svg>
-            <span class="nav-label">Systems</span>
-        </a>
-        {% endif %}
-
-        <!-- ── Risk & Baselines ── -->
-        {% if not user or user.can_read('page:cve_overview') or user.can_read('page:baselines') %}
-        <div class="nav-group collapsed" id="nav-group-risk">
-            <button name="Risks" class="nav-item nav-group__trigger" data-click="nav.group" data-group="nav-group-risk" data-tooltip="Risk &amp; Baselines">
-                {{ icon('triangle-alert', '18', 'nav-icon-svg') }}
-                <span class="nav-label">Risks</span>
+        <!-- ── Systems: the systems you protect, what they are measured against, and what to build next ── -->
+        {% if not user or user.can_read('page:systems') or user.can_read('page:baselines') or user.can_read('page:detection_backlog') or user.can_read('page:cve_overview') %}
+        <div class="nav-group collapsed" id="nav-group-systems" data-fold="systems">
+            <button name="Systems Group" class="nav-item nav-group__trigger" data-click="nav.group" data-group="nav-group-systems">
+                {{ icon('server', '18', 'nav-icon-svg') }}
+                <span class="nav-label">Systems</span>
                 <svg class="nav-group__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
             </button>
             <div class="nav-group__items">
-                {% if not user or user.can_read('page:cve_overview') %}
-                <a name="CVE Overview" href="/cve-overview" class="nav-child {% if active_page == 'cve_overview' %}active{% endif %}">
-                    <span class="nav-label">CVE Overview</span>
+                {% if not user or user.can_read('page:systems') %}
+                <a name="Systems" href="/systems" class="nav-child {% if active_page == 'systems' %}active{% endif %}">
+                    <span class="nav-label">Systems</span>
                 </a>
                 {% endif %}
                 {% if not user or user.can_read('page:baselines') %}
@@ -62,35 +52,56 @@ Children are indented, slightly muted, icon-free.
                     <span class="nav-label">Baselines</span>
                 </a>
                 {% endif %}
+                {% if not user or user.can_read('page:detection_backlog') %}
+                <a name="Detection Backlog" href="/backlog" class="nav-child {% if active_page == 'detection_backlog' %}active{% endif %}">
+                    <span class="nav-label">Detection Backlog</span>
+                </a>
+                {% endif %}
+                {% if not user or user.can_read('page:cve_overview') %}
+                <a name="CVE Overview" href="/cve-overview" class="nav-child {% if active_page == 'cve_overview' %}active{% endif %}">
+                    <span class="nav-label">CVE Overview</span>
+                </a>
+                {% endif %}
             </div>
         </div>
         {% endif %}
 
-        <!-- ── Rules ── -->
-        {% if not user or user.can_read('page:rules') or user.can_read('page:sigma') or user.can_read('page:elastic') or user.can_read('page:hunting') %}
-        <div class="nav-group collapsed" id="nav-group-rules">
-            <button name="Rules" class="nav-item nav-group__trigger" data-click="nav.group" data-group="nav-group-rules" data-tooltip="Rules">
+        <!-- ── Rules: the client's own rules ── -->
+        {% if not user or user.can_read('page:rules') %}
+        <div class="nav-group collapsed" id="nav-group-rules" data-fold="rules">
+            <button name="Rules" class="nav-item nav-group__trigger" data-click="nav.group" data-group="nav-group-rules">
                 {{ icon('shield-check', '18', 'nav-icon-svg') }}
                 <span class="nav-label">Rules</span>
                 <svg class="nav-group__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
             </button>
             <div class="nav-group__items">
-                {% if not user or user.can_read('page:rules') %}
                 <a name="Rule Health" href="/rules" class="nav-child {% if active_page == 'rules' %}active{% endif %}">
                     <span class="nav-label">Rule Health</span>
                 </a>
                 <a name="Rule Monitoring" href="/rule-monitoring" class="nav-child {% if active_page == 'rule_monitoring' %}active{% endif %}">
                     <span class="nav-label">Rule Monitoring</span>
                 </a>
-                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- ── Libraries: the rules and hunts built into TIDE (the guide's Libraries) ── -->
+        {% if not user or user.can_read('page:sigma') or user.can_read('page:elastic') or user.can_read('page:hunting') %}
+        <div class="nav-group collapsed" id="nav-group-libraries" data-fold="libraries">
+            <button name="Libraries" class="nav-item nav-group__trigger" data-click="nav.group" data-group="nav-group-libraries">
+                {{ icon('library', '18', 'nav-icon-svg') }}
+                <span class="nav-label">Libraries</span>
+                <svg class="nav-group__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+            <div class="nav-group__items">
                 {% if not user or user.can_read('page:sigma') %}
-                <a name="Sigma" href="/sigma" class="nav-child {% if active_page == 'sigma' %}active{% endif %}">
-                    <span class="nav-label">Sigma</span>
+                <a name="Sigma Rules" href="/sigma" class="nav-child {% if active_page == 'sigma' %}active{% endif %}">
+                    <span class="nav-label">Sigma Rules</span>
                 </a>
                 {% endif %}
                 {% if not user or user.can_read('page:elastic') %}
-                <a name="Elastic" href="/elastic" class="nav-child {% if active_page == 'elastic' %}active{% endif %}">
-                    <span class="nav-label">Elastic</span>
+                <a name="Elastic Rules" href="/elastic" class="nav-child {% if active_page == 'elastic' %}active{% endif %}">
+                    <span class="nav-label">Elastic Rules</span>
                 </a>
                 {% endif %}
                 {% if not user or user.can_read('page:hunting') %}
@@ -104,8 +115,8 @@ Children are indented, slightly muted, icon-free.
 
         <!-- ── Threats ── -->
         {% if not user or user.can_read('page:threats') or user.can_read('page:heatmap') %}
-        <div class="nav-group collapsed" id="nav-group-threats">
-            <button name="Threats" class="nav-item nav-group__trigger" data-click="nav.group" data-group="nav-group-threats" data-tooltip="Threats">
+        <div class="nav-group collapsed" id="nav-group-threats" data-fold="threats">
+            <button name="Threats" class="nav-item nav-group__trigger" data-click="nav.group" data-group="nav-group-threats">
                 {{ icon('target', '18', 'nav-icon-svg') }}
                 <span class="nav-label">Threats</span>
                 <svg class="nav-group__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
@@ -127,8 +138,8 @@ Children are indented, slightly muted, icon-free.
 
         <!-- ── MITRE ── -->
         {% if not user or user.can_read('page:threats') %}
-        <div class="nav-group collapsed" id="nav-group-mitre">
-            <button name="MITRE" class="nav-item nav-group__trigger" data-click="nav.group" data-group="nav-group-mitre" data-tooltip="MITRE">
+        <div class="nav-group collapsed" id="nav-group-mitre" data-fold="mitre">
+            <button name="MITRE" class="nav-item nav-group__trigger" data-click="nav.group" data-group="nav-group-mitre">
                 {{ icon('ampersand', '18', 'nav-icon-svg') }}
                 <span class="nav-label">MITRE</span>
                 <svg class="nav-group__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
@@ -153,7 +164,7 @@ Children are indented, slightly muted, icon-free.
                     <span class="nav-label">Mitigations</span>
                 </a>
                 <a name="MITRE NIST" href="/mitre/nist" class="nav-child {% if active_page == 'mitre' and active_sub == 'nist' %}active{% endif %}">
-                    <span class="nav-label">NIST</span>
+                    <span class="nav-label">NIST 800-53</span>
                 </a>
             </div>
         </div>
@@ -165,9 +176,8 @@ Children are indented, slightly muted, icon-free.
         {# Account: a group like the others above. Settings (Settings & Administration), the theme
            to switch to, and sign-out. #}
         {% set settings_pages = ('settings', 'management', 'diagnostics', 'docs', 'changelog') %}
-        <div class="nav-group collapsed" id="nav-group-account">
-            <button name="Account" type="button" class="nav-item nav-group__trigger user-info" data-click="nav.group" data-group="nav-group-account"
-                    data-tooltip="{{ user.label }}">
+        <div class="nav-group collapsed" id="nav-group-account" data-fold="account">
+            <button name="Account" type="button" class="nav-item nav-group__trigger user-info" data-click="nav.group" data-group="nav-group-account">
                 {{ sidebar_identity(user) }}
                 <svg class="nav-group__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
             </button>
@@ -176,12 +186,12 @@ Children are indented, slightly muted, icon-free.
                     <span class="nav-label">Settings</span>
                 </a>
                 <button name="Theme" type="button" class="nav-child" data-click="nav.theme">
-                    <span class="nav-label" id="theme-label">Light Mode</span>
+                    <span class="nav-label" id="theme-label">Light mode</span>
                 </button>
                 {# A POST, so another site can't sign anyone out with a link (#100). #}
                 <form method="post" action="/auth/logout" class="nav-form" hx-boost="false">
                     <button name="Log Out" type="submit" class="nav-child">
-                        <span class="nav-label">Log Out</span>
+                        <span class="nav-label">Log out</span>
                     </button>
                 </form>
             </div>
@@ -191,7 +201,7 @@ Children are indented, slightly muted, icon-free.
             <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" x2="3" y1="12" y2="12"/>
             </svg>
-            <span class="nav-label">Sign In</span>
+            <span class="nav-label">Sign in</span>
         </a>
         {% endif %}
         
