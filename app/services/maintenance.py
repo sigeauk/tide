@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from app.config import get_settings
+from app.services import errors
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,8 @@ DEFAULT_SCHEDULE = {"enabled": False, "days": list(DAYS), "time": "02:00",
                     "steps": {"sync": True, "backup": True, "reclaim": True}}
 RECLAIM_PCT = 30                          # a file this much empty space or more is compacted...
 RECLAIM_MIN_FILE = 200 * 1024 * 1024      # ...when it is at least this big
+GROWN_PCT = 50                            # at every start, a file at least RECLAIM_MIN_FILE of which this much
+                                          # is space no table holds is compacted, window or not (#116)
 RESTART_NOTICE = timedelta(minutes=15)    # how long signed-in pages are told before the restart
 DELAY = timedelta(minutes=30)             # what Delay adds
 MAX_DELAY = timedelta(hours=2)            # in all; after that, Postpone to the next window
@@ -261,6 +264,67 @@ def reclaim_at_startup(compact: Optional[Callable[[str, bool], int]] = None, now
     return done
 
 
+def unheld(path: str) -> Dict[str, Any]:
+    """How much of a closed database file is space no table holds: its free blocks, and blocks it counts
+    as used that no table's data is in. ``measure`` sees only the first; a client's file of 1.8 GB held
+    26 MB of data in 79 of its 7,018 blocks with only 49% of them free (#116). ``{name, path, size, pct}``."""
+    import duckdb
+    conn = duckdb.connect(path, read_only=True)
+    try:
+        total = conn.execute("SELECT total_blocks FROM pragma_database_size() "
+                             "WHERE database_name = current_database()").fetchone()[0] or 0
+        held = set()
+        for (table,) in conn.execute("SELECT table_name FROM duckdb_tables() "
+                                     "WHERE database_name = current_database()").fetchall():
+            quoted = table.replace("'", "''")
+            held.update(b for (b,) in conn.execute(
+                f"SELECT DISTINCT block_id FROM pragma_storage_info('{quoted}') WHERE block_id >= 0").fetchall())
+    finally:
+        conn.close()
+    size = os.path.getsize(path)
+    return {"name": os.path.basename(path), "path": path, "size": size,
+            "pct": (total - len(held)) * 100 // total if total else 0}
+
+
+def compact_grown_at_startup(data_dir: Optional[str] = None, compact: Optional[Callable[[str, bool], int]] = None) -> List[Dict[str, Any]]:
+    """At every start, before any database is opened: compact each database file in the data folder, of
+    at least RECLAIM_MIN_FILE, of which GROWN_PCT or more is space no table holds (``unheld``), as the
+    maintenance window compacts at its restart (#116). Such a file makes every sync's checkpoint slow
+    (18 s for 15 rules on the client's 1.8 GB file; 0.01 s once compacted). Each is checked table by
+    table and the original kept as <file>.pre-compact-<time> (only the newest); one that doesn't check
+    out is left as it was. Returns what was done."""
+    data_dir = data_dir or get_settings().data_dir
+    if compact is None:
+        from app.scripts.compact_duckdb import compact as compact_file
+        compact = compact_file
+    done = []
+    for path in sorted(glob.glob(os.path.join(glob.escape(data_dir), "*.duckdb"))):
+        try:
+            if os.path.getsize(path) < RECLAIM_MIN_FILE:
+                continue
+            m = unheld(path)
+        except Exception:                       # noqa: BLE001 - a file that can't be measured is left alone
+            logger.warning("Could not measure %s for compacting", path, exc_info=True)
+            continue
+        if m["pct"] < GROWN_PCT:
+            continue
+        out, started = io.StringIO(), time.time()
+        try:
+            with contextlib.redirect_stdout(out):
+                ok = compact(path, True) == 0
+        except Exception as exc:              # noqa: BLE001 - the file is left as it was; TIDE starts
+            ok, out = False, io.StringIO(f"{type(exc).__name__}: {exc}")
+        after = os.path.getsize(path) if os.path.exists(path) else m["size"]
+        if ok:
+            _keep_newest_original(path)
+            logger.info("Compacted %s at startup: %s MB to %s MB in %ds (%d%% of it was space no table held)",
+                        m["name"], m["size"] // 2**20, after // 2**20, round(time.time() - started), m["pct"])
+        else:
+            logger.warning("Could not compact %s at startup, left as it was: %s", m["name"], out.getvalue().strip()[-300:])
+        done.append({"name": m["name"], "ok": ok, "before": m["size"], "after": after if ok else m["size"], "pct": m["pct"]})
+    return done
+
+
 def _keep_newest_original(path: str) -> None:
     """Keep only the newest <file>.pre-compact-<time> (and its WAL) beside a file."""
     olds = sorted(p for p in glob.glob(f"{glob.escape(path)}.pre-compact-*") if not p.endswith(".wal"))
@@ -339,8 +403,7 @@ async def run(db, *, trigger: str, by: str,
                         got = await sync_client(client["id"])
                         entry.update(status=got.get("status", "success"), detail=got.get("detail", ""))
                     except Exception as exc:        # noqa: BLE001 - the next client still syncs
-                        logger.warning("Maintenance window: sync of %s failed", client["name"], exc_info=True)
-                        entry.update(status="failed", detail=f"{type(exc).__name__}: {exc}")
+                        entry.update(status="failed", detail=errors.could_not(f"sync {client['name']}", exc))
                 result["steps"].append(entry)
                 _record(result)
         if steps.get("backup"):
@@ -350,8 +413,7 @@ async def run(db, *, trigger: str, by: str,
                 entry.update(status="success" if got.get("ok") else "failed",
                              detail=got.get("name", "") if got.get("ok") else got.get("error", ""))
             except Exception as exc:                # noqa: BLE001
-                logger.warning("Maintenance window: backup failed", exc_info=True)
-                entry.update(status="failed", detail=f"{type(exc).__name__}: {exc}")
+                entry.update(status="failed", detail=errors.could_not("make the backup", exc))
             result["steps"].append(entry)
             _record(result)
         if steps.get("reclaim"):
@@ -371,8 +433,7 @@ async def run(db, *, trigger: str, by: str,
                                  detail=f"Restart announced for {state['restart_at']:%H:%M} to compact "
                                         f"{len(worth)} file{'s' if len(worth) != 1 else ''}.")
             except Exception as exc:                # noqa: BLE001
-                logger.warning("Maintenance window: could not measure the database files", exc_info=True)
-                entry.update(status="failed", detail=f"{type(exc).__name__}: {exc}")
+                entry.update(status="failed", detail=errors.could_not("measure the database files", exc))
             result["steps"].append(entry)
         result["ended"] = datetime.now().isoformat()
         _record(result)

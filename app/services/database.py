@@ -8,6 +8,7 @@ import json
 import os
 import re
 
+from app.services import errors
 from app.services.credentials import PREFIX as CREDENTIAL_PREFIX, reveal_fields, reveal_or_none, seal
 from app.services.search_query import SearchQuery
 import time
@@ -50,6 +51,7 @@ def _log_connection_error(prefix: str, exc: Exception, dedupe_window_s: float = 
     global _CONN_ERROR_LAST_MSG, _CONN_ERROR_LAST_TS, _CONN_ERROR_SUPPRESSED
 
     msg = _compact_exc_message(exc)
+    code = {"code": errors.classify(exc)}
     now = time.time()
     with _CONN_ERROR_LOCK:
         if msg == _CONN_ERROR_LAST_MSG and (now - _CONN_ERROR_LAST_TS) < dedupe_window_s:
@@ -62,13 +64,14 @@ def _log_connection_error(prefix: str, exc: Exception, dedupe_window_s: float = 
                 prefix,
                 _CONN_ERROR_SUPPRESSED,
                 _CONN_ERROR_LAST_MSG,
+                extra=code,
             )
             _CONN_ERROR_SUPPRESSED = 0
 
         _CONN_ERROR_LAST_MSG = msg
         _CONN_ERROR_LAST_TS = now
 
-    logger.error("%s: %s", prefix, msg)
+    logger.error("%s: %s", prefix, msg, extra=code)
 
 
 def _compact_exc_message(exc: Exception, max_len: int = 260) -> str:
@@ -149,7 +152,7 @@ def in_validated_range(rule, lo: Optional[datetime], hi: Optional[datetime], sta
 
 
 # Schema version for migrations
-SCHEMA_VERSION = 114
+SCHEMA_VERSION = 115
 
 # The per-client role that opens Diagnostics for that client. Only a super admin can grant or
 # revoke it (set_user_roles(grant_support=...)).
@@ -368,7 +371,7 @@ class DatabaseService:
             state = ensure_reference_db()
             logger.info("Reference DB: updated=%s reason=%s", state.get("updated"), state.get("reason"))
         except Exception as exc:
-            logger.error("Reference DB build failed: %s", exc, exc_info=True)
+            logger.error("Reference DB build failed: %s", exc, exc_info=True, extra={"code": errors.D565})
 
         # Initialize database
         self._init_db()
@@ -4367,6 +4370,17 @@ class DatabaseService:
             self._set_schema_version(conn, 114)
             logger.info("Migration 114: the SIM_ADMIN role, page:simulations and page:simulation for every client.")
 
+        # ── Migration 115: error codes kept with sync results (7.1.1, #117) ──
+        # sync_history.error_code: why a sync failed or missed a destination, as a code (S503, …), for
+        # Diagnostics → Sync activity. siem_space_status.error_code, in every tenant DB: why a destination
+        # wasn't reached at the last sync. NULL before this release, and for a run that didn't fail.
+        # Additive only.
+        if current_version < 115:
+            conn.execute("ALTER TABLE sync_history ADD COLUMN IF NOT EXISTS error_code VARCHAR")
+            self._in_every_tenant(conn, 115, self.ensure_siem_space_status, "siem_space_status.error_code ensured")
+            self._set_schema_version(conn, 115)
+            logger.info("Migration 115: sync results keep their error code.")
+
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
 
     @staticmethod
@@ -4536,9 +4550,16 @@ class DatabaseService:
             reachable  BOOLEAN NOT NULL,
             reason     VARCHAR,
             checked_at TIMESTAMP DEFAULT now(),
+            error_code VARCHAR,
             PRIMARY KEY (siem_id, space)
         )
     """
+
+    @classmethod
+    def ensure_siem_space_status(cls, tconn) -> None:
+        """siem_space_status in one tenant DB, with migration 115's error_code. Idempotent."""
+        tconn.execute(cls.SIEM_SPACE_STATUS_DDL)
+        tconn.execute("ALTER TABLE siem_space_status ADD COLUMN IF NOT EXISTS error_code VARCHAR")
 
     @classmethod
     def create_rule_link_tables(cls, tconn) -> int:
@@ -4550,7 +4571,7 @@ class DatabaseService:
         where both rows still exist are recovered."""
         tables = {r[0] for r in tconn.execute("SHOW TABLES").fetchall()}
         tconn.execute(cls.RULE_LINKS_DDL)
-        tconn.execute(cls.SIEM_SPACE_STATUS_DDL)
+        cls.ensure_siem_space_status(tconn)
         if "rule_links" in tables or "rule_migrations" not in tables or "detection_rules" not in tables:
             return 0
         tconn.execute("""
@@ -4796,8 +4817,15 @@ class DatabaseService:
     def _init_db(self):
         """Initialize database and run migrations.  Always uses the shared DB
         regardless of any active tenant context."""
+        from app.services.log_context import error_code
         with self.get_shared_connection() as conn:
-            self._run_migrations(conn)
+            try:
+                with error_code(errors.D563):       # whatever fails in an upgrade, the upgrade failed
+                    self._run_migrations(conn)
+            except Exception:
+                logger.error("Database upgrade failed: TIDE can't start until it succeeds", exc_info=True,
+                             extra={"code": errors.D563})
+                raise
             from app.services.reference_db import drop_legacy_copies
             drop_legacy_copies(conn)
             self._ensure_users_table(conn)
@@ -6500,13 +6528,15 @@ class DatabaseService:
         return []
 
     def record_siem_space_status(self, siem_id: str, space: str, reachable: bool, reason: str = "") -> None:
-        """Store the result of the pre-sync reachability check for one (siem_id, space)."""
+        """Store the result of the pre-sync reachability check for one (siem_id, space). A reason that is
+        an errors.Failure keeps its code in ``error_code``."""
+        code = getattr(reason, "code", None)
         with self.get_connection() as conn:
-            conn.execute(self.SIEM_SPACE_STATUS_DDL)
+            self.ensure_siem_space_status(conn)
             conn.execute(
-                "INSERT OR REPLACE INTO siem_space_status (siem_id, space, reachable, reason, checked_at) "
-                "VALUES (?, ?, ?, ?, now())",
-                [siem_id, space, reachable, reason or None],
+                "INSERT OR REPLACE INTO siem_space_status (siem_id, space, reachable, reason, checked_at, error_code) "
+                "VALUES (?, ?, ?, ?, now(), ?)",
+                [siem_id, space, reachable, str(reason) if reason else None, str(code) if code and not reachable else None],
             )
 
     SIEM_VERSION_DDL = """
@@ -6605,11 +6635,12 @@ class DatabaseService:
         with self.get_connection() as conn:
             try:
                 rows = conn.execute(
-                    "SELECT siem_id, space, reason, checked_at FROM siem_space_status WHERE NOT reachable"
+                    "SELECT siem_id, space, reason, checked_at, error_code FROM siem_space_status WHERE NOT reachable"
                 ).fetchall()
             except duckdb.CatalogException:
                 return {}
-        return {(sid, sp): {"reason": reason or "Unreachable", "checked_at": at} for sid, sp, reason, at in rows}
+        return {(sid, sp): {"reason": reason or "Unreachable", "checked_at": at, "code": errors.CODES.get(code or "")}
+                for sid, sp, reason, at, code in rows}
 
     # A table k(r, s, sp) of (rule_id, siem_id, space) keys, from three parallel array parameters
     # (_key_arrays): joining against it costs the same for 5 keys or 5,000.
@@ -12104,6 +12135,26 @@ class DatabaseService:
             if sealed:
                 conn.execute("CHECKPOINT")
         return sealed
+
+    def unreadable_credentials(self) -> int:
+        """How many stored credentials this install's key can't decrypt (data/credentials.key lost or
+        replaced, T461)."""
+        from app.services.credentials import CredentialUnreadable, reveal
+        unreadable = 0
+        with self.get_shared_connection() as conn:
+            tables = {r[0] for r in conn.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
+            ).fetchall()}
+            for table, _key, col in self.CREDENTIAL_COLUMNS:
+                if table not in tables:
+                    continue
+                for (value,) in conn.execute(
+                        f"SELECT {col} FROM {table} WHERE starts_with({col}, ?)", [CREDENTIAL_PREFIX]).fetchall():
+                    try:
+                        reveal(value)
+                    except CredentialUnreadable:
+                        unreadable += 1
+        return unreadable
 
     # --- SIEM INVENTORY (centralized, shared across clients) ---
 

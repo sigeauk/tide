@@ -1,6 +1,6 @@
 {% extends "pages/admin/settings_layout.html" %}
 {% from "macros/icons.html" import icon %}
-{% from "macros/diagnostics_ui.html" import check_list %}
+{% from "macros/diagnostics_ui.html" import check_list, code_link %}
 {% from "macros/sync_ui.html" import sync_state, sync_when, sync_took, sync_what, sync_retry, sync_steps_failed %}
 {% from "components/ui/loading_state.html" import loading_state %}
 {% block title %}Diagnostics | Settings | TIDE{% endblock %}
@@ -184,7 +184,7 @@
         <p class="text-secondary diag-intro">Rule and Threat Landscape syncs{{ '' if full else ' for ' ~ clients[0].name }}, newest first, kept for 90 days. A sync still running when TIDE restarted shows as interrupted. Retry runs a rule sync of the client you have selected again, over the same destinations.</p>
         {% if sync_runs %}
         <div class="diag-table-wrap diag-section__table diag-table-wrap--scroll"><table class="diag-table">
-            <thead><tr><th>Started</th><th>Client</th><th>What</th><th>Started by</th><th>Result</th><th>Count</th><th>Took</th><th>Why</th><th></th></tr></thead>
+            <thead><tr><th>Started</th><th>Client</th><th>What</th><th>Started by</th><th>Result</th><th>Count</th><th>Took</th><th>Code</th><th>Why</th><th></th></tr></thead>
             <tbody>
             {% for r in sync_runs %}
             <tr>
@@ -195,6 +195,7 @@
                 <td>{{ sync_state(r) }}</td>
                 <td>{{ r.total_count if r.status in ('success', 'partial') else '—' }}</td>
                 <td class="diag-nowrap">{{ sync_took(r) }}</td>
+                <td class="diag-nowrap">{{ code_link(r.error_code) if r.error_code else '' }}</td>
                 <td>{{ r.error or '' }}{% set steps = sync_steps_failed(r) %}{% if steps %}{{ ' ' if r.error }}{{ steps }}{% endif %}</td>
                 <td class="diag-nowrap">{% if r.client_id == active_client_id %}{{ sync_retry(r, target='closest td', swap='innerHTML') }}{% endif %}</td>
             </tr>
@@ -261,12 +262,17 @@
         {% elif not snap.errors.entries %}
         <p class="text-muted">No errors in the recent log.</p>
         {% else %}
+        {% if snap.errors.by_code %}
+        <p class="text-secondary diag-intro">By error code, last {{ snap.errors.hours }} h:
+            {% for code, n in snap.errors.by_code %}{{ code_link(code) }} × {{ n }}{{ ', ' if not loop.last }}{% endfor %}</p>
+        {% endif %}
         <div class="diag-table-wrap"><table class="diag-table">
-            <thead><tr><th>When (UTC)</th><th>Where</th><th>Message</th></tr></thead>
+            <thead><tr><th>When (UTC)</th><th>Code</th><th>Where</th><th>Message</th></tr></thead>
             <tbody>
             {% for e in snap.errors.entries %}
             <tr>
                 <td class="diag-nowrap">{{ e.at.strftime('%Y-%m-%d %H:%M:%S') if e.at else '—' }}</td>
+                <td class="diag-nowrap">{{ code_link(e.code) if e.code else '—' }}</td>
                 <td>{{ e.route if e.route and e.route != '-' else e.logger }}</td>
                 <td>{{ e.message }}</td>
             </tr>

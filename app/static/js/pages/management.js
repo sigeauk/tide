@@ -308,6 +308,8 @@
 
     function apiJson(url, options) {
         var opts = Object.assign({ credentials: 'same-origin' }, options || {});
+        // Ask for JSON, so a failure comes back in JSON too (an HTML answer means signing in again).
+        opts.headers = Object.assign({ 'Accept': 'application/json' }, opts.headers || {});
         return fetch(url, opts).then(function (r) {
             var ct = (r.headers.get('content-type') || '').toLowerCase();
             if (r.status === 401) {
@@ -322,7 +324,7 @@
                 throw new Error('Unexpected response type from API');
             }
             return r.json().then(function (body) {
-                if (!r.ok) throw new Error((body && (body.detail || body.message)) || ('Could not complete that (HTTP ' + r.status + ')'));
+                if (!r.ok) throw new Error((body && (body.message || body.detail)) || ('Could not complete that (HTTP ' + r.status + ')'));
                 return body;
             });
         });

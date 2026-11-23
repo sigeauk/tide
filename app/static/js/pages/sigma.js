@@ -57,7 +57,7 @@
         var prev = selection[kind].slice();
         var bust = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : Date.now();
         var api = '/api/sigma/saved-' + kind + 's';
-        fetch(api + '?_v=' + bust, { credentials: 'same-origin' })
+        fetch(api + '?_v=' + bust, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
             .then(function (r) {
                 var ct = (r.headers.get('content-type') || '').toLowerCase();
                 if (r.status === 401 || r.redirected || ct.includes('text/html')) {

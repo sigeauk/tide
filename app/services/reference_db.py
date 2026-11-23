@@ -256,9 +256,11 @@ def attach(conn) -> None:
     """Attach the reference DB read-only and add it to the search path."""
     global _attach_warned
     path = reference_db_path()
+    from app.services import errors
     if not os.path.exists(path):
         if not _attach_warned:
-            logger.warning("Reference DB %s not found; ATT&CK, NIST and Sigma data unavailable", path)
+            logger.error("Reference DB %s not found; ATT&CK, NIST and Sigma data unavailable", path,
+                         extra={"code": errors.D565})
             _attach_warned = True
         return
     # Look first rather than ATTACH IF NOT EXISTS: in DuckDB 2.0 that can spin forever once a
@@ -274,7 +276,7 @@ def attach(conn) -> None:
                     raise
         conn.execute("SET search_path = 'main,ref'")
     except Exception as exc:
-        logger.error("Could not attach reference DB %s: %s", path, exc)
+        logger.error("Could not attach reference DB %s: %s", path, exc, extra={"code": errors.D565})
 
 
 def drop_legacy_copies(conn, key: str = "") -> None:

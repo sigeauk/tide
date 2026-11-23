@@ -61,6 +61,7 @@ PAGES: List[Page] = [
     Page("clients", "Setting up clients", DOCS / "CLIENTS.md", "admin", "Clients, their SIEMs, users, scoring and threat feeds."),
     Page("configuration", "Configuration", DOCS / "CONFIGURATION.md", "admin", "Settings, certificates, single sign-on, users and roles."),
     Page("operations", "Operations", DOCS / "OPERATIONS.md", "admin", "Syncing, backups and upgrades, moving hosts, disk space, Diagnostics."),
+    Page("errors", "Error codes", DOCS / "ERRORS.md", "admin", "What each error code means, and what to do about it."),
     Page("api", "External Query API", DOCS / "API.md", "reference", "Querying a client's data from other tools."),
 ]
 PAGES_BY_SLUG = {p.slug: p for p in PAGES}
@@ -72,7 +73,7 @@ _FILE_URLS = {"README": "/settings/docs/install", "CONFIGURATION": "/settings/do
               "THREATS": "/settings/docs/threats", "RULES": "/settings/docs/rules",
               "LIBRARIES": "/settings/docs/libraries", "CLIENTS": "/settings/docs/clients",
               "AT_A_GLANCE": "/settings/docs/at-a-glance", "SIMULATIONS": "/settings/docs/simulations",
-              "CHANGELOG": "/settings/changelog"}
+              "ERRORS": "/settings/docs/errors", "CHANGELOG": "/settings/changelog"}
 _DOC_LINK = re.compile(r'href="(?:\.\./)?(?:docs/)?(' + "|".join(_FILE_URLS) + r')\.md(#[^"]*)?"')
 
 

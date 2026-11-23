@@ -205,22 +205,27 @@ curl -s -X POST https://tide.example.local/api/external/query \
 
 ## Errors
 
-Errors return a JSON body with a `detail` message:
+Errors return a JSON body with a `detail` message, its [error code](ERRORS.md) (`code`), the same as a sentence to show a person (`message`), and the request's id (`request_id`, which finds it in TIDE's log):
 
 ```json
-{"detail": "API key does not have access to the requested tenant."}
+{"detail": "API key does not have access to the requested tenant.", "code": "A403",
+ "message": "Could not complete that: API key does not have access to the requested tenant (A403).",
+ "request_id": "3f9a1c2b7e01"}
 ```
 
-| Status | `detail` | What to do |
-|--------|----------|------------|
-| `400` | `Only SELECT statements are allowed.` | Send one `SELECT` or `WITH … SELECT` statement. |
-| `400` | `Forbidden SQL keyword: …` | Remove the named keyword: queries can only read. |
-| `400` | `client_id is required when the API key owner has access to multiple tenants…` | Add `client_id`, from `GET /api/external/clients`. |
-| `400` | Another message, such as `Query error: …` | The SQL is invalid, or reads something it may not (a file, another database, a hidden table); the message says what. |
-| `401` | `Invalid or missing API key.` | Check the `X-TIDE-API-KEY` header, or create a new key. |
-| `403` | `API key does not have access to the requested tenant.` | Use a full `id` from `GET /api/external/clients`, or add the key's owner to that client. |
-| `403` | `API key owner has no tenant access…` | Add the key's owner to at least one client. |
-| `404` | `Tenant database not found for the requested client.` | The client's database file is missing. A super admin can confirm it with **Diagnostics → Run all checks**. |
+The code is also in the `X-TIDE-Error-Code` header, and the request id in `X-TIDE-Error-Id`.
+
+| Status | `code` | `detail` | What to do |
+|--------|--------|----------|------------|
+| `400` | `T400` | `Only SELECT statements are allowed.` | Send one `SELECT` or `WITH … SELECT` statement. |
+| `400` | `T400` | `Forbidden SQL keyword: …` | Remove the named keyword: queries can only read. |
+| `400` | `T400` | `client_id is required when the API key owner has access to multiple tenants…` | Add `client_id`, from `GET /api/external/clients`. |
+| `400` | `T400` | Another message, such as `Query error: …` | The SQL is invalid, or reads something it may not (a file, another database, a hidden table); the message says what. |
+| `401` | `A401` | `Invalid or missing API key.` | Check the `X-TIDE-API-KEY` header, or create a new key. |
+| `403` | `A403` | `API key does not have access to the requested tenant.` | Use a full `id` from `GET /api/external/clients`, or add the key's owner to that client. |
+| `403` | `A403` | `API key owner has no tenant access…` | Add the key's owner to at least one client. |
+| `404` | `D404` | `Tenant database not found for the requested client.` | The client's database file is missing. A super admin can confirm it with **Diagnostics → Run all checks**. |
+| `422` | `T422` | A list of what is missing or not valid, such as the `X-TIDE-API-KEY` header or the body's `sql` | Send what it names: the header, and a JSON body with `sql` (and `client_id` if needed). |
 
 **`curl` problems:**
 

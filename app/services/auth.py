@@ -17,12 +17,26 @@ from itsdangerous import URLSafeTimedSerializer
 
 from app.config import get_settings
 from app.models.auth import User, TokenData
-from app.services import keycloak_config
+from app.services import errors, keycloak_config
 
 import logging
 
 logger = logging.getLogger(__name__)
 
+
+def _token_refusal(response) -> "errors.Failure":
+    """Why Keycloak's token endpoint refused a sign-in's code, with its code."""
+    try:
+        body = response.json() or {}
+    except ValueError:
+        body = {}
+    error = str(body.get("error") or "")
+    if error in ("invalid_client", "unauthorized_client") or response.status_code == 401:
+        return errors.Failure(errors.A460, "Keycloak didn't accept TIDE's client id or secret")
+    if error == "invalid_grant":
+        return errors.Failure(errors.A401, "The sign-in took too long or was already used: sign in again")
+    return errors.Failure(errors.answer_code("A", response.status_code),
+                          f"Keycloak answered HTTP {response.status_code}")
 
 class AuthService:
     """
@@ -81,7 +95,9 @@ class AuthService:
         return f"{kc.logout_url}?{urlencode(params)}"
 
     async def exchange_code(self, code: str, redirect_uri: str) -> Optional[dict]:
-        """Exchange authorization code for tokens."""
+        """Exchange authorization code for tokens. Raises errors.FailureError, with its code, when
+        Keycloak refuses or doesn't answer: A460 for TIDE's client id or secret, A401 for a sign-in
+        that took too long or was already used, A495 / A503 / A504 for the connection, else A502."""
         kc = self.keycloak
         data = {
             "grant_type": "authorization_code",
@@ -106,12 +122,14 @@ class AuthService:
                 logger.info("Token exchange successful")
                 return response.json()
             except httpx.HTTPStatusError as e:
-                logger.error(f"Token exchange HTTP error: {e.response.status_code}")
-                logger.error(f"Response body: {e.response.text}")
-                return None
+                failure = _token_refusal(e.response)
+                logger.error(f"Token exchange refused: HTTP {e.response.status_code}: {e.response.text[:500]}",
+                             extra={"code": failure.code})
+                raise errors.FailureError(failure) from e
             except httpx.HTTPError as e:
-                logger.error(f"Token exchange failed: {e}")
-                return None
+                failure = errors.connection_failure("A", "Keycloak", e)
+                logger.error(f"Token exchange failed: {e}", extra={"code": failure.code})
+                raise errors.FailureError(failure) from e
     
     async def refresh_token(self, refresh_token: str) -> Optional[dict]:
         """Refresh access token using refresh token."""
@@ -320,7 +338,11 @@ class AuthService:
 
     def _authenticate_via_keycloak(self, username: str, password: str) -> Optional[dict]:
         """Authenticate credentials against Keycloak using a password-grant capable client.
-        Returns the token payload on success, None on failure."""
+        Returns the token payload on success, None on failure.
+
+        Keycloak not answering isn't an error: only a person TIDE holds no password for yet needs it
+        (authenticate_local checks a kept password first), so it is logged as a warning with its code
+        (A503, A504, A495), and the sign-in form says only that the sign-in failed."""
         kc = self.keycloak
         try:
             with httpx.Client(verify=kc.ssl_context(), timeout=10.0) as client:
@@ -363,10 +385,17 @@ class AuthService:
 
                     if response.status_code == 400 and error == "unauthorized_client":
                         continue
+                    if error == "invalid_client":       # TIDE's settings, not the person's password
+                        logger.error("Keycloak refused TIDE's client '%s'", client_cfg["client_id"],
+                                     extra={"code": errors.A460})
 
                     break
+        except httpx.HTTPError as e:
+            failure = errors.connection_failure("A", "Keycloak", e)
+            logger.warning(f"Keycloak didn't answer a password sign-in for '{username}': {failure.why}; "
+                           "anyone TIDE holds a password for still signs in", extra={"code": failure.code})
         except Exception as e:
-            logger.error(f"Keycloak password grant auth error for '{username}': {e}")
+            logger.error(f"Keycloak password grant auth error for '{username}': {e}", exc_info=True)
 
         return None
 

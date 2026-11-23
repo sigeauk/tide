@@ -18,7 +18,7 @@ import re
 from typing import Dict, Iterable, List, Optional
 
 from app import scoring
-from app.services import wazuh
+from app.services import errors, wazuh
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +115,7 @@ def fetch(siem: dict, spaces: Iterable[str], all_rules: Iterable[str], weights, 
     try:
         items = manager.rules()
     except wazuh.WazuhError as exc:
-        out["error"] = str(exc)
+        out["error"] = errors.Failure(exc.code, exc.why)      # its code goes with it (siem_space_status)
         return out
     every = {str(i.get("id")) for i in items}
     for space in spaces:

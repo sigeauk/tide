@@ -24,6 +24,7 @@ except ModuleNotFoundError:
     # raising `ModuleNotFoundError: No module named 'log'` → HTTP 500.
     from app.log import log_debug, log_error, log_info
 
+from app.services import errors
 from app.services.tls import Session as TlsSession, describe_error as describe_tls_error, siem_verify
 from app.models.rules import RULE_TYPES, rule_type_name
 
@@ -60,24 +61,20 @@ CONNECT_TIMEOUT = 10
 READ_TIMEOUT = 30
 
 
-def _request_failure(exc: Exception, read_timeout) -> str:
-    """A person-readable reason for a request that raised. "Connection timed out" and
-    "Connection refused" mean the host is not there; a read timeout means it is, but slow."""
-    cert = describe_tls_error(exc)
-    if cert:
-        return cert
-    if isinstance(exc, requests.exceptions.ConnectTimeout):
-        return "Connection timed out"
-    if isinstance(exc, requests.exceptions.ReadTimeout):
-        return f"Kibana accepted the connection but did not answer within {read_timeout}s"
-    if isinstance(exc, requests.exceptions.ConnectionError):
-        return "Connection refused"
-    return f"{type(exc).__name__}: {str(exc)[:120]}"
+class KibanaError(errors.FailureError, RuntimeError):
+    """Kibana refused a request, with its error code (S401, S403, …): a RuntimeError, as its callers expect."""
+
+
+def _request_failure(exc: Exception, read_timeout) -> errors.Failure:
+    """Why a request to Kibana raised, with its code: S503 when the host isn't there (refused, timed
+    out, a name that doesn't resolve), S504 when it is but is slow, S495 for its certificate."""
+    return errors.connection_failure("S", "Kibana", exc, read_timeout)
 
 
 def ping_detection_space(kibana_url: str, api_key: str, space: str,
                          connect_timeout: int = 5, read_timeout: int = READ_TIMEOUT):
-    """Can this space's detection rules be read right now? Returns ``(ok, reason)``.
+    """Can this space's detection rules be read right now? Returns ``(ok, reason)``, the reason an
+    errors.Failure (its code in ``reason.code``).
 
     Asks for one rule from the same endpoint sync reads, so a wrong API key, a missing space and
     an unreachable host all fail here, before the pull, with a reason a person can act on. A
@@ -90,8 +87,9 @@ def ping_detection_space(kibana_url: str, api_key: str, space: str,
         return False, _request_failure(exc, read_timeout)
     if resp.status_code == 200:
         return True, ""
-    reasons = {401: "Authentication failed (401)", 403: "Access denied (403)", 404: f"Space '{space}' not found (404)"}
-    return False, reasons.get(resp.status_code, f"HTTP {resp.status_code}")
+    reasons = {401: "Authentication failed", 403: "Access denied", 404: f"Space '{space}' not found"}
+    return False, errors.Failure(errors.answer_code("S", resp.status_code),
+                                 reasons.get(resp.status_code, f"Kibana answered HTTP {resp.status_code}"))
 
 
 def test_elastic_connection_full(
@@ -145,7 +143,8 @@ def test_elastic_connection_full(
             "endpoint": endpoint,
             "ok": bool(ok),
             "status_code": status_code,
-            "detail": detail,
+            "detail": str(detail),
+            "code": getattr(detail, "code", None) and str(detail.code),   # a failure's (errors.Failure)
             "body_excerpt": body_excerpt,
             "elapsed_ms": elapsed_ms,
         })
@@ -192,7 +191,8 @@ def test_elastic_connection_full(
             )
         else:
             detail = f"HTTP {r.status_code}"
-        _record("kibana_status", "/api/status", False, r.status_code, detail, body, elapsed_ms=ms)
+        _record("kibana_status", "/api/status", False, r.status_code,
+                errors.Failure(errors.answer_code("S", r.status_code), detail), body, elapsed_ms=ms)
         return result
 
     # ── Check 2: spaces privilege ─────────────────────────────────────
@@ -213,7 +213,8 @@ def test_elastic_connection_full(
     else:
         body = (r.text or "")[:200]
         detail = f"HTTP {r.status_code} — token lacks 'kibana_spaces_all' / 'spaces:read'"
-        _record("spaces", "/api/spaces/space", False, r.status_code, detail, body, elapsed_ms=ms)
+        _record("spaces", "/api/spaces/space", False, r.status_code,
+                errors.Failure(errors.answer_code("S", r.status_code), detail), body, elapsed_ms=ms)
 
     # ── Check 3: detection-engine read privilege, the linked spaces first ─────
     linked = [s for s in dict.fromkeys(linked_spaces or []) if s]
@@ -221,17 +222,17 @@ def test_elastic_connection_full(
     spaces_to_check = linked + others[:max(0, 5 - len(linked))]
 
     def _check_space(sp):
-        """(space, ok, text) for one space, with how long it took."""
+        """(space, ok, text, a failure's code) for one space, with how long it took."""
         r, err, ms = _do("GET", f"/s/{sp}/api/detection_engine/rules/_find?per_page=1&page=1")
         took = f"{ms / 1000:.1f}s"
         if err:
-            return sp, False, f"{sp}: {err} ({took})"
+            return sp, False, f"{sp}: {err.why} ({err.code}, {took})", err.code
         if r.status_code == 200:
             try:
                 total = r.json().get("total", "?")
             except Exception:
                 total = "?"
-            return sp, True, f"{sp} ({total} rules, {took})"
+            return sp, True, f"{sp} ({total} rules, {took})", None
         body_hint = ""
         try:
             jb = r.json()
@@ -239,7 +240,9 @@ def test_elastic_connection_full(
                 body_hint = jb.get("message") or jb.get("error") or ""
         except Exception:
             pass
-        return sp, False, f"{sp}: HTTP {r.status_code}" + (f" — {body_hint[:80]}" if body_hint else "") + f" ({took})"
+        code = errors.answer_code("S", r.status_code)
+        return (sp, False, f"{sp}: HTTP {r.status_code}" + (f" — {body_hint[:80]}" if body_hint else "")
+                + f" ({code}, {took})", code)
 
     started = _time.monotonic()
     with ThreadPoolExecutor(max_workers=max(1, len(spaces_to_check))) as pool:
@@ -248,12 +251,12 @@ def test_elastic_connection_full(
 
     def _label(sp, text):
         return text if not linked or sp in linked else f"{text} [not linked]"
-    passed = [_label(sp, t) for sp, ok, t in answers if ok]
-    failed = [_label(sp, t) for sp, ok, t in answers if not ok]
+    passed = [_label(sp, t) for sp, ok, t, _c in answers if ok]
+    failed = [_label(sp, t) for sp, ok, t, _c in answers if not ok]
     # With the linked spaces known, they decide: a slow or closed space TIDE never syncs is
     # reported, but does not fail the test.
-    deciding = [ok for sp, ok, _t in answers if sp in linked] if linked else [ok for _sp, ok, _t in answers]
-    ok = all(deciding) if linked else any(deciding)
+    deciding = [(ok, c) for sp, ok, _t, c in answers if sp in linked or not linked]
+    ok = all(o for o, _c in deciding) if linked else any(o for o, _c in deciding)
     detail = ("OK on: " + ", ".join(passed) if passed else "") + \
              (("; " if passed else "") + "failed on: " + "; ".join(failed) if failed else "")
     _record(
@@ -261,6 +264,8 @@ def test_elastic_connection_full(
         ok, 200 if ok else None, detail or "No spaces to check",
         "; ".join(failed)[:200] if failed and not ok else None, elapsed_ms=ms,
     )
+    if not ok:      # the code of the first space that decided it
+        result["checks"][-1]["code"] = next((str(c) for o, c in deciding if not o and c), None)
 
     # ── Check 4: Cases read, for rule tuning's outcomes (R35). Reported, never failing the test: a key
     # without it still syncs, and Rule Monitoring says Cases couldn't be read on the destination.
@@ -283,6 +288,32 @@ def test_elastic_connection_full(
                  "(feature_securitySolutionCasesV3.read)" if refused else ""),
             elapsed_ms=int((_time.monotonic() - started) * 1000))
     result["checks"][-1]["optional"] = True
+
+    # ── Check 5: exception lists read, for Rule Monitoring's exceptions (#75) and the GitLab backup (#116).
+    # Reported, never failing the test: a key without it still syncs rules, and a sync says which lists it
+    # couldn't read.
+    def _check_lists(sp):
+        r, err, _ms = _do("GET", f"/s/{sp}/api/exception_lists/_find?per_page=1&namespace_type=single,agnostic")
+        if err:
+            return sp, False, f"{sp}: {err.why} ({err.code})", err.code
+        if r.status_code == 200:
+            return sp, True, sp, None
+        code = errors.answer_code("S", r.status_code)
+        return sp, False, f"{sp}: HTTP {r.status_code} ({code})", code
+
+    started = _time.monotonic()
+    with ThreadPoolExecutor(max_workers=max(1, len(case_spaces))) as pool:
+        lists = list(pool.map(_check_lists, case_spaces))
+    readable = [t for _sp, ok, t, _c in lists if ok]
+    refused = [t for _sp, ok, t, _c in lists if not ok]
+    _record("exception_lists", "/s/<space>/api/exception_lists/_find", not refused, 200 if not refused else None,
+            ("Exception lists read on: " + ", ".join(readable) if readable else "")
+            + (("; " if readable else "") + "exception lists can't be read on: " + "; ".join(refused)
+               + ". Rule Monitoring can't see the rules' exceptions there: give the key feature_siemV2.all "
+                 "(Setting up clients → The Elastic API key)" if refused else ""),
+            elapsed_ms=int((_time.monotonic() - started) * 1000))
+    result["checks"][-1]["optional"] = True
+    result["checks"][-1]["code"] = next((str(c) for _sp, ok, _t, c in lists if not ok and c), None)
 
     result["ok"] = all(c["ok"] for c in result["checks"] if not c.get("optional"))
     return result
@@ -1419,26 +1450,30 @@ def fetch_closed_cases(kibana_url, api_key, space, days=ALERT_DAYS, session=None
 EXCEPTION_READS = 8     # exception lists read at once
 
 
-def fetch_exception_items(kibana_url, api_key, space, lists, session=None):
+def fetch_exception_items(kibana_url, api_key, space, lists, session=None, failures=None):
     """Every item of each exception list in ``lists`` (``(list_id, namespace_type)``) the rules of
     ``space`` use (Rule Monitoring, #75): ``{(list_id, namespace_type): [item], or None when Kibana
     didn't give them all}``. One paged read per list, ``EXCEPTION_READS`` at once; a list that fails
-    doesn't stop the others."""
+    doesn't stop the others. ``failures``, a dict, is given why for each list that failed
+    (``{key: errors.Failure}``, #116)."""
     session = session or _new_session(api_key, kibana_url)
     base = kibana_url.rstrip("/")
 
     def read(key):
         try:
-            return get_exception_list_entries(key[0], space, session, base, key[1])
+            return _exception_list_entries(key[0], space, session, base, key[1])
         except Exception as exc:   # noqa: BLE001 - its last items stand; the sync goes on
             log_error(f"Could not read exception list {key[0]} in {space}: {type(exc).__name__}: {exc}")
-            return None
+            return None, errors.connection_failure("S", "Kibana", exc)
 
     keys = sorted(lists)
     if not keys:
         return {}
     with ThreadPoolExecutor(max_workers=min(EXCEPTION_READS, len(keys))) as pool:
-        return dict(zip(keys, pool.map(read, keys)))
+        answers = dict(zip(keys, pool.map(read, keys)))
+    if failures is not None:
+        failures.update({key: why for key, (_items, why) in answers.items() if why is not None})
+    return {key: items for key, (items, _why) in answers.items()}
 
 
 def fetch_exception_lists(kibana_url, api_key, space, session=None):
@@ -1790,7 +1825,8 @@ def fetch_single_rule(kibana_url, api_key, space, rule_id, catalogue=None, elast
             break
         if res.status_code == 404 or (param == "id" and res.status_code == 400):
             continue
-        raise RuntimeError(f"Kibana returned HTTP {res.status_code} for space '{space}'")
+        raise KibanaError(errors.Failure(errors.answer_code("S", res.status_code),
+                                         f"Kibana returned HTTP {res.status_code} for space '{space}'"))
     if not isinstance(rule, dict) or not rule:
         return None
     rule['space_id'] = rule.get('space_id') or space
@@ -2512,6 +2548,12 @@ def _missing_lists_note(missing, space) -> str:
 def get_exception_list_entries(list_id, source_space, session, base_url, namespace_type="single"):
     """Every item of the exception list ``list_id``, page by page; None when Kibana didn't give them
     all, so a copy is never made with some missing."""
+    return _exception_list_entries(list_id, source_space, session, base_url, namespace_type)[0]
+
+
+def _exception_list_entries(list_id, source_space, session, base_url, namespace_type="single"):
+    """``get_exception_list_entries``, with why Kibana didn't give them: ``(items or None, errors.Failure
+    or None)``."""
     prefix = _space_api_prefix(base_url, source_space)
     items, page, per_page = [], 1, 100
     while True:
@@ -2519,11 +2561,12 @@ def get_exception_list_entries(list_id, source_space, session, base_url, namespa
             "list_id": list_id, "namespace_type": namespace_type or "single", "per_page": per_page, "page": page})
         if response.status_code != 200:
             log_error(f"Failed to get exception entries for {list_id}: {response.status_code}")
-            return None
+            return None, errors.Failure(errors.answer_code("S", response.status_code),
+                                        f"Kibana answered HTTP {response.status_code} for exception list {list_id}")
         data = response.json()
         items += data.get("data") or []
         if not data.get("data") or page * per_page >= int(data.get("total") or 0):
-            return items
+            return items, None
         page += 1
 
 
@@ -2679,8 +2722,8 @@ def duplicate_rule(rule_id: str, space: str, kibana_url: str, api_key: str,
         attributes = {}
     made = (attributes.get("results") or {}).get("created") or []
     if response.status_code != 200 or not made:
-        errors = attributes.get("errors") or []
-        return False, (errors[0].get("message") if errors and errors[0].get("message") else _kibana_error(response)), None
+        problems = attributes.get("errors") or []
+        return False, (problems[0].get("message") if problems and problems[0].get("message") else _kibana_error(response)), None
     log_info(f"Duplicated rule {rule_id} in {space} as {made[0].get('rule_id')} (exceptions: {exceptions})")
     return True, "", made[0]
 

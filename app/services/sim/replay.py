@@ -92,6 +92,21 @@ def install_template(es: Elastic, *, namespace: str | None = None, index: str | 
     return name
 
 
+def make_streams(es: Elastic, segments: list["Segment"], namespace: str) -> list[str]:
+    """Make, empty, each data stream a replay of these segments writes to, before it sends anything,
+    so a data view on them has their fields (@timestamp among them) from the start. Kibana finds no
+    fields for a pattern that matches no index, and a Discover opened then shows no histogram until it
+    is reloaded. One that is there already is left as it is. Returns the streams' names."""
+    names = sorted({f"logs-{ecs.dataset(f.source).ds}-{namespace}" for seg in segments for f in seg.files})
+    for name in names:
+        try:
+            es.call("PUT", f"/_data_stream/{name}", f"make the data stream {name}")
+        except ElasticError as exc:
+            if exc.status != 400 or "already exists" not in exc.reason:
+                raise
+    return names
+
+
 def remove_data(es: Elastic, namespace: str) -> list[str]:
     """Delete a namespace's data streams and its index template; returns the streams deleted."""
     if not NAMESPACE_RX.fullmatch(namespace or ""):

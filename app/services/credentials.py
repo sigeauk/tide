@@ -81,7 +81,8 @@ def reveal_or_none(value):
     try:
         return reveal(value)
     except CredentialUnreadable as exc:
-        logger.error(str(exc))
+        from app.services import errors
+        logger.error(str(exc), extra={"code": errors.T461})
         return None
 
 

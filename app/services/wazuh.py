@@ -24,7 +24,7 @@ from typing import Optional
 
 import requests
 
-from app.services import credentials, tls
+from app.services import credentials, errors, tls
 
 logger = logging.getLogger(__name__)
 
@@ -56,12 +56,14 @@ def severity(level) -> str:
     return next(name for floor, name in LEVEL_BANDS if level >= floor)
 
 
-class WazuhError(Exception):
-    """A Wazuh request that didn't succeed, with a reason a person can act on."""
+class WazuhError(errors.FailureError):
+    """A Wazuh request that didn't succeed: ``why``, a reason a person can act on, and its error code
+    (``code``: the failure's, else by the answer's ``status``, else S502)."""
 
     def __init__(self, reason: str, status: Optional[int] = None):
-        super().__init__(reason)
         self.status = status
+        super().__init__(reason if isinstance(reason, errors.Failure)
+                         else errors.Failure(errors.answer_code("S", status or 0), reason))
 
 
 def _extra(value) -> dict:
@@ -99,19 +101,9 @@ def stored_config(manager_url: str, api_user: str, indexer_url: str, indexer_use
             "indexer_password_enc": sealed}
 
 
-def _failure(exc: Exception, what: str) -> str:
-    """A person-readable reason for a request to ``what`` that raised."""
-    cert = tls.describe_error(exc)
-    if cert:
-        return cert
-    if isinstance(exc, requests.exceptions.ConnectTimeout):
-        return "Connection timed out"
-    if isinstance(exc, requests.exceptions.ReadTimeout):
-        # Also raised when TLS never starts (after the connect timeout), so no number of seconds here.
-        return f"{what} accepted the connection but did not answer in time"
-    if isinstance(exc, requests.exceptions.ConnectionError):
-        return "Connection refused"
-    return f"{type(exc).__name__}: {str(exc)[:120]}"
+def _failure(exc: Exception, what: str) -> errors.Failure:
+    """Why a request to ``what`` raised, with its code (S495 certificate, S503 not reached, S504 slow)."""
+    return errors.connection_failure("S", what, exc)
 
 
 def _api_reason(resp) -> str:
@@ -145,7 +137,7 @@ class Manager:
         except requests.RequestException as exc:
             raise WazuhError(_failure(exc, "The Wazuh manager")) from exc
         if resp.status_code == 401:
-            raise WazuhError("The API user or password is wrong (401)", 401)
+            raise WazuhError("The API user or password is wrong", 401)
         if resp.status_code != 200 or not resp.text.strip():
             raise WazuhError(f"The Wazuh manager refused to sign in ({_api_reason(resp)})", resp.status_code)
         self._token = resp.text.strip()
@@ -249,9 +241,9 @@ class Indexer:
         except requests.RequestException as exc:
             raise WazuhError(_failure(exc, "The Wazuh indexer")) from exc
         if resp.status_code == 401:
-            raise WazuhError("The indexer user or password is wrong (401)", 401)
+            raise WazuhError("The indexer user or password is wrong", 401)
         if resp.status_code == 403:
-            raise WazuhError(f"The indexer user can't read {index}: give its role read on {index} (403)", 403)
+            raise WazuhError(f"The indexer user can't read {index}: give its role read on {index}", 403)
         if resp.status_code != 200:
             raise WazuhError(f"The Wazuh indexer answered HTTP {resp.status_code}", resp.status_code)
         return resp.json()
@@ -359,10 +351,10 @@ def test_connection(s: dict) -> dict:
     agents, as its ``spaces``."""
     result: dict = {"ok": False, "spaces": [], "spaces_label": "Agent groups", "version": "", "checks": []}
 
-    def record(name, endpoint, ok, detail, status_code=None, started=None):
+    def record(name, endpoint, ok, detail, status_code=None, started=None, code=None):
         result["checks"].append({
-            "name": name, "endpoint": endpoint, "ok": bool(ok), "status_code": status_code, "detail": detail,
-            "body_excerpt": None,
+            "name": name, "endpoint": endpoint, "ok": bool(ok), "status_code": status_code, "detail": str(detail),
+            "code": str(code) if code else None, "body_excerpt": None,
             "elapsed_ms": int((time.monotonic() - started) * 1000) if started is not None else None,
         })
 
@@ -376,7 +368,7 @@ def test_connection(s: dict) -> dict:
     try:
         manager.sign_in()
     except WazuhError as exc:
-        record("sign_in", "/security/user/authenticate", False, str(exc), exc.status, started)
+        record("sign_in", "/security/user/authenticate", False, str(exc), exc.status, started, exc.code)
     else:
         record("sign_in", "/security/user/authenticate", True, f"Signed in as {s['api_user']}", 200, started)
         _manager_checks(manager, record, result)
@@ -388,7 +380,7 @@ def test_connection(s: dict) -> dict:
         try:
             found = indexer.search(index, {"size": 0, "track_total_hits": True})
         except WazuhError as exc:
-            record(name, f"/{index}/_search", False, str(exc), exc.status, started)
+            record(name, f"/{index}/_search", False, str(exc), exc.status, started, exc.code)
             continue
         total = ((found.get("hits") or {}).get("total") or {}).get("value") or 0
         record(name, f"/{index}/_search", True, f"Reads {what} ({total:,})" if total else f"Reads {index}: no {what} yet",
@@ -403,7 +395,7 @@ def _manager_checks(manager: Manager, record, result: dict) -> None:
     try:
         version = manager.version()
     except WazuhError as exc:
-        record("version", "/", False, str(exc), exc.status, started)
+        record("version", "/", False, str(exc), exc.status, started, exc.code)
     else:
         problem = version_problem(version)
         result["version"] = version
@@ -414,8 +406,8 @@ def _manager_checks(manager: Manager, record, result: dict) -> None:
         try:
             data = manager.get(path, **params).get("data") or {}
         except WazuhError as exc:
-            detail = f"The API user can't read {what}: allow it {grant} (403)" if exc.status == 403 else str(exc)
-            record(name, path, False, detail, exc.status, started)
+            detail = errors.with_code(f"The API user can't read {what}: allow it {grant}", exc.code)                 if exc.status == 403 else str(exc)
+            record(name, path, False, detail, exc.status, started, exc.code)
             return None
         record(name, path, True, success(data), 200, started)
         return data
@@ -429,9 +421,9 @@ def _manager_checks(manager: Manager, record, result: dict) -> None:
     try:
         groups = manager.groups()
     except WazuhError as exc:
-        detail = ("The API user can't read agent groups: allow it group:read on group:id:* (403)"
+        detail = (errors.with_code("The API user can't read agent groups: allow it group:read on group:id:*", exc.code)
                   if exc.status == 403 else str(exc))
-        record("groups", "/groups", False, detail, exc.status, started)
+        record("groups", "/groups", False, detail, exc.status, started, exc.code)
     else:
         result["spaces"] = [ALL_AGENTS] + groups
         record("groups", "/groups", True, f"Reads {len(groups)} agent group{'s' if len(groups) != 1 else ''}",

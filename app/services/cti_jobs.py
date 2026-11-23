@@ -208,7 +208,8 @@ def _run(
                 job["status"] = JOB_STATUS_FAILED
                 job["error"] = str(exc)[:500]
                 job["finished_at"] = _now()
-        sync_runs.finish(job_id, "failed", error=str(exc)[:500])
+        from app.services import errors
+        sync_runs.finish(job_id, "failed", error=str(exc)[:500], error_code=errors.classify(exc))
         return
 
     status, error, total, detail = _verdict(result)

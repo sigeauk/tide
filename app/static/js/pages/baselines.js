@@ -19,7 +19,7 @@
             if (override) data.set('target_baseline_id', conflict.existing_id);
             response = await fetch(form.action, { method: 'POST', body: data, credentials: 'same-origin' });
         }
-        if (!response.ok) { alert('Baseline import failed (' + response.status + ').'); return; }
+        if (!response.ok) { showToast(await TIDE.fetchFailure(response), 'error'); return; }
         window.location.reload();
     }
 

@@ -23,7 +23,7 @@ from urllib.parse import quote
 
 import requests
 
-from app.services import tls
+from app.services import errors, tls
 
 logger = logging.getLogger(__name__)
 
@@ -55,34 +55,43 @@ def _api(link: Dict[str, Any], path: str) -> str:
     return f"{(link.get('gitlab_url') or '').rstrip('/')}/api/v4{path}"
 
 
-class GitLabError(Exception):
-    """GitLab refused or didn't answer; the message says why, for the user."""
+class GitLabError(errors.FailureError):
+    """GitLab refused or didn't answer: ``why``, for the user, and its error code (``code``, I401 …)."""
 
 
 # GitLab's own limit on an issue's description and a comment, in characters.
 MAX_TEXT = 1_000_000
 
 
-def _why(resp: requests.Response, what: str) -> str:
+def _why(resp: requests.Response, what: str) -> errors.Failure:
+    """Why GitLab refused ``what``, with its code (I401, I403, I404, else I502)."""
+    code = errors.answer_code("I", resp.status_code)
     if resp.status_code == 401:
-        return "GitLab didn't accept the project's access token: Test the project on the client's page."
+        return errors.Failure(code, "GitLab didn't accept the project's access token: Test the project on the "
+                                    "client's page.")
     if resp.status_code == 403:
-        return f"The project's access token isn't allowed to {what}: its role is too low."
+        return errors.Failure(code, f"The project's access token isn't allowed to {what}: its role is too low.")
     if resp.status_code == 404:
-        return "GitLab no longer has that project, or the token can no longer see it."
+        return errors.Failure(code, "GitLab no longer has that project, or the token can no longer see it.")
     try:
         body = resp.json() or {}
         detail = body.get("message") or body.get("error") or ""
     except ValueError:
         detail = ""
-    return f"GitLab couldn't {what} (HTTP {resp.status_code}{': ' + str(detail)[:200] if detail else ''})."
+    return errors.Failure(code, f"GitLab couldn't {what} (HTTP {resp.status_code}"
+                                f"{': ' + str(detail)[:200] if detail else ''}).")
+
+
+def _unanswered(exc: requests.RequestException) -> errors.Failure:
+    """Why a request to GitLab raised: its certificate (I495), no connection (I503), too slow (I504)."""
+    return errors.connection_failure("I", "GitLab", exc)
 
 
 def _send(link: Dict[str, Any], method: str, path: str, what: str, timeout: int = TIMEOUT, **kwargs) -> requests.Response:
     try:
         resp = getattr(_session(link), method)(_api(link, path), timeout=timeout, **kwargs)
     except requests.RequestException as exc:
-        raise GitLabError(tls.describe_error(exc) or f"GitLab didn't answer: {str(exc)[:200]}") from exc
+        raise GitLabError(_unanswered(exc)) from exc
     if resp.status_code not in (200, 201):
         raise GitLabError(_why(resp, what))
     return resp
@@ -165,7 +174,7 @@ def branch_head(link: Dict[str, Any], branch: str) -> Optional[str]:
         resp = _session(link).get(_api(link, f"/projects/{link['project_id']}/repository/branches/{quote(branch, safe='')}"),
                                   timeout=TIMEOUT)
     except requests.RequestException as exc:
-        raise GitLabError(tls.describe_error(exc) or f"GitLab didn't answer: {str(exc)[:200]}") from exc
+        raise GitLabError(_unanswered(exc)) from exc
     if resp.status_code == 404:
         return None
     if resp.status_code != 200:
@@ -185,7 +194,7 @@ def tree(link: Dict[str, Any], path: str, ref: str, recursive: bool = True) -> D
         try:
             resp = session.get(url, timeout=TIMEOUT)
         except requests.RequestException as exc:
-            raise GitLabError(tls.describe_error(exc) or f"GitLab didn't answer: {str(exc)[:200]}") from exc
+            raise GitLabError(_unanswered(exc)) from exc
         if resp.status_code == 404:
             return files
         if resp.status_code != 200:
@@ -290,7 +299,8 @@ def check(link: Dict[str, Any], today: Optional[date] = None) -> Dict[str, Any]:
         # The token: GitLab answers for any personal, project or group access token.
         resp = session.get(_api(link, "/personal_access_tokens/self"), timeout=TIMEOUT)
         if resp.status_code == 401:
-            fails.append("GitLab didn't accept the access token: it may be mistyped, expired or revoked.")
+            fails.append(errors.Failure(errors.I401, "GitLab didn't accept the access token: it may be mistyped, "
+                                                     "expired or revoked."))
             return done()
         if resp.status_code == 200:
             token = resp.json() or {}
@@ -307,13 +317,14 @@ def check(link: Dict[str, Any], today: Optional[date] = None) -> Dict[str, Any]:
         # The project, as this token sees it: a project access token sees its own project only.
         resp = session.get(_api(link, f"/projects/{quote(str(link.get('project') or ''), safe='')}"), timeout=TIMEOUT)
         if resp.status_code in (401, 403):
-            fails.append("GitLab didn't accept the access token for this project.")
+            fails.append(errors.Failure(errors.I401, "GitLab didn't accept the access token for this project."))
             return done()
         if resp.status_code == 404:
-            fails.append(f"GitLab has no project {link.get('project')} that this token can see. {_visible(link, session)}")
+            fails.append(errors.Failure(errors.I404, f"GitLab has no project {link.get('project')} that this token "
+                                                     f"can see. {_visible(link, session)}"))
             return done()
         if resp.status_code != 200:
-            fails.append(f"GitLab answered HTTP {resp.status_code} for the project.")
+            fails.append(errors.Failure(errors.I502, f"GitLab answered HTTP {resp.status_code} for the project."))
             return done()
         project = resp.json() or {}
         out.update(project=project.get("path_with_namespace") or link.get("project"), project_id=project.get("id"),
@@ -326,9 +337,9 @@ def check(link: Dict[str, Any], today: Optional[date] = None) -> Dict[str, Any]:
         level = max((perms.get(k) or {}).get("access_level") or 0 for k in ("project_access", "group_access"))
         role = ROLES.get(level, "no role")
         if level < max(NEEDS[u] for u in used):
-            fails.append(f"The token's account is {role} in this project; "
+            fails.append(errors.Failure(errors.I403, f"The token's account is {role} in this project; "
                          f"{'backing up rules needs Developer' if backup else 'issues need Planner'} "
-                         "or above.")
+                         "or above."))
         visibility = project.get("visibility") or "private"
         if visibility != "private":
             what = "every rule's logic" if backup else "these issues"
@@ -357,5 +368,5 @@ def check(link: Dict[str, Any], today: Optional[date] = None) -> Dict[str, Any]:
         return done()
     except requests.RequestException as exc:
         logger.warning("GitLab project test for %s failed: %s", link.get("project"), exc)
-        fails.append(tls.describe_error(exc) or f"GitLab didn't answer: {str(exc)[:200]}")
+        fails.append(_unanswered(exc))
         return done()

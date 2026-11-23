@@ -120,6 +120,7 @@ In TIDE, the whole guide is under **Settings → Documentation**, with a search.
 | [Setting up clients](docs/CLIENTS.md) | SIEMs, clients, destinations, users and roles, validation, scoring and threat feeds. |
 | [Configuration](docs/CONFIGURATION.md) | Every `.env` setting, certificates and how strictly they are checked, single sign-on with Keycloak, users and roles. |
 | [Operations](docs/OPERATIONS.md) | How TIDE runs day to day: syncing rules and threat actors, how coverage is worked out, backups and upgrades, moving hosts, reclaiming disk space, Diagnostics and troubleshooting. |
+| [Error codes](docs/ERRORS.md) | What each error code in TIDE's messages and log means, and what to do about it. |
 | [External Query API](docs/API.md) | Reading TIDE's data from other tools over HTTPS: API keys, endpoints, what queries may do, and examples. |
 | [Changelog](CHANGELOG.md) | What changed in each release. |
 
@@ -128,3 +129,11 @@ In TIDE, the whole guide is under **Settings → Documentation**, with a search.
 ## Support
 
 Report problems and suggestions through your TIDE support contact. Super admins can run **Settings → Diagnostics → Run all checks** first: each finding says what it means and what to do.
+
+When a message, or a line in TIDE's log, ends with an error code such as D503, [Error codes](docs/ERRORS.md) says what it means and what to do. When TIDE's pages can't be reached, look it up on the host instead:
+
+```bash
+docker exec tide-app python -m app.scripts.error_codes D503
+```
+
+Give the code, and the reference if the message has one, when you report a problem.

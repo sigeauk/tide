@@ -1,8 +1,10 @@
 """Compact a bloated DuckDB file (reclaim free blocks).
 
-DuckDB never shrinks a database file: repeated DELETE + INSERT (every rule
-sync) leaves most blocks free, so a tenant DB can be ~1 GB for ~60 MB of
-live data. This rewrites the database into a fresh file and swaps it in.
+DuckDB never shrinks a database file, and a file can come to hold far more
+space than its data: a client's database of 1.8 GB held 26 MB. This rewrites
+the database into a fresh file and swaps it in. TIDE does it by itself as it
+starts for a file mostly space no table holds (maintenance.compact_grown_at_startup),
+and at the maintenance window's restart.
 
     # 1. STOP the app first — DuckDB allows only one process on a file:
     docker compose stop tide-app

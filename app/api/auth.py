@@ -13,6 +13,7 @@ import secrets
 from app.services.icons import icon as _icon
 from app.api.deps import AuthDep, SettingsDep, CurrentUser, DbDep
 from app.config import get_settings
+from app.services import errors
 
 import logging
 
@@ -252,10 +253,12 @@ async def auth_callback(
     redirect_uri = f"{settings.app_url}/auth/callback"
     logger.info(f"Exchanging code with redirect_uri: {redirect_uri}")
     
-    tokens = await auth.exchange_code(code, redirect_uri)
-    
+    try:
+        tokens = await auth.exchange_code(code, redirect_uri)
+    except errors.FailureError as exc:      # logged with its code where it happened
+        return _sign_in_failed(str(exc))
     if not tokens:
-        return HTMLResponse("<h1>Could not complete sign-in. Go back and sign in again.</h1>", status_code=400)
+        return _sign_in_failed("Keycloak gave no sign-in. Go back and sign in again.")
 
     # The one place an SSO sign-in is recorded (provisions a first-time user, sets last_login);
     # later requests with the cookie only read the user.

@@ -90,6 +90,20 @@ def set_context_fields(**fields: Any) -> None:
     ctx.update({k: v for k, v in fields.items() if v is not None})
 
 
+_step_code: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("tide_step_code", default=None)
+
+
+@contextlib.contextmanager
+def error_code(code: Any):
+    """Give every ERROR line written inside, that has no code of its own, ``code``: for a step whose
+    failures all mean one thing whatever raised them, such as the database upgrades at startup (D563)."""
+    token = _step_code.set(str(code))
+    try:
+        yield
+    finally:
+        _step_code.reset(token)
+
+
 @contextlib.contextmanager
 def run_context(run_id: str, client_id: Optional[str] = None):
     """Stamp ``run_id`` (and the run's client) on every log line written inside, for a sync
@@ -120,6 +134,24 @@ class ContextFilter(logging.Filter):
         for field in self._FIELDS:
             if not hasattr(record, field):
                 setattr(record, field, ctx.get(field, "-"))
+        # Every error carries an error code (#117): the one it was given (extra={"code": ...}), else
+        # its step's (error_code), else its exception's, else T500. A startup or background code's line
+        # also says what to do (``fix``), as TIDE's pages may not be there to say it. ``code_part`` and
+        # ``fix_part`` put them in the human format.
+        code = getattr(record, "code", None)
+        if not code and record.levelno >= logging.ERROR:
+            from app.services import errors
+            exc = record.exc_info[1] if record.exc_info else None
+            code = _step_code.get() or (errors.classify(exc) if exc else errors.T500)
+        if code:
+            record.code = str(code)
+            if not hasattr(record, "fix"):
+                from app.services import errors
+                known = errors.CODES.get(record.code)
+                if known and known.status is None:
+                    record.fix = known.fix
+        record.code_part = f"{record.code} | " if code else ""
+        record.fix_part = f" | What to do: {record.fix}" if getattr(record, "fix", None) else ""
         return True
 
 
@@ -128,7 +160,7 @@ _RESERVED_LOGRECORD_KEYS = {
     "args", "asctime", "created", "exc_info", "exc_text", "filename",
     "funcName", "levelname", "levelno", "lineno", "message", "module",
     "msecs", "msg", "name", "pathname", "process", "processName",
-    "relativeCreated", "stack_info", "thread", "threadName", "taskName",
+    "relativeCreated", "stack_info", "thread", "threadName", "taskName", "code_part", "fix_part",
 }
 
 
@@ -148,6 +180,10 @@ class JsonFormatter(logging.Formatter):
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(record.created))
                   + f".{int(record.msecs):03d}Z",
             "level": record.levelname,
+        }
+        if getattr(record, "code", None):
+            payload["code"] = record.code      # beside the level, where a reader looks first
+        payload.update({
             "logger": record.name,
             "msg": record.getMessage(),
             "request_id": getattr(record, "request_id", "-"),
@@ -156,7 +192,7 @@ class JsonFormatter(logging.Formatter):
             "route": getattr(record, "route", "-"),
             "method": getattr(record, "method", "-"),
             "run_id": getattr(record, "run_id", "-"),
-        }
+        })
         # Merge any extra=... fields the caller attached.
         for key, value in record.__dict__.items():
             if key in _RESERVED_LOGRECORD_KEYS or key in payload:
@@ -174,8 +210,8 @@ class JsonFormatter(logging.Formatter):
 
 
 _HUMAN_FORMAT = (
-    "%(asctime)s | %(levelname)-7s | req=%(request_id)s "
-    "client=%(client_id)s user=%(user_id)s | %(name)s | %(message)s"
+    "%(asctime)s | %(levelname)-7s | %(code_part)sreq=%(request_id)s "
+    "client=%(client_id)s user=%(user_id)s | %(name)s | %(message)s%(fix_part)s"
 )
 
 
@@ -275,10 +311,13 @@ def perf_log(route: str, status: int, elapsed_ms: float, **fields: Any) -> None:
     )
 
 
-def error_log(msg: str, *, exc: Optional[BaseException] = None, **fields: Any) -> None:
+def error_log(msg: str, *, exc: Optional[BaseException] = None, code: Any = None, **fields: Any) -> None:
     """Emit a ``tide.error`` ERROR record with optional exception context.
     Prefer this over ``logger.exception`` at top-level handlers so the JSON
-    line carries the standard taxonomy."""
+    line carries the standard taxonomy. ``code`` is its error code (app.services.errors); without
+    one, the exception's is used."""
+    if code:
+        fields["code"] = str(code)
     _error_logger.error(
         msg,
         exc_info=(type(exc), exc, exc.__traceback__) if exc else None,

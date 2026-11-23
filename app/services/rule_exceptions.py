@@ -161,12 +161,29 @@ def read_lists(db, client_id: str, siem_id: str, space: str, lists: Iterable[Key
     every list its space's rules use."""
     from app import elastic_helper
     lists = set(lists)
-    read = elastic_helper.fetch_exception_items(kibana_url, api_key, space, lists) if lists else {}
+    failed: Dict[Key, Any] = {}
+    read = elastic_helper.fetch_exception_items(kibana_url, api_key, space, lists, failures=failed) if lists else {}
     details = elastic_helper.fetch_exception_lists(kibana_url, api_key, space) if lists else None
     with db.get_connection() as conn:
         changes = store(conn, siem_id, space, read, details=details)
     record_changes(db, client_id, siem_id, space, changes, users)
+    if failed:
+        raise unread(space, failed)
     return changes
+
+
+def unread(space: str, failed: Dict[Key, Any]):
+    """The error for the lists Kibana didn't give (#116): which, and why, with the first one's code (S403
+    when the key can't read them, …). Each keeps its last items; this says so, where a read used to be
+    silent."""
+    from app import elastic_helper
+    from app.services import errors
+    ids = sorted(list_id for list_id, _ns in failed)
+    first = failed[min(failed)]
+    named = ", ".join(ids[:3]) + (f" and {len(ids) - 3} more" if len(ids) > 3 else "")
+    return elastic_helper.KibanaError(errors.Failure(
+        first.code, f"Kibana didn't give {len(ids)} exception list{'s' if len(ids) != 1 else ''} in space "
+                    f"'{space}' ({named}), which keep their last items: {errors.without_code(first, first.code)}"))
 
 
 _DONE = {"added": "added", "removed": "removed", "changed": "changed"}

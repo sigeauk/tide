@@ -20,7 +20,7 @@ from app.services.icons import (close_button as _close_button, icon as _icon, ic
                                 empty_state as _empty_state, more_button as _more_button)
 from app.api.deps import (DbDep, ClientAdmin, RequireAdmin, RequireSuperadmin, ActiveClient, admin_client_ids,
                           can_manage_user, require_client_member, require_manageable_user)
-from app.services import siem_kinds, tls, wazuh
+from app.services import errors, siem_kinds, tls, wazuh
 from app.services.log_context import audit_admin
 from app.services.database import SUPPORT_ROLE
 
@@ -408,12 +408,12 @@ def _keycloak_realm_check(url: str, realm: str, verify) -> tuple:
     try:
         resp = _req.get(discovery_url, timeout=8, verify=tls.verify_arg(verify))
     except Exception as exc:
-        return False, str(exc)[:140]
+        return False, errors.connection_failure("A", "Keycloak", exc)
     if resp.status_code == 200:
         return True, f"Realm '{realm}' discovered"
     if resp.status_code == 404:
-        return False, f"Realm '{realm}' not found (404)"
-    return False, f"HTTP {resp.status_code}"
+        return False, errors.Failure(errors.A460, f"Realm '{realm}' not found")
+    return False, errors.Failure(errors.answer_code("A", resp.status_code), f"HTTP {resp.status_code}")
 
 
 def _form_refused(why: str) -> Response:
@@ -977,6 +977,9 @@ def _format_test_result_panel(result: dict, *, panel_id: str = "siem-test-result
         body_html = (
             f'<div class="test-check__body">{_esc(body)}</div>'
         ) if body else ""
+        code = chk.get("code") if not chk["ok"] else None     # a failure's error code (#117)
+        code_html = (f' <a href="/settings/docs/errors#{_esc(code.lower())}" title="What {_esc(code)} means, and '
+                     f'what to do">What {_esc(code)} means</a>') if code else ""
         rows.append(
             f'<div class="test-check">'
             f'<div class="flex items-center gap-sm">'
@@ -984,7 +987,7 @@ def _format_test_result_panel(result: dict, *, panel_id: str = "siem-test-result
             f'<strong>{_esc(chk["name"])}</strong>'
             f'<code class="form-hint">{_esc(chk["endpoint"])}{sc_str}</code>'
             f'</div>'
-            f'<div class="test-check__detail">{_esc(chk["detail"])}</div>'
+            f'<div class="test-check__detail">{_esc(chk["detail"])}{code_html}</div>'
             f'{body_html}'
             f'</div>'
         )
@@ -1057,10 +1060,7 @@ async def test_siem_connection(request: Request, db: DbDep, user: RequireSuperad
                                          verify=tls.verify_arg(_form_tls_verify(form)))
         return HTMLResponse(_siem_test_response(db, siem_id, result))
     except Exception as exc:
-        logger.warning(f"SIEM test-connection error: {exc}")
-        return HTMLResponse(
-            f'<span class="badge badge-danger">Error — {_esc(str(exc))[:120]}</span>'
-        )
+        return HTMLResponse(f'<span class="badge badge-danger">{_esc(errors.could_not("test the connection", exc))}</span>')
 
 
 def _siem_test_response(db, siem_id: str, result: dict) -> str:
@@ -1110,8 +1110,7 @@ async def _test_wazuh_form(form, db, siem_id: str) -> HTMLResponse:
     try:
         result = await run_in_threadpool(wazuh.test_connection, s)
     except Exception as exc:
-        logger.warning(f"Wazuh test-connection error: {exc}")
-        return HTMLResponse(f'<span class="badge badge-danger">Error — {_esc(str(exc))[:120]}</span>')
+        return HTMLResponse(f'<span class="badge badge-danger">{_esc(errors.could_not("test the connection", exc))}</span>')
     return HTMLResponse(_siem_test_response(db, siem_id, result))
 
 
@@ -1127,7 +1126,8 @@ def _siem_test_message(result: dict) -> str:
         "summary": "All checks passed" if result["ok"] else "One or more checks failed",
         "checks": [
             {"name": c["name"], "ok": c["ok"], "status_code": c.get("status_code"),
-             "detail": (c["detail"] or "")[:300], "elapsed_ms": c.get("elapsed_ms"), "endpoint": c.get("endpoint")}
+             "detail": (c["detail"] or "")[:300], "elapsed_ms": c.get("elapsed_ms"), "endpoint": c.get("endpoint"),
+             "code": c.get("code")}
             for c in result["checks"]
         ],
         "spaces": result.get("spaces", [])[:20],
@@ -1179,8 +1179,8 @@ def _run_inventory_test(kind: str, item: dict, linked_spaces=None) -> tuple[bool
                 name = data.get("data", {}).get("me", {}).get("name", "unknown")
                 return True, f"Logged in as {name}"
             if resp.status_code in (401, 403):
-                return False, "Authentication failed (invalid token)"
-            return False, f"HTTP {resp.status_code}"
+                return False, errors.Failure(errors.I401, "Authentication failed (invalid token)")
+            return False, errors.Failure(errors.answer_code("I", resp.status_code), f"HTTP {resp.status_code}")
 
         if kind == "gitlab":
             # No token here (each project linked on a client's page has its own): GitLab's API asks
@@ -1198,7 +1198,8 @@ def _run_inventory_test(kind: str, item: dict, linked_spaces=None) -> tuple[bool
                 return True, f"GitLab {data['version']}"
             if resp.status_code == 401 and isinstance(data, dict) and "Unauthorized" in str(data.get("message")):
                 return True, "GitLab answered at this address"
-            return False, f"No GitLab API at this address (HTTP {resp.status_code})"
+            return False, errors.Failure(errors.I404 if resp.status_code == 404 else errors.I502,
+                                         f"No GitLab API at this address (HTTP {resp.status_code})")
 
         if kind == "keycloak":
             url = (item.get("url") or "").strip()
@@ -1210,13 +1211,17 @@ def _run_inventory_test(kind: str, item: dict, linked_spaces=None) -> tuple[bool
             if resp.status_code == 200:
                 return True, f"Realm '{realm}' discovered"
             if resp.status_code == 404:
-                return False, f"Realm '{realm}' not found (404)"
-            return False, f"HTTP {resp.status_code}"
+                return False, errors.Failure(errors.A460, f"Realm '{realm}' not found")
+            return False, errors.Failure(errors.answer_code("A", resp.status_code), f"HTTP {resp.status_code}")
 
         return False, f"Unknown integration kind '{kind}'"
     except Exception as exc:  # pragma: no cover - network errors
         logger.warning(f"{kind} card test-connection error: {exc}")
-        return False, tls.describe_error(exc) or str(exc)[:140]
+        return False, errors.connection_failure(_ORIGIN.get(kind, "I"), _NAMES.get(kind, "It"), exc)
+
+
+_ORIGIN = {"siems": "S", "keycloak": "A", "gitlab": "I", "opencti": "I"}       # error codes' letters (#117)
+_NAMES = {"siems": "The SIEM", "keycloak": "Keycloak", "gitlab": "GitLab", "opencti": "OpenCTI"}
 
 
 def _fetch_inventory_item(db, kind: str, item_id: str) -> dict | None:
@@ -1770,8 +1775,7 @@ async def move_system(request: Request, client_id: str,
                 f"baselines_moved={len(result['baselines_moved'])})"
             )
         except Exception as exc:
-            _move_tasks[task_id].update(status="error", message=str(exc))
-            logger.exception(f"Async move failed for system {system_id}: {exc}")
+            _move_tasks[task_id].update(status="error", message=errors.could_not("move the system", exc))
 
     threading.Thread(target=_run, daemon=True).start()
 
@@ -1981,8 +1985,7 @@ async def move_from(request: Request, client_id: str,
                 f"by {user.username}"
             )
         except Exception as exc:
-            _move_tasks[task_id].update(status="error", message=str(exc))
-            logger.exception(f"Async move-from failed for system {system_id}: {exc}")
+            _move_tasks[task_id].update(status="error", message=errors.could_not("move the system", exc))
 
     threading.Thread(target=_run, daemon=True).start()
 
@@ -4620,17 +4623,17 @@ def tab_integrations(request: Request, db: DbDep, user: RequireSuperadmin, group
 def _parse_connector_form(form, vendor, *, existing_cfg: dict | None = None) -> tuple[dict, dict, list[str]]:
     """Extract generic + per-vendor config from a form submission.
 
-    Returns ``(generic_fields, config_dict, errors)``. Secret fields left
+    Returns ``(generic_fields, config_dict, problems)``. Secret fields left
     blank fall back to ``existing_cfg`` so editing without re-entering the
     password works as operators expect.
     """
     existing_cfg = existing_cfg or {}
-    errors: list[str] = []
+    problems: list[str] = []
     generic = {
         "label": str(form.get("label", "")).strip(),
     }
     if not generic["label"]:
-        errors.append("Label is required.")
+        problems.append("Label is required.")
     cfg: dict = {}
     for spec in vendor.fields:
         raw = form.get(f"cfg_{spec.key}")
@@ -4643,7 +4646,7 @@ def _parse_connector_form(form, vendor, *, existing_cfg: dict | None = None) -> 
                 cfg[spec.key] = existing_cfg[spec.key]  # preserve
                 continue
             if spec.required and (spec.default is None):
-                errors.append(f"{spec.label} is required.")
+                problems.append(f"{spec.label} is required.")
                 continue
             cfg[spec.key] = spec.default
             continue
@@ -4651,11 +4654,11 @@ def _parse_connector_form(form, vendor, *, existing_cfg: dict | None = None) -> 
             try:
                 cfg[spec.key] = int(s) if s.isdigit() else float(s)
             except Exception:
-                errors.append(f"{spec.label} must be numeric.")
+                problems.append(f"{spec.label} must be numeric.")
                 cfg[spec.key] = s
         else:
             cfg[spec.key] = s
-    return generic, cfg, errors
+    return generic, cfg, problems
 
 
 @router.get("/connectors/vendor-fields/{vendor_name}", response_class=HTMLResponse)
@@ -4687,9 +4690,9 @@ async def create_connector(request: Request, db: DbDep, user: RequireSuperadmin)
             f'<span class="badge badge-danger">Unknown vendor: {_esc(vendor_name)}</span>',
             status_code=400,
         )
-    generic, cfg, errors = _parse_connector_form(form, vendor)
-    if errors:
-        return _form_refused("; ".join(errors))
+    generic, cfg, problems = _parse_connector_form(form, vendor)
+    if problems:
+        return _form_refused("; ".join(problems))
     try:
         created = db.create_cti_connector(
             vendor=vendor_name,
@@ -4699,11 +4702,7 @@ async def create_connector(request: Request, db: DbDep, user: RequireSuperadmin)
         )
         cid = (created or {}).get("id", "?")
     except Exception as exc:
-        logger.error("create_cti_connector failed: %s", exc, exc_info=True)
-        return HTMLResponse(
-            f'<div class="alert alert-danger">Could not create the connector: {_esc(str(exc))}</div>',
-            status_code=500,
-        )
+        return HTMLResponse(errors.could_not_alert("create the connector", exc), status_code=500)
     logger.info("Connector created: %s (%s) by %s", cid, vendor_name, user.username)
     return _integrations_response(request, db, f"Connector '{generic['label']}' created.")
 
@@ -4741,10 +4740,10 @@ async def import_connectors(request: Request, db: DbDep, user: RequireSuperadmin
             status_code=400,
         )
     created_ids: list[str] = []
-    errors: list[str] = []
+    problems: list[str] = []
     for idx, entry in enumerate(entries, start=1):
         if not isinstance(entry, dict):
-            errors.append(f"Entry {idx}: must be an object.")
+            problems.append(f"Entry {idx}: must be an object.")
             continue
         vendor_name = str(entry.get("vendor", "")).strip().lower()
         try:
@@ -4752,15 +4751,15 @@ async def import_connectors(request: Request, db: DbDep, user: RequireSuperadmin
         except KeyError:
             vendor = None
         if vendor is None:
-            errors.append(f"Entry {idx}: unknown vendor '{vendor_name}'.")
+            problems.append(f"Entry {idx}: unknown vendor '{vendor_name}'.")
             continue
         label = str(entry.get("label", "")).strip()
         if not label:
-            errors.append(f"Entry {idx} ({vendor_name}): label is required.")
+            problems.append(f"Entry {idx} ({vendor_name}): label is required.")
             continue
         cfg_in = entry.get("config") or {}
         if not isinstance(cfg_in, dict):
-            errors.append(f"Entry {idx} ({label}): config must be an object.")
+            problems.append(f"Entry {idx} ({label}): config must be an object.")
             continue
         cfg: dict = {}
         missing: list[str] = []
@@ -4772,7 +4771,7 @@ async def import_connectors(request: Request, db: DbDep, user: RequireSuperadmin
             else:
                 cfg[spec.key] = spec.default
         if missing:
-            errors.append(f"Entry {idx} ({label}): missing required field(s): {', '.join(missing)}.")
+            problems.append(f"Entry {idx} ({label}): missing required field(s): {', '.join(missing)}.")
             continue
         try:
             created = db.create_cti_connector(
@@ -4784,14 +4783,14 @@ async def import_connectors(request: Request, db: DbDep, user: RequireSuperadmin
             created_ids.append((created or {}).get("id", "?"))
         except Exception as exc:
             logger.error("import create_cti_connector failed: %s", exc, exc_info=True)
-            errors.append(f"Entry {idx} ({label}): {exc}")
+            problems.append(f"Entry {idx} ({label}): {exc}")
     logger.info(
-        "Connector import by %s: %d created, %d errors", user.username, len(created_ids), len(errors)
+        "Connector import by %s: %d created, %d problems", user.username, len(created_ids), len(problems)
     )
-    if errors and not created_ids:
+    if problems and not created_ids:
         return HTMLResponse(
             '<div class="alert alert-danger"><strong>Could not import the connectors.</strong><ul class="list-indent">'
-            + "".join(f"<li>{_esc(e)}</li>" for e in errors)
+            + "".join(f"<li>{_esc(e)}</li>" for e in problems)
             + "</ul></div>",
             status_code=400,
         )
@@ -4838,11 +4837,7 @@ async def update_connector(request: Request, connector_id: str, db: DbDep, user:
             config=cfg,
         )
     except Exception as exc:
-        logger.error("update_cti_connector failed: %s", exc, exc_info=True)
-        return HTMLResponse(
-            f'<div class="alert alert-danger">Could not update the connector: {_esc(str(exc))}</div>',
-            status_code=500,
-        )
+        return HTMLResponse(errors.could_not_alert("update the connector", exc), status_code=500)
     logger.info("Connector updated: %s by %s", connector_id, user.username)
     return _integrations_response(request, db)
 
@@ -4856,11 +4851,7 @@ def delete_connector(request: Request, connector_id: str, db: DbDep, user: Requi
     try:
         db.delete_cti_connector(connector_id)
     except Exception as exc:
-        logger.error("delete_cti_connector failed: %s", exc, exc_info=True)
-        return HTMLResponse(
-            f'<div class="alert alert-danger">Could not delete the connector: {_esc(str(exc))}</div>',
-            status_code=500,
-        )
+        return HTMLResponse(errors.could_not_alert("delete the connector", exc), status_code=500)
     logger.info("Connector deleted: %s by %s", connector_id, user.username)
     return _integrations_response(request, db, "Connector deleted.")
 
@@ -4940,11 +4931,7 @@ def link_connector_to_client(client_id: str, connector_id: str, db: DbDep, user:
     try:
         db.link_cti_connector_client(connector_id, client_id)
     except Exception as exc:
-        logger.error("link_cti_connector_client failed: %s", exc, exc_info=True)
-        return HTMLResponse(
-            f'<div class="alert alert-danger">Could not link the connector: {_esc(str(exc))}</div>',
-            status_code=500,
-        )
+        return HTMLResponse(errors.could_not_alert("link the connector", exc), status_code=500)
     logger.info("Connector %s linked to client %s by %s", connector_id, client_id, user.username)
     return _render_client_connectors_partial(client_id, db, toast="Connector linked.")
 
@@ -4965,11 +4952,7 @@ async def add_connector_to_client(request: Request, client_id: str,
     try:
         db.link_cti_connector_client(connector_id, client_id)
     except Exception as exc:
-        logger.error("link_cti_connector_client failed: %s", exc, exc_info=True)
-        return HTMLResponse(
-            f'<div class="alert alert-danger">Could not link the connector: {_esc(str(exc))}</div>',
-            status_code=500,
-        )
+        return HTMLResponse(errors.could_not_alert("link the connector", exc), status_code=500)
     logger.info(
         "Connector %s linked to client %s by %s (form)",
         connector_id, client_id, user.username,
@@ -4983,11 +4966,7 @@ def unlink_connector_from_client(client_id: str, connector_id: str, db: DbDep, u
     try:
         db.unlink_cti_connector_client(connector_id, client_id)
     except Exception as exc:
-        logger.error("unlink_cti_connector_client failed: %s", exc, exc_info=True)
-        return HTMLResponse(
-            f'<div class="alert alert-danger">Could not unlink the connector: {_esc(str(exc))}</div>',
-            status_code=500,
-        )
+        return HTMLResponse(errors.could_not_alert("unlink the connector", exc), status_code=500)
     logger.info("Connector %s unlinked from client %s by %s", connector_id, client_id, user.username)
     return _render_client_connectors_partial(client_id, db, toast="Connector unlinked.")
 

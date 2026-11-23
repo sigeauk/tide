@@ -21,6 +21,7 @@ from typing import Optional, List
 
 from app.api.deps import DbDep
 from app.config import get_settings
+from app.services import errors
 from app.services.sql_guard import SqlRejected, check_references
 from app.services.tenant_manager import resolve_tenant_db_path
 
@@ -181,10 +182,7 @@ def external_query(
     settings = get_settings()
     tenant_db_path = resolve_tenant_db_path(target_client_id, settings.data_dir)
     if not tenant_db_path:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Tenant database not found for the requested client.",
-        )
+        raise errors.TideError(errors.D404, "Tenant database not found for the requested client.")
 
     # ── SQL validation ──
     _validate_sql(body.sql)

@@ -62,8 +62,9 @@ def graphql_base(address: str) -> str:
 
 def test_connection(connector: Dict[str, Any]) -> Dict[str, Any]:
     """Used by the Management → Connectors Test button: asks OpenCTI's GraphQL API for its
-    version with the connector's token, as the threat sync would connect."""
-    from app.services import tls
+    version with the connector's token, as the threat sync would connect. A failure's ``error`` ends
+    with its error code (errors.Failure)."""
+    from app.services import errors, tls
 
     cfg = connector.get("config") or {}
     base = graphql_base(cfg.get("taxii_root") or "")
@@ -79,15 +80,18 @@ def test_connection(connector: Dict[str, Any]) -> Dict[str, Any]:
             verify=tls.verify_arg(cfg.get("verify_tls")),
         )
     except requests.RequestException as exc:
-        return {"ok": False, "error": str(exc)[:200]}
+        return {"ok": False, "error": errors.connection_failure("I", "OpenCTI", exc)}
     if resp.status_code != 200:
-        return {"ok": False, "error": f"OpenCTI answered HTTP {resp.status_code} at {base}/graphql"}
+        return {"ok": False, "error": errors.Failure(errors.answer_code("I", resp.status_code),
+                                                     f"OpenCTI answered HTTP {resp.status_code} at {base}/graphql")}
     try:
         data = resp.json()
     except ValueError:
-        return {"ok": False, "error": f"{base}/graphql did not answer with JSON; is this OpenCTI?"}
+        return {"ok": False, "error": errors.Failure(errors.I502, f"{base}/graphql did not answer with JSON; is "
+                                                                  "this OpenCTI?")}
     if data.get("errors"):
-        return {"ok": False, "error": str(data["errors"][0].get("message") or data["errors"][0])[:200]}
+        return {"ok": False, "error": errors.Failure(errors.I502, str(data["errors"][0].get("message")
+                                                                      or data["errors"][0])[:200])}
     version = ((data.get("data") or {}).get("about") or {}).get("version")
     return {"ok": True, "message": f"OpenCTI {version}" if version else "connection ok"}
 

@@ -31,6 +31,8 @@ from typing import Any, Dict, Optional
 
 import duckdb
 
+from app.services import errors
+
 logger = logging.getLogger(__name__)
 
 GUARD = timedelta(minutes=10)
@@ -43,8 +45,17 @@ _restarting = False
 _unavailable: Dict[str, Dict[str, Any]] = {}     # db path -> its record: files left unavailable
 
 
-class DatabaseUnavailable(RuntimeError):
-    """A database stopped after a DuckDB fatal error, and TIDE had already restarted once for it."""
+class DatabaseUnavailable(errors.TideError):
+    """A database stopped after a DuckDB fatal error, and TIDE had already restarted once for it (D561).
+    A person reads the code's words; the log names the file and when it stopped."""
+
+    def __init__(self, db_path: str, at: str = ""):
+        super().__init__(errors.D561)
+        self.db_path, self.at = db_path, at
+
+    def __str__(self) -> str:
+        return (f"{os.path.basename(self.db_path)} stopped after a DuckDB fatal error"
+                + (f" at {self.at}" if self.at else "") + ", and TIDE had already restarted for it")
 
 
 def enable_restart() -> None:
@@ -80,10 +91,7 @@ def check_available(db_path: str) -> None:
     """Refuse a database left unavailable, saying why, rather than failing on DuckDB's own error."""
     record = _unavailable.get(db_path)
     if record:
-        raise DatabaseUnavailable(
-            f"{os.path.basename(db_path)} stopped after a DuckDB fatal error at {record['at']}, and TIDE had "
-            f"already restarted for it {int(GUARD.total_seconds() // 60)} minutes before, so it isn't "
-            f"restarting again. Restart TIDE; Settings → Diagnostics shows the error.")
+        raise DatabaseUnavailable(db_path, record["at"])
 
 
 def _summary(exc: BaseException) -> str:
@@ -127,10 +135,11 @@ def handle(db_path: str, exc: BaseException) -> None:
     from app.services.log_context import error_log
     if looping:
         error_log(f"DuckDB fatal error on {db_path} again within {GUARD} of a restart for it: not restarting; "
-                  f"the file is unavailable until TIDE restarts", exc=exc, event="db_fatal", db=db_path)
+                  f"the file is unavailable until TIDE restarts", exc=exc, code=errors.D561, event="db_fatal",
+                  db=db_path)
         return
     error_log(f"DuckDB fatal error on {db_path}: restarting TIDE so the database is opened afresh",
-              exc=exc, event="db_fatal", db=db_path)
+              exc=exc, code=errors.D560, event="db_fatal", db=db_path)
     _restart()
 
 
@@ -166,4 +175,4 @@ def note_startup() -> None:
     record = last()
     if record and record.get("restarted") and _recent(record.get("at"), datetime.now(), timedelta(hours=1)):
         logger.warning("TIDE restarted after a DuckDB fatal error on %s at %s: %s",
-                       record.get("db"), record.get("at"), record.get("error"))
+                       record.get("db"), record.get("at"), record.get("error"), extra={"code": errors.D560})

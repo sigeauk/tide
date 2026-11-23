@@ -64,7 +64,7 @@ These are the permissions' names on Elastic 8.19.
   - `feature_discover.all` is needed only to save a hunt to Kibana.
   - If you leave the **Elasticsearch URL** empty, add `feature_dev_tools.read`: TIDE then reaches Elasticsearch through Kibana.
 
-**Test connection** says whether the key can read cases, without failing the test: a key without Cases read still syncs, and Rule Monitoring lists **Cases couldn't be read** on the destination.
+**Test connection** says whether the key can read cases, without failing the test: a key without Cases read still syncs, and Rule Monitoring lists **Cases couldn't be read** on the destination. It says the same for exception lists: a sync that can't read one shows **Done, steps failed**, naming the lists.
 
 Give the key no expiry date. When you replace it, don't invalidate the old key straight away: the rules TIDE last saved with it stop running once it stops working. First give them a new key in Kibana (Stack Management, Rules, select the rules, then Update API key).
 

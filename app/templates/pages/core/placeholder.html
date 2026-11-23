@@ -14,6 +14,17 @@
 
 {% set is_not_found = page_title and ('Not Found' in page_title) %}
 
+{% if error %}
+{# A failed request (main.py _error_page): its error code, what to do, and for a 5xx the reference
+   that finds it in TIDE's log (#117). #}
+{% call empty_state('alert-circle') %}
+    <p class="empty-state-title">Error {{ error.code }}</p>
+    <p>{{ error.fix }}</p>
+    {% if error.reference %}<p>Reference <code>{{ error.reference }}</code></p>{% endif %}
+    <p><a href="/settings/docs/errors#{{ error.code | lower }}">What {{ error.code }} means</a></p>
+    <a name="HOME →" href="/" class="btn btn-primary">HOME →</a>
+{% endcall %}
+{% else %}
 {% call empty_state('alert-circle' if is_not_found else 'construction') %}
     <p class="empty-state-title">{{ 'Not Found' if is_not_found else 'Coming Soon' }}</p>
     {% if is_not_found %}
@@ -23,4 +34,5 @@
     {% endif %}
     <a name="HOME →" href="/" class="btn btn-primary">HOME →</a>
 {% endcall %}
+{% endif %}
 {% endblock %}

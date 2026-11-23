@@ -248,6 +248,28 @@ console.debug('TIDE app.js loading...');
     // What a script says when its request never reached TIDE (a lost connection, TIDE restarting).
     TIDE.UNREACHABLE = 'TIDE could not be reached, so nothing was changed. Check your connection and try again.';
 
+    // Why a request failed, as one sentence (#117). TIDE's own failures carry it, ending with their
+    // error code: a JSON body's "message", or the [data-tide-error] alert in an HTML one. Anything
+    // else says its HTTP status. header(name) reads a response header (an xhr's or a fetch's).
+    TIDE.failureText = function (status, header, body) {
+        var text = String(body || '').trim(), said = '';
+        if (text.charAt(0) === '{') {
+            try { said = JSON.parse(text).message || ''; } catch (_) { said = ''; }
+        } else if (text.indexOf('data-tide-error') !== -1) {
+            var box = new DOMParser().parseFromString(text, 'text/html').querySelector('[data-tide-error]');
+            said = box ? box.textContent.trim() : '';
+        }
+        if (said) return said;
+        var code = header ? header('X-TIDE-Error-Code') : '';
+        return 'Could not complete that (HTTP ' + status + (code ? ', ' + code : '') + '). Try again, or refresh the page.';
+    };
+    // The same for a fetch() that failed: reads its body, so call it once, in place of r.json().
+    TIDE.fetchFailure = function (r) {
+        return r.text().then(function (body) {
+            return TIDE.failureText(r.status, function (h) { return r.headers.get(h); }, body);
+        }, function () { return TIDE.failureText(r.status, null, ''); });
+    };
+
     // An icon for markup a script builds: the same SVG as the templates' icon macro, from the
     // <template id="tide-icons"> in base.html. TIDE.icon gives the element, TIDE.iconHtml its markup.
     TIDE.icon = function (name, size) {
@@ -1034,12 +1056,12 @@ console.debug('TIDE app.js loading...');
             var target = e.detail && e.detail.target;
             if (!target || target.id !== 'modal-container') return;
             clearRuleSkeleton();
+            // A failed load only tidies up here: the page's one toast for it says why (initializeApp).
             if (name !== 'htmx:afterSwap') {
                 var busy = target.querySelector('.modal-content[aria-busy]');
                 if (busy) busy.removeAttribute('aria-busy');
                 var overlay = target.querySelector('[data-rm-skeleton]');
                 if (overlay) { overlay.remove(); target.innerHTML = ''; }
-                if (typeof showToast === 'function') showToast('Could not load the rule. Try again.', 'error');
             }
         });
     });
@@ -2158,14 +2180,15 @@ console.debug('TIDE app.js loading...');
         });
 
         // Stale page / network errors: a lost connection says so; a 401 or 403 that slipped
-        // through without HX-Redirect goes to sign-in; any other failure says which.
+        // through without HX-Redirect goes to sign-in; any other failure says why, with its code.
         document.addEventListener('htmx:sendError', function() {
             showToast(TIDE.UNREACHABLE, 'error');
         });
         document.addEventListener('htmx:responseError', function(evt) {
-            var status = evt.detail.xhr ? evt.detail.xhr.status : 0;
+            var xhr = evt.detail.xhr, status = xhr ? xhr.status : 0;
             if (status === 401 || status === 403) window.location.href = '/login';
-            else showToast('Could not complete that (HTTP ' + status + '). Try again, or refresh the page.', 'error');
+            else showToast(TIDE.failureText(status, xhr && function (h) { return xhr.getResponseHeader(h); },
+                                            xhr && xhr.responseText), 'error');
         });
 
         // Handle HTMX request timeout

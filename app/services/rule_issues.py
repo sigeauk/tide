@@ -30,7 +30,7 @@ import re
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from app.services.search_query import SearchQuery
 
@@ -923,27 +923,50 @@ def field_data_findings(rule: Dict[str, Any], newest: Dict[Tuple[str, str], Any]
 Key = Tuple[str, str, str, str, str]          # (issue, cause, siem_id, space, rule_id)
 _BATCH = 250                                  # rules read at a time
 
-_RULES_SQL = """
-    SELECT rule_id, siem_id, space, COALESCE(enabled, 0) = 1 AS enabled,
-           json_extract(raw_data, '$.execution_summary.last_execution')::VARCHAR AS last,
-           json_extract(raw_data, '$.index')::VARCHAR AS idx,
-           json_extract(raw_data, '$.results')::VARCHAR AS results,
-           json_extract_string(raw_data, '$.timestamp_override') AS timestamp_override,
-           json_extract_string(raw_data, '$.updated_at') AS updated_at, last_updated,
-           json_extract_string(raw_data, '$.interval') AS run_interval,
-           json_extract_string(raw_data, '$.from') AS lookback_from,
-           COALESCE(TRY_CAST(json_extract(raw_data, '$.timestamp_override_fallback_disabled') AS BOOLEAN), false)
-               AS fallback_disabled,
-           json_extract_string(raw_data, '$.id') AS kibana_id,
-           json_extract_string(raw_data, '$.created_at') AS kibana_created,
-           lower(COALESCE(json_extract_string(raw_data, '$.severity'), 'low')) AS rule_severity,
-           COALESCE(json_extract_string(raw_data, '$.rule_id'), rule_id) AS validation_key,
-           COALESCE(json_extract_string(raw_data, '$.name'), '') AS rule_name,
-           json_extract(raw_data, '$.exceptions_list')::VARCHAR AS exceptions_list,
-           COALESCE(json_extract_string(raw_data, '$.type'), '') AS source_type,
-           COALESCE(TRY_CAST(json_extract(raw_data, '$.custom') AS BOOLEAN), false) AS custom
-    FROM detection_rules WHERE NOT COALESCE(deprecated, false)
-"""
+def _json_fields(paths: Sequence[str]) -> str:
+    """SQL reading several fields of a rule's JSON (``raw_data``) at once. One ``json_extract`` with a
+    list of paths parses each rule once; a call per field parses it again for every field, which for a
+    few thousand rules needed more than DuckDB's memory limit (#116). Each value comes back as JSON
+    text, None where the rule hasn't the field: ``_jstr`` and ``_jbool`` read it."""
+    return "json_extract(raw_data, [" + ", ".join(f"'$.{p}'" for p in paths) + "])"
+
+
+def _jstr(text: Optional[str]) -> Optional[str]:
+    """A ``_json_fields`` value as ``json_extract_string`` gives it: a string's text, None for null or a
+    missing field, anything else as JSON."""
+    if text is None:
+        return None
+    value = json.loads(text)
+    return value if isinstance(value, str) else None if value is None else text
+
+
+def _jbool(text: Optional[str]) -> bool:
+    """A ``_json_fields`` value as a flag (false unless it is true)."""
+    try:
+        value = json.loads(text) if text else None
+    except ValueError:
+        return False
+    return value is True or (isinstance(value, str) and value.strip().lower() == "true")
+
+
+# Each rule's fields Rule Monitoring reads, from its JSON in one parse (_rule_row lays them out).
+_RULE_PATHS = ("execution_summary.last_execution", "index", "results", "timestamp_override", "updated_at", "interval",
+               "from", "timestamp_override_fallback_disabled", "id", "created_at", "severity", "rule_id", "name",
+               "exceptions_list", "type", "custom")
+_RULES_SQL = ("SELECT rule_id, siem_id, space, COALESCE(enabled, 0) = 1 AS enabled, last_updated, "
+              + _json_fields(_RULE_PATHS) + " FROM detection_rules WHERE NOT COALESCE(deprecated, false)")
+
+
+def _rule_row(rule_id, siem_id, space, enabled, last_updated, fields) -> tuple:
+    """A ``_RULES_SQL`` row as ``detect`` reads it: (rule_id, siem_id, space, enabled, last, index, results,
+    timestamp_override, updated_at, last_updated, interval, from, fallback_disabled, kibana_id,
+    kibana_created, severity, validation_key, name, exceptions_list, type, custom)."""
+    (last, idx, results, override, updated_at, interval, lookback, fallback, kibana_id, created, severity,
+     portable, name, exceptions, rtype, custom) = fields or [None] * len(_RULE_PATHS)
+    return (rule_id, siem_id, space, enabled, last, idx, results, _jstr(override), _jstr(updated_at), last_updated,
+            _jstr(interval), _jstr(lookback), _jbool(fallback), _jstr(kibana_id), _jstr(created),
+            (_jstr(severity) or "low").lower(), _jstr(portable) or rule_id, _jstr(name) or "", exceptions,
+            _jstr(rtype) or "", _jbool(custom))
 
 # Changes to a rule a spike can follow, and those that switch it on (#69, #70).
 _CHANGE_ACTIONS = ("created", "edited", "enabled", "restored", "upstream_update", "moved", "new_rule_id",
@@ -981,11 +1004,20 @@ def _rule_history(conn, siem_id: str, days: int = 120) -> Dict[Tuple[str, str], 
 _MATCH_FIELDS = ("data_view_id", "filters", "saved_id", "threshold", "new_terms_fields", "history_window_start",
                  "threat_index", "threat_query", "threat_mapping", "threat_language", "machine_learning_job_id",
                  "anomaly_threshold", "event_category_override", "tiebreaker_field", "timestamp_field")
-_DUPLICATE_SQL = (
-    "SELECT rule_id, space, name, json_extract_string(raw_data, '$.type'), json_extract_string(raw_data, '$.language'), "
-    "json_extract_string(raw_data, '$.query'), json_extract(raw_data, '$.index')::VARCHAR, "
-    + ", ".join(f"json_extract(raw_data, '$.{f}')::VARCHAR" for f in _MATCH_FIELDS)
-    + " FROM detection_rules WHERE siem_id = ? AND COALESCE(enabled, 0) = 1 AND NOT COALESCE(deprecated, false)")
+_DUPLICATE_PATHS = ("type", "language", "query", "index") + _MATCH_FIELDS
+_DUPLICATE_SQL = ("SELECT rule_id, space, name, " + _json_fields(_DUPLICATE_PATHS) + " FROM detection_rules "
+                  "WHERE siem_id = ? AND COALESCE(enabled, 0) = 1 AND NOT COALESCE(deprecated, false)")
+
+
+def _duplicate_rows(conn, siem_id: str, spaces: Set[str]) -> List[tuple]:
+    """The enabled rules of ``siem_id`` in ``spaces`` as ``duplicate_findings`` compares them: (rule_id,
+    space, name, type, language, query, index, *match fields), the index and match fields as JSON."""
+    out = []
+    for rule_id, space, name, fields in conn.execute(_DUPLICATE_SQL, [siem_id]).fetchall():
+        if space in spaces:
+            rtype, language, query, index, *match = fields or [None] * len(_DUPLICATE_PATHS)
+            out.append((rule_id, space, name, _jstr(rtype), _jstr(language), _jstr(query), index, *match))
+    return out
 
 
 def _norm_json(text) -> Any:
@@ -1145,9 +1177,10 @@ def rule_patterns(conn, keys: Iterable[Tuple[str, str, str]]) -> Dict[Tuple[str,
     out: Dict[Tuple[str, str, str], List[str]] = {}
     for at in range(0, len(keys), _BATCH):
         where, params = _among(keys[at:at + _BATCH])
-        for rule_id, siem_id, space, idx, results in conn.execute(
-                "SELECT rule_id, siem_id, space, json_extract(raw_data, '$.index')::VARCHAR, "
-                "json_extract(raw_data, '$.results')::VARCHAR FROM detection_rules WHERE true" + where, params).fetchall():
+        for rule_id, siem_id, space, (idx, results) in (
+                (r, s, sp, f or (None, None)) for r, s, sp, f in conn.execute(
+                    "SELECT rule_id, siem_id, space, " + _json_fields(("index", "results"))
+                    + " FROM detection_rules WHERE true" + where, params).fetchall()):
             rows = [r for r in _json(results, []) or [] if isinstance(r, list) and r]
             out[(rule_id, siem_id, space)] = ([str(p) for p in _json(idx, []) or [] if p]
                                               or sorted({str(r[0]) for r in rows}))
@@ -1200,7 +1233,7 @@ def detect(db, conn, scopes: Optional[Set[Tuple[str, str]]] = None,
     rules = []
     for at in range(0, len(keys), _BATCH):
         where, params = _among(keys[at:at + _BATCH])
-        rules += conn.execute(_RULES_SQL + where, params).fetchall()
+        rules += [_rule_row(*r) for r in conn.execute(_RULES_SQL + where, params).fetchall()]
     by_siem: Dict[str, List[tuple]] = {}
     for r in rules:
         by_siem.setdefault(r[1], []).append(r)
@@ -1261,8 +1294,7 @@ def detect(db, conn, scopes: Optional[Set[Tuple[str, str]]] = None,
         # The same detection deployed twice in one space (#78), over every enabled rule in it.
         try:
             spaces = {sp for _r, sp, *_x in parsed}
-            copies = duplicate_findings([r for r in conn.execute(_DUPLICATE_SQL, [siem_id]).fetchall() if r[1] in spaces],
-                                        _space_links(conn, siem_id))
+            copies = duplicate_findings(_duplicate_rows(conn, siem_id, spaces), _space_links(conn, siem_id))
             for (rule_id, space), (cause, detail) in copies.items():
                 if wanted(siem_id, space, rule_id):
                     add("duplicate_query", cause, siem_id, space, rule_id, KNOWN["duplicate_query"].severity, detail)

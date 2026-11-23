@@ -44,7 +44,7 @@ KIND_LABELS = {
 }
 
 _COLUMNS = ("id", "sync_kind", "status", "started_at", "finished_at", "duration_ms", "total_count", "error",
-            "client_id", "trigger", "actor", "label", "scope_json", "retry_of", "detail_json")
+            "client_id", "trigger", "actor", "label", "scope_json", "retry_of", "detail_json", "error_code")
 
 _steps_failed: Dict[str, List[Dict[str, str]]] = {}     # run id -> its failed steps, until it finishes
 _steps_lock = threading.Lock()
@@ -95,19 +95,23 @@ def start(kind: str, *, run_id: Optional[str] = None, client_id: Optional[str] =
     return run_id
 
 
-def _log_end(run_id: str, status: str, total: int = 0, error: Optional[str] = None) -> None:
+def _log_end(run_id: str, status: str, total: int = 0, error: Optional[str] = None, code: Any = None) -> None:
     logger.log(logging.INFO if status == "success" else logging.WARNING,
                "Sync run %s ended: %s%s", run_id, status, f" ({error})" if error else "",
                extra={"event": "sync_run_end", "run_id": run_id, "sync_status": status, "total": int(total or 0),
-                      "error": error})
+                      "error": error, **({"code": str(code)} if code else {})})
 
 
 def finish(run_id: str, status: str, *, total: int = 0, error: Optional[str] = None,
-           detail: Optional[Dict[str, Any]] = None) -> None:
+           detail: Optional[Dict[str, Any]] = None, error_code: Any = None) -> None:
     """Record how a run ended, with any steps that failed during it, then drop finished runs older
-    than the retention period."""
+    than the retention period. ``error_code`` (#117) is why it failed or missed a destination; without
+    it, the error's own (an errors.Failure), else the first code its text names."""
+    from app.services import errors
     if status not in FINISHED:
         status = "failed"
+    if error and not error_code:
+        error_code = getattr(error, "code", None) or errors.first_code(str(error))
     failed = _pop_steps_failed(run_id)
     if failed:
         detail = {**(detail or {}), "steps_failed": failed}
@@ -116,9 +120,9 @@ def finish(run_id: str, status: str, *, total: int = 0, error: Optional[str] = N
             conn.execute(
                 "UPDATE sync_history SET status = ?, finished_at = now(), "
                 "duration_ms = CAST(date_diff('millisecond', started_at, now()) AS INTEGER), total_count = ?, "
-                "error = ?, detail_json = ? WHERE id = ?",
+                "error = ?, detail_json = ?, error_code = ? WHERE id = ?",
                 [status, int(total or 0), (str(error)[:2000] if error else None),
-                 json.dumps(detail or {}, default=str)[:8000], run_id],
+                 json.dumps(detail or {}, default=str)[:8000], str(error_code) if error_code else None, run_id],
             )
             conn.execute(
                 f"DELETE FROM sync_history WHERE status <> 'running' "
@@ -126,7 +130,7 @@ def finish(run_id: str, status: str, *, total: int = 0, error: Optional[str] = N
             )
     except Exception as exc:  # noqa: BLE001
         logger.warning("Could not record the end of sync %s: %s", run_id, exc)
-    _log_end(run_id, status, total, error)
+    _log_end(run_id, status, total, error, error_code)
 
 
 def mark_interrupted() -> int:

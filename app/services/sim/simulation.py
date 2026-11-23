@@ -309,9 +309,13 @@ def _run(store, siem: Siem, sim_id: str, scenarios: list[packs.Scenario], noise:
         kb.create_space(space, f"Simulation: {titles}"[:1024],
                         f"Made by TIDE for simulation {sim_id}, and deleted when it is cleaned up.")
         client.made_on_siem(store, sim_id, client.SIEM_SPACE, space)
-        kb.create_data_view(space, f"logs-*-{namespace}", "Simulation logs")
         replay.install_template(es, namespace=namespace)
         client.made_on_siem(store, sim_id, client.SIEM_DATA, namespace)
+        segments = replay.plan(scenarios, noise)
+        # The data streams first, empty, so the data view has their fields (@timestamp) from the start:
+        # made on a pattern that matched nothing, Discover would show no histogram until reloaded.
+        replay.make_streams(es, segments, namespace)
+        kb.create_data_view(space, f"logs-*-{namespace}", "Simulation logs")
         made = []
         for sc in scenarios:
             for spec in rules.specs(sc):
@@ -329,7 +333,7 @@ def _run(store, siem: Siem, sim_id: str, scenarios: list[packs.Scenario], noise:
                 store.set_up_client(sim_id, siem.id, space, namespace, scenarios, actor)
             except Exception:  # noqa: BLE001 - its own problems are recorded; the exercise goes on in Kibana
                 logger.exception("Simulation %s: could not set it up in the client's TIDE", sim_id)
-        rp = replay.Replay(es, replay.plan(scenarios, noise), namespace=namespace, speed=speed, max_eps=max_eps,
+        rp = replay.Replay(es, segments, namespace=namespace, speed=speed, max_eps=max_eps,
                            on_progress=lambda s: _set(store, sim_id, progress=json.dumps(s)))
         if not _register(sim_id, rp):
             return                                         # ended while it was setting up

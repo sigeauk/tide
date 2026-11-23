@@ -578,9 +578,9 @@ async def _run_job(job: Dict[str, Any], db, user_id: str, username: str, client_
                                   [(i["rule_id"], i["siem_id"], i["space"]) for i in items if i["siem_id"]])
         job["state"] = "cancelled" if job["cancel"] else "done"
     except Exception as exc:  # pragma: no cover - defensive
-        logger.exception("Bulk edit crashed")
+        from app.services import errors
         job["state"] = "error"
-        job["errors"].append(str(exc))
+        job["errors"].append(errors.could_not("finish the bulk edit", exc))
     finally:
         job["current"] = ""
         # No client-wide sync here: move/enable/disable/sync each refresh exactly the

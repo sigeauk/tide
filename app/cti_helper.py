@@ -5,6 +5,13 @@ import pandas as pd
 import re
 from log import log_info, log_error, log_debug
 
+from app.services import errors
+
+
+class OpenCTIError(errors.FailureError, RuntimeError):
+    """OpenCTI refused or didn't answer, with its error code (I401, I503, …): a RuntimeError, as the
+    threat sync expects."""
+
 MITRE_REF_SOURCES = {
     "mitre-attack",
     "mitre-attack-mobile",
@@ -662,16 +669,19 @@ def get_threat_landscape(api_url, api_token, *, verify):
             
             if response.status_code != 200:
                 log_error(f"OpenCTI API Error {response.status_code}: {response.text[:500]}")
-                raise RuntimeError(f"OpenCTI answered HTTP {response.status_code} at {base_url}/graphql")
+                raise OpenCTIError(errors.Failure(errors.answer_code("I", response.status_code),
+                                                  f"OpenCTI answered HTTP {response.status_code} at {base_url}/graphql"))
 
             try:
                 data = response.json()
             except ValueError:
-                raise RuntimeError(f"{base_url}/graphql didn't answer with JSON: is this OpenCTI?")
+                raise OpenCTIError(errors.Failure(errors.I502, f"{base_url}/graphql didn't answer with JSON: "
+                                                               "is this OpenCTI?"))
             if data.get("errors"):
                 log_error(f"GraphQL Error: {data['errors']}")
                 first = data["errors"][0]
-                raise RuntimeError(f"OpenCTI refused the query: {str(first.get('message') if isinstance(first, dict) else first)[:200]}")
+                raise OpenCTIError(errors.Failure(errors.I502, "OpenCTI refused the query: " + str(
+                    first.get('message') if isinstance(first, dict) else first)[:200]))
 
             intrusion_data = data.get("data", {}).get("intrusionSets", {})
             edges = intrusion_data.get("edges", [])
@@ -719,5 +729,4 @@ def get_threat_landscape(api_url, api_token, *, verify):
         raise
     except requests.RequestException as e:
         log_error(f"OpenCTI Sync Failed: {e}")
-        from app.services import tls
-        raise RuntimeError(tls.describe_error(e) or f"OpenCTI didn't answer: {str(e)[:200]}") from e
+        raise OpenCTIError(errors.connection_failure("I", "OpenCTI", e)) from e

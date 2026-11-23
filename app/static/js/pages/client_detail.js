@@ -23,8 +23,7 @@
                 body: JSON.stringify(payload),
             });
             if (!resp.ok) {
-                var err = await resp.json();
-                showToast(err.detail || 'Could not update the client.', 'error');
+                showToast(await TIDE.fetchFailure(resp), 'error');
                 return;
             }
             showToast('Client updated.', 'success');

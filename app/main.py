@@ -30,7 +30,7 @@ except Exception:  # pragma: no cover
 
 from app.config import get_settings
 from app.api.deps import CurrentUser, DbDep, ActiveClient, OptionalClient
-from app.services import keycloak_config
+from app.services import errors, keycloak_config
 from app.api import auth, rules, heatmap, threats, promotion, sigma, elastic as elastic_api, rule_upstream as rule_upstream_api, hunting as hunting_api, settings as settings_api, inventory, external_sharing, clients as clients_api, management as management_api, mitre as mitre_api, bulk_edit as bulk_edit_api, diagnostics as diagnostics_api, dashboard as dashboard_api, rule_monitoring as rule_monitoring_api, rule_tuning as rule_tuning_api, maintenance as maintenance_api, backlog as backlog_api, simulations as simulations_api
 
 # 4.1.0 P1: structured JSON logging with per-request context. Replaces the
@@ -248,11 +248,14 @@ async def scheduled_sync(force_mapping=False, client_id: str | None = None, job_
         count = result if isinstance(result, int) else 0
         missed = _destinations_missed(client_id, started, only_siem_id, only_space)
         if missed:
-            reason = "Not reached: " + "; ".join(f"{name} ({why})" for name, why in missed)
+            # "Not reached: Prod (Connection refused, S503); Lab (Authentication failed, S401)"
+            reason = "Not reached: " + "; ".join(
+                f"{name} ({errors.without_code(why, code)}{', ' + str(code) if code else ''})" for name, why, code in missed)
             if job_id:
                 _update_sync_job(job_id, "complete", f"Synced {count} rules. {reason}", rule_count=count)
                 sync_runs.finish(job_id, "partial", total=count, error=reason,
-                                 detail={"missed": [name for name, _ in missed]})
+                                 detail={"missed": [name for name, _, _ in missed]},
+                                 error_code=next((code for _, _, code in missed if code), None))
         elif job_id:
             _update_sync_job(job_id, "complete", f"Synced {count} rules", rule_count=count)
             sync_runs.finish(job_id, "success", total=count)
@@ -261,13 +264,13 @@ async def scheduled_sync(force_mapping=False, client_id: str | None = None, job_
         logger.info("TIDE will continue running — sync will retry on next user action")
         if job_id:
             _update_sync_job(job_id, "error", str(e))
-            sync_runs.finish(job_id, "failed", error=str(e))
+            sync_runs.finish(job_id, "failed", error=str(e), error_code=errors.classify(e))
 
 
 def _destinations_missed(client_id: str, since: datetime, only_siem_id: Optional[str] = None,
                          only_space: Optional[str] = None) -> list:
-    """(destination name, reason) for each of the client's destinations this sync couldn't reach:
-    its reachability check failed during the run (``siem_space_status``)."""
+    """(destination name, reason, its error code or None) for each of the client's destinations this sync
+    couldn't reach: its reachability check failed during the run (``siem_space_status``)."""
     from app.services.database import get_database_service
     from app.services.tenant_manager import tenant_context_for
     db = get_database_service()
@@ -287,8 +290,8 @@ def _destinations_missed(client_id: str, since: datetime, only_siem_id: Optional
         if checked is not None and getattr(checked, "tzinfo", None) is not None:
             checked = checked.replace(tzinfo=None)
         if checked is None or checked >= since:
-            out.append((names[(siem_id, space)], info.get("reason") or "no answer"))
-    return sorted(out)
+            out.append((names[(siem_id, space)], info.get("reason") or "no answer", info.get("code")))
+    return sorted(out, key=lambda m: m[:2])
 
 
 @asynccontextmanager
@@ -307,18 +310,21 @@ async def lifespan(app: FastAPI):
     if not settings.auth_disabled:
         _secret = settings.session_secret or ""
         if not _secret or _secret.startswith("change-me"):
-            raise RuntimeError(
-                "SESSION_SECRET is unset or still the placeholder value. "
-                "Set a random SESSION_SECRET in the environment before starting TIDE "
-                "(or set AUTH_DISABLED=true for local/dev use only)."
-            )
+            # Said in TIDE's log as well: uvicorn's own report of the failed start doesn't reach it.
+            error_log(errors.T460.title, code=errors.T460, event="startup")
+            raise errors.TideError(errors.T460)
 
-    # The maintenance window's restart (#82): compact the files it chose before any is opened.
+    # The maintenance window's restart (#82): compact the files it chose before any is opened. Then any
+    # database file mostly space no table holds, window or not (#116): it slows every sync's checkpoint.
     try:
         from app.services import maintenance
         maintenance.reclaim_at_startup()
     except Exception as exc:
         logger.error(f"Maintenance window: compacting at startup failed: {exc}", exc_info=True)
+    try:
+        maintenance.compact_grown_at_startup()
+    except Exception as exc:
+        logger.error(f"Compacting grown database files at startup failed: {exc}", exc_info=True)
 
     # Initialize database
     from app.services.database import get_database_service
@@ -379,6 +385,13 @@ async def lifespan(app: FastAPI):
                 logger.info(f"Encrypted {_sealed} stored credential(s) (data/credentials.key)")
         except Exception as _e:
             logger.error(f"Could not encrypt stored credentials: {_e}")
+        try:
+            _unreadable = db.unreadable_credentials()
+            if _unreadable:
+                logger.error(f"{_unreadable} stored credential(s) can't be decrypted with data/credentials.key",
+                             extra={"code": errors.T461})
+        except Exception as _e:
+            logger.warning(f"Could not check the stored credentials can be read: {_e}")
 
         # The first start with Keycloak in .env makes it the Keycloak integration TIDE signs in with.
         try:
@@ -581,12 +594,13 @@ async def lifespan(app: FastAPI):
         scheduler.start()
         logger.info("Scheduler started (rule-log export, backups and the maintenance window; sync is otherwise on demand)")
     except Exception as exc:
-        logger.error(f"Rule-log export scheduler failed to start: {exc}", exc_info=True)
+        logger.error(f"Rule-log export scheduler failed to start: {exc}", exc_info=True,
+                     extra={"code": errors.T560})
 
     # Say plainly, once, if a background service isn't running: TIDE works without them, but
     # what they do stops happening (Diagnostics → "Background services not running" shows it too).
     for name, consequence in background_services_down():
-        logger.error(f"Background service not running: {name}. {consequence}")
+        logger.error(f"Background service not running: {name}. {consequence}", extra={"code": errors.T560})
     from app.services import diagnostics as _diagnostics
     _diagnostics.background_status = background_services
     # From here, a DuckDB fatal error restarts TIDE rather than leaving that client failing (db_fatal);
@@ -1064,17 +1078,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     resp.headers["HX-Redirect"] = "/"
                     return resp
                 if is_api:
-                    return JSONResponse({"detail": "Insufficient permissions"}, status_code=403)
-                return JSONResponse(
-                    content="<h1>403 Forbidden</h1><p>You don't have access to this page.</p>",
-                    status_code=403,
-                    media_type="text/html",
-                )
+                    return errors.json_response(request, errors.A403, "Insufficient permissions", 403)
+                return errors.bare_page(request, errors.A403, "You don't have access to this page.", 403)
             # API write check (POST/PUT/DELETE)
             if is_api and request.method in ("POST", "PUT", "DELETE", "PATCH"):
                 res = self.resource_for(path, self.API_WRITE_RESOURCE_MAP)
                 if res and not user.can_write(res):
-                    return JSONResponse({"detail": "Write access denied"}, status_code=403)
+                    return errors.json_response(request, errors.A403, "Write access denied", 403)
             return None
         
         # Skip auth check if disabled (but still add cache headers)
@@ -1100,10 +1110,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         def _unauthorized_response(reason: str):
             if is_api:
-                return JSONResponse(
-                    {"detail": "Authentication required", "reason": reason, "login": login_url},
-                    status_code=401,
-                )
+                return errors.json_response(request, errors.A401, "Authentication required", 401,
+                                            reason=reason, login=login_url)
             if is_htmx:
                 from fastapi.responses import Response
                 response = Response(content="", status_code=200)
@@ -1248,14 +1256,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 return response
 
             if is_api:
-                response = JSONResponse(
-                    {
-                        "detail": "Authentication required",
-                        "reason": "token_validation_failed",
-                        "login": login_url,
-                    },
-                    status_code=401,
-                )
+                response = errors.json_response(request, errors.A401, "Authentication required", 401,
+                                                reason="token_validation_failed", login=login_url)
                 response.delete_cookie(
                     key="access_token",
                     path="/",
@@ -1385,107 +1387,103 @@ def create_app() -> FastAPI:
                 pass
         return response
     
-    # Exception handler for 401 errors (handle HTMX requests)
-    from fastapi import HTTPException as FastAPIHTTPException
+    # Failed requests (#117, app/services/errors.py). Every failure carries an error code: in the
+    # answer (JSON's "code", or the alert app.js turns into a toast), in X-TIDE-Error-Code and in the
+    # log. A 5xx also says its reference, the request id (X-TIDE-Error-Id), which finds its log line.
+    from fastapi.encoders import jsonable_encoder
     from fastapi.exceptions import RequestValidationError
     from starlette.exceptions import HTTPException as StarletteHTTPException
 
-    # 4.1.0 P1: catch-all unhandled-exception handler emits one structured
-    # tide.error log line (with traceback) and echoes the request id back to
-    # the caller via X-TIDE-Error-Id so support bundles can correlate the
-    # response with the JSON log entry.
+    def _page_user(request: Request):
+        """The signed-in user, for an error page's sidebar; None when that can't be told."""
+        try:
+            from app.services.auth import get_auth_service
+            auth = get_auth_service()
+            if settings.auth_disabled:
+                return auth.get_dev_user()
+            if request.cookies.get("session_token"):
+                return auth.get_user_from_session(request.cookies["session_token"])
+        except Exception:
+            pass
+        return None
+
+    def _error_page(request: Request, code, why: str, status: int):
+        """A failure as TIDE's own page (the Not Found page's), or a bare one when that can't be drawn."""
+        ref = errors.request_id(request)
+        try:
+            page = render_template("pages/core/placeholder.html", request, {
+                "user": _page_user(request), "active_page": "", "page_title": "Something went wrong",
+                "page_subtitle": " ".join(why.split()).rstrip(" .") + ".",
+                "error": {"code": code.code, "fix": code.fix, "reference": ref if status >= 500 and ref != "-" else None},
+            })
+            page.status_code = status
+            return page
+        except Exception:
+            logger.warning("Could not draw the error page", exc_info=True)
+            return errors.bare_page(request, code, why, status)
+
+    def _request_fields(request: Request) -> dict:
+        """The request's id, client and user for a log line written here: the request's own logging
+        context has ended by the time an unhandled exception reaches its handler."""
+        ctx = getattr(request.state, "tide_log_ctx", None) or {}
+        return {k: ctx.get(k, "-") for k in ("request_id", "client_id", "user_id", "route", "method")}
+
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception):
         if isinstance(exc, StarletteHTTPException):
             # Let the dedicated handler below take it (auth redirects etc.).
             raise exc
-        request_id = getattr(request.state, "request_id", "-")
-        error_log(
-            "unhandled_exception",
-            exc=exc,
-            path=request.url.path,
-            method=request.method,
-        )
-        from fastapi.responses import JSONResponse
-        from html import escape
-        from app.services.db_fatal import DatabaseUnavailable
-        # A client database left unavailable after a DuckDB fatal error says so (db_fatal).
-        unavailable = isinstance(exc, DatabaseUnavailable)
-        status = 503 if unavailable else 500
-        if request.url.path.startswith("/api/"):
-            resp = JSONResponse(
-                status_code=status,
-                content={"detail": str(exc) if unavailable else "Internal server error.", "request_id": request_id},
-            )
-        else:
-            resp = HTMLResponse(
-                content=(
-                    (f"<h1>This client's database is unavailable</h1><p>{escape(str(exc))}</p>" if unavailable
-                     else "<h1>Internal server error</h1>")
-                    + f"<p>Reference: <code>{request_id}</code></p>"
-                ),
-                status_code=status,
-            )
-        resp.headers["X-TIDE-Error-Id"] = request_id
-        return resp
+        code = errors.classify(exc)
+        # A TideError with a 4xx code is a refusal, not a failure; anything else is logged, a write
+        # conflict (D409) too, so Diagnostics counts how often it happens.
+        if not (isinstance(exc, errors.TideError) and (code.status or 500) < 500):
+            first = (str(exc).strip().splitlines() or [""])[0][:200]
+            error_log(f"Unexpected error ({code}) on {request.method} {request.url.path}: {type(exc).__name__}"
+                      + (f": {first}" if first else ""), exc=exc, code=code, event="unhandled_exception",
+                      path=request.url.path, **_request_fields(request))
+        return errors.response(request, code, errors.reason(exc, code), page=_error_page)
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(request: Request, exc: RequestValidationError):
+        # FastAPI's own answer, a list of what was wrong, stays the JSON's "detail".
+        return errors.response(request, errors.T422, errors.invalid_fields(exc.errors()), 422,
+                               detail=jsonable_encoder(exc.errors()), page=_error_page)
 
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(request: Request, exc: StarletteHTTPException):
-        # JSON API endpoints should return JSON errors, not HTML redirects
-        if request.url.path.startswith("/api/external"):
-            from fastapi.responses import JSONResponse
-            return JSONResponse(
-                status_code=exc.status_code,
-                content={"detail": exc.detail},
-            )
-
-        if exc.status_code == 401:
+        code = errors.classify(exc)
+        if exc.status_code == 401 and not request.url.path.startswith("/api/external"):
             login_url = f"/login?next={request.url.path}"
             if request.headers.get("HX-Request"):
                 response = HTMLResponse(content="", status_code=200)
                 response.headers["HX-Redirect"] = login_url
                 return response
             return RedirectResponse(url=login_url, status_code=302)
-        
+
         # Unknown browser pages get the app's "Not Found" page instead of bare JSON/HTML.
-        if (
-            exc.status_code == 404
-            and request.method == "GET"
-            and not request.url.path.startswith(("/api/", "/static/"))
-            and not request.headers.get("HX-Request")
-            and "text/html" in request.headers.get("accept", "")
-        ):
-            _nf_user = None
-            try:
-                from app.services.auth import get_auth_service
-                _auth = get_auth_service()
-                if settings.auth_disabled:
-                    _nf_user = _auth.get_dev_user()
-                elif request.cookies.get("session_token"):
-                    _nf_user = _auth.get_user_from_session(request.cookies["session_token"])
-            except Exception:
-                _nf_user = None
+        if exc.status_code == 404 and errors.is_page(request):
             try:
                 page = render_template(
                     "pages/core/placeholder.html",
                     request,
                     {
-                        "user": _nf_user,
+                        "user": _page_user(request),
                         "active_page": "",
                         "page_title": "Page Not Found",
                         "page_subtitle": "No page exists at this address.",
                     },
                 )
                 page.status_code = 404
+                page.headers.update(errors.error_headers(code, request))
                 return page
             except Exception:
                 logger.warning("Could not render the 404 page", exc_info=True)
 
-        # Default handling for other errors
-        return HTMLResponse(
-            content=f"<h1>Error {exc.status_code}</h1><p>{exc.detail}</p>",
-            status_code=exc.status_code
-        )
+        if exc.status_code >= 500:
+            error_log(f"Refused ({code}) {request.method} {request.url.path}: {exc.detail}", code=code,
+                      event="http_error", path=request.url.path, **_request_fields(request))
+        return errors.response(request, code, errors.reason(exc, code), exc.status_code, detail=exc.detail,
+                               headers=getattr(exc, "headers", None), page=_error_page)
     
     # Mount static files. TIDE's fonts (static/fonts) go out as fonts, not as unknown files.
     import mimetypes

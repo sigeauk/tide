@@ -14,6 +14,7 @@ from starlette.concurrency import run_in_threadpool
 from typing import Optional, Any, List, Dict, Tuple
 
 from app.api.deps import DbDep, CurrentUser, RequireUser, SettingsDep, ActiveClient
+from app.services import errors
 from app.services.database import validation_key, rule_state
 from app.services.rule_origins import is_prebuilt
 from app.models.rules import RuleFilters, RuleHealthMetrics, DetectionRule, rule_language_name, rule_type_name
@@ -1659,9 +1660,8 @@ async def test_rule(
             }
         )
     except Exception as e:
-        logger.exception(f"Test rule failed for {rule_id}")
         return HTMLResponse(
-            f'<div class="test-result test-error">Could not run the test: {str(e)}</div>',
+            f'<div class="test-result test-error">{escape(errors.could_not("run the test", e))}</div>',
             status_code=500
         )
 
@@ -1970,11 +1970,7 @@ async def get_create_form(
             ),
         )
     except Exception as e:
-        logger.exception("get_create_form failed")
-        return HTMLResponse(
-            f'<div class="alert alert-danger">Error loading form: {str(e)}</div>',
-            status_code=500,
-        )
+        return HTMLResponse(errors.could_not_alert("open the form", e), status_code=500)
 
 
 @router.post("/create", response_class=HTMLResponse)
@@ -2058,8 +2054,7 @@ async def create_rule(
             if note else None
         return HTMLResponse('<div hidden data-start-sync></div>', headers=headers)
     except Exception as e:
-        logger.exception("create_rule failed")
-        return _form_error(f"Could not create the rule: {e}", 500)
+        return _form_error(errors.could_not("create the rule", e), 500)
 
 
 @router.get("/{rule_id}/history", response_class=HTMLResponse)
@@ -3247,8 +3242,7 @@ def sync_single_rule(db, client_id: str, rule_id: str, siem_id: Optional[str], s
             field_data=FieldData(db, siem_id), ingest_delay=IngestDelay(db, siem_id),
         )
     except Exception as exc:
-        logger.exception("Targeted rule sync failed for %s", rule_id)
-        return 502, f"Could not reach the SIEM, so nothing was changed: {exc}", ""
+        return 502, errors.could_not("reach the SIEM, so nothing was changed", exc, "S", "Kibana"), ""
 
     if frame is None or frame.empty:
         if rule:
@@ -3283,8 +3277,7 @@ def sync_single_rule(db, client_id: str, rule_id: str, siem_id: Optional[str], s
             if lists:
                 rule_exceptions.read_lists(db, client_id, siem_id, space, lists, full["kibana_url"], full["api_token_enc"])
         except Exception as exc:
-            logger.warning("Could not read the exception lists of rule %s", rule_id, exc_info=True)
-            message += f" Could not read its exception lists: {exc}."
+            message += " " + errors.could_not("read its exception lists", exc, "S", "Kibana")
     # Elastic's own validator on it (#7), then what needs action on it now (Rule Monitoring); a
     # deprecated rule's issues are resolved.
     from app.services import elastic_validator, rule_issues

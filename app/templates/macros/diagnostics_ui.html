@@ -4,10 +4,15 @@
   check_list(checks, outcomes)  every check, grouped Install / Each client  (#diag-checks)
   check_row(check, outcome)     one check: its status on the right, its findings inside, per client
   table(columns, rows)          a padded table that scrolls inside a fixed height
+  code_link(code, text)         an error code (#117) as a link to its entry on the Error codes page
 
   ``outcome`` is app.services.diagnostics.by_check()[check.id], or none before the check has run.
 #}
 {% from "macros/icons.html" import icon %}
+
+{% macro code_link(code, text=none) -%}
+<a href="/settings/docs/errors#{{ code | lower }}" title="What {{ code }} means, and what to do">{{ text or code }}</a>
+{%- endmacro %}
 
 {# A rule cell ({text, rule: [rule_id, siem_id, space]}) opens the rule's window; a rule of another client
    than the active one (``part``: the client it was found in) switches to it first, then opens it. #}
@@ -75,7 +80,7 @@
         <p class="text-muted">{{ 'Not run yet. Use Run: Run all checks leaves this check out, because it copies each database.' if c.on_demand else 'Not run yet. Use Run, or Run all checks.' }}</p>
         {% else %}
         {% if o.status != 'ok' and o.count %}
-        <p class="diag-advice">{{ icon('info', '14') }} <span><strong>What to do:</strong> {{ c.advice }}</span></p>
+        <p class="diag-advice">{{ icon('info', '14') }} <span><strong>What to do:</strong> {{ c.advice }}{% if c.code %} {{ code_link(c.code.code, 'What ' ~ c.code.code ~ ' means') }}{% endif %}</span></p>
         {% endif %}
         {% for p in o.parts %}
         {% set r = p.result %}

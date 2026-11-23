@@ -48,8 +48,7 @@
                     body: JSON.stringify(payload),
                 });
                 if (!resp.ok) {
-                    var err = await resp.json();
-                    showToast(err.detail || 'Could not save the client.', 'error');
+                    showToast(await TIDE.fetchFailure(resp), 'error');
                     return;
                 }
                 closeModal();

@@ -249,7 +249,7 @@ Importing adds and never deletes: existing rows are kept, and a baseline whose n
 
 ## Reclaiming disk space
 
-A database file never shrinks on its own: syncs rewrite rows and leave free space behind. The [maintenance window](#the-maintenance-window) can reclaim it out of hours. To do it by hand, first see how much each file could shrink:
+A database file never shrinks on its own, and can come to hold far more space than its data. Space no table holds slows every sync, so TIDE compacts, as it starts, any file of 200 MB or more of which half or more is such space: checked table by table, and left untouched if a check fails. The original is kept beside it as `<file>.duckdb.pre-compact-<time>` until the file is next compacted; delete it once TIDE runs normally. TIDE's log says what was compacted. The [maintenance window](#the-maintenance-window) also reclaims space out of hours, from files that are 30% or more empty. To do it by hand, first see how much each file could shrink:
 
 ```bash
 docker exec tide-app python -m app.scripts.diag_sync --state
@@ -280,7 +280,8 @@ The file is rewritten and checked table by table before it replaces the original
 - **Snapshot:** the TIDE version, database schema, clients and their destinations (with whether each SIEM answered at the last sync), and recent errors from the log.
 - **Checks:** **Run all checks**, or one, for every client or one. Each finding says what it means and what to do. Checks only read data. The two database health checks (a client's database, and TIDE's own) copy the database and test every table's indexes on the copy, so they take a while on a large database and run only on their own **Run**.
 - **Look up:** everything TIDE holds for one rule, user or destination, with names and spaces shown exactly as stored, so stray spaces or invisible characters are marked.
-- **Sync activity:** every rule and Threat Landscape sync for the last 90 days, with **Retry**.
+- **Sync activity:** every rule and Threat Landscape sync for the last 90 days, with the error code of one that failed or missed a destination, and **Retry**.
+- **Recent errors:** the newest errors in TIDE's log, each with its [error code](ERRORS.md), and how many of each code there were in the last 24 hours. Each code links to what it means. A check whose findings are an error, such as a client's missing database file (D404), names its code too.
 - **Fixes:** some checks offer a fix. Fixes are off for every client until a super admin turns on **Allow diagnostic fixes** for it. A fix shows what it will change first, copies the client's database to `data/diagnostics-backups/` before changing anything, and can be undone.
 - **Database files with no client:** database files in `data/` that belong to no client, such as those of a client deleted before TIDE 6.4.0 (which left them behind) or an old CTI database. **Delete these files** lists them again and, once you type the word it asks for, deletes them for good (super admins only).
 - **What the browser security policy blocked:** TIDE tells browsers which scripts, styles and connections its pages may use (a Content-Security-Policy), and browsers block anything else. They report what they block to TIDE, which lists it here (and logs it the first time). Report what is listed from TIDE's own pages; something from a browser extension (`chrome-extension`, `moz-extension`) can be ignored. If the policy stops something in TIDE working, set `CSP_MODE=report-only` in `.env` (see [Settings](CONFIGURATION.md#optional)) until a release fixes it. Once what is listed is dealt with, **Clear this list** empties it (super admins only); a browser reports anything the policy still blocks again.
@@ -295,21 +296,25 @@ Every check, look-up, fix and access change is recorded in the audit log.
 
 | What you see | What to do |
 |--------------|------------|
-| A rule sync **Failed** or **Partly done** | Read the reason under Rule Health's title. Usually a SIEM was unreachable or refused its API key: check it with **Test connection** in the SIEM's dialog in Management → Integrations, then click **Retry**. |
+| A rule sync **Failed** or **Partly done** | Read the reason under Rule Health's title: it ends with an [error code](ERRORS.md). Usually a SIEM was unreachable ([S503](ERRORS.md#s503)) or refused its API key ([S401](ERRORS.md#s401)): check it with **Test connection** in the SIEM's dialog in Management → Integrations, then click **Retry**. |
 | A rule sync shows **Interrupted** | TIDE restarted during it. Click **Retry**. |
 | A rule sync shows **Done, steps failed** | The rules were read, but a step afterwards failed; the result says which and why. Click **Retry**. If it fails again, report the error from **Diagnostics → Sync activity** with TIDE's log from that time. |
-| Diagnostics shows **A database stopped after a DuckDB fatal error** | DuckDB stopped a client's database, so TIDE restarted itself, which repairs the rule history indexes. If that client's pages work, nothing more is needed. If they say its database stopped, a second error came within 10 minutes and TIDE didn't restart again: restart it with `docker compose restart tide-app`, and if it happens again, back up the data folder and report the error. |
-| Rules show **SIEM offline** | That destination didn't answer at the last sync. Fix the connection, then sync that destination. |
-| A connector shows **Failed**, or **Sync threats** reports an OpenCTI error | Hover for the reason, fix the address, token or certificate in the connector's form, test it with **Test connection** (its card's **⋮**), then choose **Sync threats** again. |
-| A certificate is refused | See [When a certificate is refused](CONFIGURATION.md#when-a-certificate-is-refused). |
-| Scheduled rule-log exports or backups stopped | A background service isn't running; Diagnostics shows it. Restart TIDE: `docker compose restart tide-app`. |
+| Diagnostics shows **A database stopped after a DuckDB fatal error** ([D560](ERRORS.md#d560), [D561](ERRORS.md#d561)) | DuckDB stopped a client's database, so TIDE restarted itself, which repairs the rule history indexes. If that client's pages work, nothing more is needed. If they say its database stopped, a second error came within 10 minutes and TIDE didn't restart again: restart it with `docker compose restart tide-app`, and if it happens again, back up the data folder and report the error. |
+| Rules show **SIEM offline** | That destination didn't answer at the last sync; hover the badge for why, and its code. Fix the connection, then sync that destination. |
+| A connector shows **Failed**, or **Sync threats** reports an OpenCTI error | Hover for the reason and its code (an I code, such as [I401](ERRORS.md#i401) for the token), fix the address, token or certificate in the connector's form, test it with **Test connection** (its card's **⋮**), then choose **Sync threats** again. |
+| A certificate is refused ([S495](ERRORS.md#s495), [A495](ERRORS.md#a495) or [I495](ERRORS.md#i495)) | See [When a certificate is refused](CONFIGURATION.md#when-a-certificate-is-refused). |
+| Scheduled rule-log exports or backups stopped | A background service isn't running ([T560](ERRORS.md#t560)); Diagnostics shows it. Restart TIDE: `docker compose restart tide-app`. |
 | A backup failed | Management → Backups shows why. Usually the disk is short of space: free some, or keep fewer backups. |
-| TIDE doesn't come up after a restart | Run `docker compose logs -f tide-app`. A large client database can make the first start after an upgrade slow; wait for `Application startup complete`. |
+| A page says **TIDE is starting or restarting** ([T503](ERRORS.md#t503)), or **TIDE didn't answer in time** ([T504](ERRORS.md#t504)) | TIDE itself isn't answering, so nginx says so. T503 reloads itself every 10 seconds: wait for it, as after an upgrade or the maintenance window's restart. If it doesn't come back, see the next row. For T504, try again; if every page hangs, `docker compose restart tide-app`. |
+| TIDE doesn't come up after a restart | Run `docker compose logs -f tide-app`. A large client database can make the first start after an upgrade slow; wait for `Application startup complete`. If it stops at an error with a code, such as [T460](ERRORS.md#t460) or [D563](ERRORS.md#d563), the error's `fix` field says what to do. |
+| A message ends with an error code, such as (D500) | Look the code up in [Error codes](ERRORS.md), which says what to do. If you report it, give the code, and the reference if the message has one. |
 | Anything else | Open **Diagnostics** and click **Run all checks**. |
 
 ### Logs
 
 TIDE's log is `data/log/tide.log`; `docker compose logs -f tide-app` shows it live. Each sync writes one entry when it starts and one when it ends, with the same result and reason shown on screen.
+
+Each error in the log has its [error code](ERRORS.md) in its `code` field and the request it happened in in `request_id`: a message's reference is that request id, so searching the log for it finds the error.
 
 For a read-only summary of TIDE's databases, safe to run while TIDE is in use:
 

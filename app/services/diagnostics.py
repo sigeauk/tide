@@ -13,11 +13,12 @@ import json
 import logging
 import os
 import re
-from collections import deque
+from collections import Counter, deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from app.services import errors
 from app.services.rule_issues import STALE_DAYS
 from app.services.search_query import SearchQuery
 
@@ -39,6 +40,7 @@ class Check:
     listing: bool = False    # rows are information to read, not problems to fix
     on_demand: bool = False  # slow (copies files): its own Run only, not Run all checks
     action: Optional[Tuple[str, str]] = None   # an install check's own remedy: (button, the GET that previews it)
+    code: Optional[errors.Code] = None         # the error code its findings are (#117), where they are one
 
 
 def _tables(conn) -> set:
@@ -302,8 +304,9 @@ def _database_fatal(conn, ctx):
         still = rec.get("db") in db_fatal.unavailable()
         rows.append((rec.get("at"), os.path.basename(rec.get("db") or ""), rec.get("error") or "",
                      "unavailable until TIDE restarts" if still
-                     else "restarted TIDE" if rec.get("restarted") else "left it unavailable until a restart"))
-    return ["when", "database", "error", "what TIDE did"], rows
+                     else "restarted TIDE" if rec.get("restarted") else "left it unavailable until a restart",
+                     str(errors.D560 if rec.get("restarted") and not still else errors.D561)))
+    return ["when", "database", "error", "what TIDE did", "code"], rows
 
 
 CHECKS: List[Check] = [
@@ -313,7 +316,7 @@ CHECKS: List[Check] = [
         "Pages still work, but what it does on its own has stopped.",
         "Restart TIDE. If it still isn't running, the log at startup says why "
         "('Background service not running', and the error before it).",
-        _background_services_down,
+        _background_services_down, code=errors.T560,
     ),
     Check(
         "keycloak_env_differs", "Keycloak settings in .env that TIDE no longer reads", "install", "warning",
@@ -355,13 +358,13 @@ CHECKS: List[Check] = [
         "TIDE upgraded but the shared database was not migrated, so pages that need newer tables or "
         "columns can fail.",
         "Restart TIDE so it runs its migrations, then check the log for 'Migrations complete'.",
-        _schema_behind,
+        _schema_behind, code=errors.D562,
     ),
     Check(
         "missing_tenant_db", "Clients whose database file is missing", "install", "error",
         "TIDE has a client whose data file is not in the data folder; that client's pages show nothing.",
         "Restore the file from a backup, or remove the client in Management if it is no longer used.",
-        _missing_tenant_db,
+        _missing_tenant_db, code=errors.D404,
     ),
     Check(
         "csp_violations", "What the browser security policy blocked", "install", "warning",
@@ -772,15 +775,16 @@ def by_check(results: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
 
 def recent_errors(log_path: Optional[str] = None, limit: int = 10, hours: int = 24,
                   client_ids: Optional[List[str]] = None) -> Dict[str, Any]:
-    """The newest ERROR lines in TIDE's log, and how many there were in the last ``hours``.
-    With ``client_ids``, only lines recorded against one of those clients (each line carries the
-    request's client), so one client's view never shows another's errors."""
+    """The newest ERROR lines in TIDE's log, each with its error code, and how many there were in the
+    last ``hours``, in all and by code (most first). With ``client_ids``, only lines recorded against
+    one of those clients (each line carries the request's client), so one client's view never shows
+    another's errors."""
     log_path = log_path if log_path is not None else os.getenv("TIDE_LOG_FILE", "/app/data/log/tide.log")
     if not log_path or not os.path.exists(log_path):
-        return {"available": False, "count": 0, "entries": []}
+        return {"available": False, "count": 0, "entries": [], "by_code": []}
     since = datetime.utcnow() - timedelta(hours=hours)
     newest: deque = deque(maxlen=limit)
-    count = 0
+    count, by_code = 0, Counter()
     with open(log_path, "rb") as fh:
         fh.seek(max(0, os.path.getsize(log_path) - 4 * 1024 * 1024))   # the last 4 MB is plenty
         for raw in fh:
@@ -796,11 +800,15 @@ def recent_errors(log_path: Optional[str] = None, limit: int = 10, hours: int = 
                 at = datetime.strptime(str(rec.get("ts", ""))[:19], "%Y-%m-%dT%H:%M:%S")
             except ValueError:
                 at = None
+            code = str(rec.get("code") or "")
             if at and at >= since:
                 count += 1
-            newest.append({"at": at, "logger": rec.get("logger", ""), "route": rec.get("route", ""),
+                if code:
+                    by_code[code] += 1
+            newest.append({"at": at, "code": code, "logger": rec.get("logger", ""), "route": rec.get("route", ""),
                            "message": str(rec.get("msg", ""))[:300]})
-    return {"available": True, "count": count, "entries": list(reversed(newest)), "hours": hours}
+    return {"available": True, "count": count, "entries": list(reversed(newest)), "hours": hours,
+            "by_code": sorted(by_code.items(), key=lambda cn: (-cn[1], cn[0]))}
 
 
 def snapshot(db, clients: List[Dict], full: bool = True) -> Dict[str, Any]:

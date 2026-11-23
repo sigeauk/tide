@@ -7,7 +7,7 @@ import logging
 import os
 import sys
 
-from app.services import tls
+from app.services import errors, tls
 
 logger = logging.getLogger(__name__)
 
@@ -574,22 +574,35 @@ def run_mitre_sync(client_id: str | None = None):
         # Recorded in sync_history by app.services.cti_jobs, which runs it (app.services.sync_runs).
 
 
-# A refused certificate is the whole host too: every space would fail the same way.
-_HOST_DOWN = ("Connection refused", "Connection timed out", "Certificate check failed")
+# Not reached, or its certificate refused: the whole host, so every space would fail the same way.
+_HOST_DOWN = (errors.S503, errors.S495)
 
 
-def _reachable_spaces(db, elastic_helper, siem: dict, kibana_url: str, token: str, spaces: list) -> list:
-    """Ping each linked space of ``siem`` before pulling it; return the ones that answered.
+def _reachable_spaces(db, elastic_helper, siem: dict, kibana_url: str, token: str, spaces: list) -> tuple:
+    """Ping each linked space of ``siem`` before pulling it: ``(the spaces to read, {space: reason} of
+    those only slow to answer)``.
 
     Each result is stored per (siem_id, space) so the Rules page can show that destination's
     rules as "SIEM offline" (kept from TIDE's last copy, never deprecated for it) until a later
-    sync reaches it again. Once the host itself is down, its other spaces are not pinged again."""
-    reachable = []
+    sync reaches it again. Once the host itself is down, its other spaces are not pinged again.
+
+    A space that took the connection but didn't answer in time (S504) is read anyway (#116): the
+    host is up, the read has its own time per page and retries, and an incomplete read deprecates
+    nothing (fetch_detection_rules). Skipping it left a large space's rules out of the sync, and out
+    of TIDE altogether until a sync caught it fast. Its reachability is stored after the read
+    (``_record_slow_spaces``)."""
+    reachable, slow = [], {}
     host_down = ""
     for space in spaces:
         ok, reason = (False, host_down) if host_down else elastic_helper.ping_detection_space(kibana_url, token, space)
-        if not ok and reason.startswith(_HOST_DOWN):
+        if not ok and getattr(reason, "code", None) in _HOST_DOWN:
             host_down = reason
+        if not ok and getattr(reason, "code", None) == errors.S504:
+            logger.warning("SIEM '%s' space '%s' didn't answer the check before sync in time (%s); reading it anyway.",
+                           siem.get("label"), space, reason)
+            slow[space] = reason
+            reachable.append(space)
+            continue
         try:
             db.record_siem_space_status(siem["id"], space, ok, reason)
         except Exception:
@@ -599,7 +612,49 @@ def _reachable_spaces(db, elastic_helper, siem: dict, kibana_url: str, token: st
         else:
             logger.warning("SIEM '%s' space '%s' unreachable before sync: %s; keeping its rules as they are.",
                            siem.get("label"), space, reason)
-    return reachable
+    return reachable, slow
+
+
+def _read_exception_lists(db, client_id: str, siem: dict, siem_id: str, spaces: list, siem_df, kurl: str,
+                          token: str) -> None:
+    """The exception lists the rules use (Rule Monitoring, #75): what changed since the last read goes
+    into the history of each rule using the list. The rules just read (``siem_df``) say which lists they
+    use: they aren't stored until later. Each space on its own (#116): one Kibana won't give doesn't stop
+    the next, and is a failed step of the sync, with which lists, why and its code."""
+    from app.services import rule_exceptions, sync_runs
+    try:
+        users = rule_exceptions.list_users(siem_df)
+        with db.get_connection() as conn:
+            wanted = {sp: rule_exceptions.space_lists(conn, siem_id, sp) | {key for key in users.get(sp, {})}
+                      for sp in spaces}
+    except Exception as exc:
+        logger.warning("Could not read the exception lists of SIEM '%s'", siem.get("label"), exc_info=True)
+        sync_runs.step_failed("Exceptions", exc)
+        return
+    for sp, lists in wanted.items():
+        try:
+            rule_exceptions.read_lists(db, client_id, siem_id, sp, lists, kurl, token,
+                                       {lid: ids for (lid, _ns), ids in users.get(sp, {}).items()})
+        except Exception as exc:
+            logger.warning("Could not read the exception lists of SIEM '%s' space '%s': %s", siem.get("label"), sp, exc,
+                           extra={"code": errors.classify(exc)})
+            sync_runs.step_failed("Exceptions", exc)
+
+
+def _record_slow_spaces(db, siem: dict, slow: dict, diagnostics: dict) -> None:
+    """The reachability of the spaces read although their check got no answer in time: reached when the
+    read brought their rules back (or found the space has none), else not reached, for the check's
+    reason (``diagnostics``: fetch_detection_rules' per space)."""
+    for space, reason in slow.items():
+        read = diagnostics.get(space) or {}
+        reached = bool(read.get("complete") or read.get("returned"))
+        try:
+            db.record_siem_space_status(siem["id"], space, reached, "" if reached else reason)
+        except Exception:
+            logger.warning("Could not store reachability for SIEM '%s' space '%s'", siem.get("label"), space, exc_info=True)
+        if not reached:
+            logger.warning("SIEM '%s' space '%s' couldn't be read either: %s; keeping its rules as they are.",
+                           siem.get("label"), space, reason)
 
 
 def _fetch_wazuh(db, client_id: str, siem: dict, spaces: list, weights, frames: list, attempted: dict,
@@ -896,7 +951,7 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False, only_siem_id: 
                     logger.info(f"Skipping SIEM '{siem.get('label')}' \u2014 missing url/token/spaces")
                     continue
                 siem_id = siem["id"]
-                spaces = _reachable_spaces(db, elastic_helper, siem, kurl, token, spaces)
+                spaces, slow = _reachable_spaces(db, elastic_helper, siem, kurl, token, spaces)
                 if not spaces:
                     continue
                 # Which of Elastic's per-version builds of its rules this SIEM gets (Rule Health's
@@ -969,21 +1024,7 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False, only_siem_id: 
                     except Exception as _exc:
                         logger.warning("Could not read the alert outcomes of SIEM '%s'", siem.get('label'), exc_info=True)
                         sync_runs.step_failed("Alert outcomes", _exc)
-                    # The exception lists the rules use (Rule Monitoring, #75): what changed since the
-                    # last read goes into the history of each rule using the list.
-                    # The rules just read say which lists they use: they aren't stored until later.
-                    try:
-                        from app.services import rule_exceptions
-                        users = rule_exceptions.list_users(siem_df)
-                        with db.get_connection() as _conn:
-                            wanted = {sp: rule_exceptions.space_lists(_conn, siem_id, sp)
-                                      | {key for key in users.get(sp, {})} for sp in spaces}
-                        for sp, lists in wanted.items():
-                            rule_exceptions.read_lists(db, client_id, siem_id, sp, lists, kurl, token,
-                                                       {lid: ids for (lid, _ns), ids in users.get(sp, {}).items()})
-                    except Exception as _exc:
-                        logger.warning("Could not read the exception lists of SIEM '%s'", siem.get('label'), exc_info=True)
-                        sync_runs.step_failed("Exceptions", _exc)
+                    _read_exception_lists(db, client_id, siem, siem_id, spaces, siem_df, kurl, token)
                     # Pull per-space drift diagnostics so the subtractive
                     # passes below can be skipped for any (siem, space) where
                     # the fetch was incomplete (e.g. Kibana outage mid-sync).
@@ -1012,6 +1053,7 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False, only_siem_id: 
                 except Exception as e:
                     logger.error(f"Fetch failed for SIEM '{siem.get('label')}': {e}")
                     siem_diagnostics[siem_id] = {}
+                _record_slow_spaces(db, siem, slow, siem_diagnostics.get(siem_id) or {})
 
             df = _pd.concat(frames, ignore_index=True) if frames else _pd.DataFrame()
 
