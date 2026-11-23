@@ -32,6 +32,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
+from app.services.search_query import SearchQuery
+
 logger = logging.getLogger(__name__)
 
 STALE_DAYS = 7           # a destination not synced for this long is stale (#65)
@@ -43,6 +45,14 @@ NEVER_RUN_AFTER = timedelta(hours=1)    # an enabled rule with no run this long 
 # bookmarks may still name them.
 FIXERS = {"engineer": "Engineer", "author": "Author", "tide": "TIDE"}
 _FIXERS_BEFORE = {"data": "engineer", "platform": "engineer"}
+
+
+def fixer_of(issue: str, cause: str = "") -> str:
+    """Who fixes a finding: its issue's, except Marked for tuning, whose outcome says (rule_tuning)."""
+    if issue == "marked_for_tuning" and cause:
+        from app.services.rule_tuning import fixer_of_cause
+        return fixer_of_cause(cause)
+    return KNOWN.get(issue, KNOWN["other"]).fixer
 
 
 def fixer_values(values) -> List[str]:
@@ -64,6 +74,7 @@ class Issue:
     level: str          # "rule": found per rule; "destination": one SIEM space as a whole
     meaning: str        # what it means, in plain words
     check: str          # what to check or do
+    kind: str = "health"    # "health": does the rule work; "tuning": is it worth its alerts (rule_tuning)
 
 
 KNOWN: Dict[str, Issue] = {i.id: i for i in (
@@ -126,7 +137,7 @@ KNOWN: Dict[str, Issue] = {i.id: i for i in (
           "Check the roles of the user who last saved the rule in Kibana: they need read on its index patterns."),
     Issue("max_alerts", "Reached the maximum alerts per run", "author", "warning", "rule",
           "The rule found more matches than it may turn into alerts in one run, so some weren't raised.",
-          "Tune the rule to match less, or raise its maximum alerts per run."),
+          "Tune the rule to match less, or raise its maximum alerts per run.", kind="tuning"),
     Issue("gap", "Runs were missed", "engineer", "warning", "rule",
           "Some of the rule's scheduled runs didn't happen, so events in those periods weren't searched.",
           "Check Kibana's task manager capacity; add Kibana instances or lengthen the rule's look-back."),
@@ -165,7 +176,7 @@ KNOWN: Dict[str, Issue] = {i.id: i for i in (
           "The rule raises more alerts than analysts can look at: on average more a day than the client allows, or "
           "most of its space's alerts. Alerts like these are usually false positives that bury the true ones.",
           "Tune the rule: add exceptions for known-good activity, narrow its query, or group its alerts (alert "
-          "suppression). The client's thresholds are on its page."),
+          "suppression). The client's thresholds are on its page.", kind="tuning"),
     Issue("silent", "No alerts for a long time", "author", "warning", "rule",
           "The rule has been enabled a long while and raised no alert in the time the client allows. It may be "
           "right (the attack hasn't happened), or quietly broken: a query that can't match, or data it never gets. "
@@ -175,7 +186,65 @@ KNOWN: Dict[str, Issue] = {i.id: i for i in (
     Issue("alert_spike", "Alerts spiked", "author", "warning", "rule",
           "The rule raised far more alerts in a day than it usually does. A rise like this usually follows a change: "
           "an edit, a new data source, or an exception removed. The change TIDE recorded just before it is named.",
-          "Look at the change named, and at the new alerts in Kibana: tune the rule if they are false positives."),
+          "Look at the change named, and at the new alerts in Kibana: tune the rule if they are false positives.",
+          kind="tuning"),
+    Issue("alert_drop", "Alerts stopped after a change", "author", "warning", "rule",
+          "The rule raised alerts every day, then none from a change TIDE recorded to it: an edit, an exception, or an "
+          "update merged. The change may have tuned it into silence. The mirror of Alerts spiked. Not listed when a "
+          "problem with its data or query already explains the silence.",
+          "Look at the change named: check the rule can still fire (Test it against recent data), and that an exception "
+          "added doesn't except more than intended. If the alerts were all unwanted, nothing is needed.", kind="tuning"),
+    Issue("tuning_no_effect", "Tuning didn't help", "author", "warning", "rule",
+          "Someone marked the rule as tuned 14 days or more ago, and its alerts a day not needing action (or its alerts "
+          "a day, where too few outcomes were recorded) fell by less than half since.",
+          "Look at what the tuning changed, in the rule's Tuning section, and at its alerts in Kibana. Record what they "
+          "are with Record outcome…, with Needs tuning ticked, to mark it again.", kind="tuning"),
+    Issue("alerts_unreviewed", "Alerts left open", "author", "warning", "rule",
+          "Most of the alerts the rule raised more than a week ago, in the last 30 days, are still open in Kibana: "
+          "at least 50, and 80% or more. Nobody is closing or acknowledging them, so they may not be looked at. Cases "
+          "close their alerts only when the analyst chooses so as they close the case.",
+          "Check whether its alerts are worked: tune the rule so it raises fewer, or close them in Kibana as they are "
+          "reviewed. The client can turn this off on its page.", kind="tuning"),
+    Issue("marked_for_tuning", "Marked for tuning", "author", "warning", "rule",
+          "Someone marked the rule for tuning in TIDE (Record outcome… in its window), saying what its alerts turned "
+          "out to be. Its cause is the outcome most of those alerts had. False positives from bad data are the "
+          "engineers' to fix; the rest are the author's.",
+          "Tune it as the outcome calls for: an exception or alert suppression for expected activity or duplicates, a "
+          "narrower query for false positives, the pipeline or parser for bad data. Then use Mark as tuned… in its "
+          "window, or Dismiss… if it needs no change.", kind="tuning"),
+    # From what the rule's alerts turned out to be (rule_tuning.outcome_findings): Kibana's outcomes, else
+    # those people recorded in TIDE. The client sets the shares and the judged alerts needed on its page.
+    Issue("mostly_false_positives", "Mostly false positives", "author", "warning", "rule",
+          "Half or more of the rule's judged alerts in the client's window were false positives: it fires on "
+          "activity it wasn't written to catch.",
+          "Narrow its query to what it is meant to catch. Look at its false positives in Kibana for what they share.",
+          kind="tuning"),
+    Issue("bad_data_alerts", "False positives from bad data", "engineer", "warning", "rule",
+          "A quarter or more of the rule's judged alerts in the client's window came from wrong, incomplete or "
+          "misparsed data: a parser, a mapping, clock skew.",
+          "Fix the pipeline, parser or mapping that feeds it, then check its alerts again.", kind="tuning"),
+    Issue("mostly_expected", "Mostly expected activity", "author", "warning", "rule",
+          "Most of the rule's judged alerts in the client's window were benign true positives: it caught what it "
+          "was written to catch, but the activity was expected or authorised.",
+          "Add an exception for the known-good host, user or process, or suppress its repeated alerts.", kind="tuning"),
+    Issue("mostly_duplicates", "Mostly duplicates", "author", "warning", "rule",
+          "Half or more of the rule's judged alerts in the client's window were duplicates of an alert already "
+          "raised, by it or by another rule.",
+          "Turn on alert suppression, or retire the rule that duplicates another.", kind="tuning"),
+    Issue("often_undetermined", "Often undetermined", "author", "info", "rule",
+          "Half or more of the rule's alerts given an outcome in the client's window couldn't be decided from the "
+          "alert and the logs.",
+          "Give analysts more to go on: a better investigation guide, or more context fields in the alert.",
+          kind="tuning"),
+    Issue("no_true_positives", "No true positives", "author", "info", "rule",
+          "The rule had 50 or more judged alerts in 90 days and none was a true positive. Worth a look, though some "
+          "rules are rightly rare.",
+          "Check whether it still earns its alerts. A rule meant to be rare can be muted.", kind="tuning"),
+    Issue("cases_unreadable", "Cases couldn't be read", "engineer", "warning", "destination",
+          "TIDE couldn't read this space's closed cases at the last sync, so it can't tell which of its alerts sit "
+          "in closed cases, or take outcomes from them. Kibana refuses a key without Cases read.",
+          "Give the SIEM's API key Cases read under Security in this space (feature_securitySolutionCasesV3.read "
+          "on 8.19), then sync again.", kind="tuning"),
     Issue("wazuh_agents_disconnected", "Wazuh agents disconnected", "engineer", "warning", "destination",
           "Agents of this destination haven't reported to the Wazuh manager within the time the client expects new "
           "data, so nothing they see is alerted on or scanned. It is an error when none of them has, as the "
@@ -213,6 +282,10 @@ KNOWN: Dict[str, Issue] = {i.id: i for i in (
           "detection, so with both enabled each alert is raised twice.",
           "Use Compare with the copy, on the rule's row or in its window, then choose: delete the copy, keep both (the "
           "copy gets a rule id of its own), or keep both and disable the rule TIDE shows."),
+    Issue("name_spaces", "Rule name has spaces around it", "author", "info", "rule",
+          "The rule's name in Kibana starts or ends with a space. The rule runs as it should, but anything that "
+          "finds a rule by its name, such as a link typed by name, an export or a search, can miss it.",
+          "Use Remove the spaces here for all of them, or Edit the rule and take the spaces off its name."),
     Issue("custom_elastic_id", "Custom rule using one of Elastic's rule ids", "tide", "warning", "rule",
           "While it does, Kibana can't install Elastic's own rule in this space.",
           "Open the rule and use Give it its own rule id."),
@@ -226,27 +299,27 @@ KNOWN: Dict[str, Issue] = {i.id: i for i in (
           "The rule has more exception items than the client allows (its own list and the shared lists it "
           "uses). Each is reasonable on its own; together they can mute the rule without anyone noticing.",
           "Review its Exceptions: remove those no longer needed, merge overlapping ones, or narrow the rule's "
-          "query so fewer are needed. The client sets how many are too many on its page."),
+          "query so fewer are needed. The client sets how many are too many on its page.", kind="tuning"),
     Issue("exception_broad", "Exception matches almost anything", "author", "warning", "rule",
           "An exception item whose every condition is a wildcard-only value (such as process.name matches \"*\") "
           "excepts every event that has those fields, so the rule raises almost nothing.",
-          "Narrow the exception to the activity it was meant for, or remove it."),
+          "Narrow the exception to the activity it was meant for, or remove it.", kind="tuning"),
     Issue("exception_recent", "Exception added recently", "author", "info", "rule",
           "An exception item was added to a list the rule uses in the last 7 days. Worth a look: it may "
           "except more than intended.",
-          "Check the exception in the rule's Exceptions section, and its history."),
+          "Check the exception in the rule's Exceptions section, and its history.", kind="tuning"),
     Issue("duplicate_query", "Same detection deployed twice", "author", "warning", "rule",
           "Two or more enabled rules in this space search the same index patterns with the same query (and, for "
           "a threshold, new terms or indicator match rule, the same settings), under different names or rule "
           "ids: a re-import, or one copy from Sigma and one from Elastic. Every event alerts once per copy, and "
           "tuning one leaves the other as it was.",
           "Keep one: disable or delete the others, or change one so it finds something different. A copy kept "
-          "on purpose can be linked to the other (Add link in its window), and isn't listed then."),
+          "on purpose can be linked to the other (Add link in its window), and isn't listed then.", kind="tuning"),
     Issue("upstream_update_pending", "Upstream update not reviewed", "author", "warning", "rule",
           "Elastic or SigmaHQ updated the rule this one came from a while ago, and the update hasn't been reviewed. "
           "Upstream fixes (fewer false positives, new fields, broader matching) don't reach your copy until then.",
           "Open the rule and use Review update in its Upstream section: take the sections you want, or keep it as "
-          "it is. The client sets how long an update may wait on its page."),
+          "it is. The client sets how long an update may wait on its page.", kind="tuning"),
     Issue("prebuilt_updates", "Elastic's prebuilt rules have updates", "engineer", "info", "destination",
           "Elastic has newer versions of prebuilt rules installed in this space, and has had them longer than the "
           "client allows. Kibana installs them itself, all at once, so they are one finding here rather than one "
@@ -434,6 +507,13 @@ def catalogue_findings(rule: Dict[str, Any], entries: Dict[str, Any],
     return out
 
 
+def still_searched(kibana: List[Tuple[str, str, str, str]], rule: Dict[str, Any]) -> List[Tuple[str, str, str, str]]:
+    """Kibana's findings less any "no index" for a pattern the rule no longer searches: its last run was
+    of the rule before that pattern was changed, and says nothing about the rule as it is now."""
+    patterns = {str(p) for p in rule.get("index") or [] if p}
+    return [f for f in kibana if f[0] != "no_index" or not patterns or f[1] in patterns]
+
+
 def ran_as_it_stands(last: Dict[str, Any], updated_at) -> bool:
     """Whether Kibana's last run of a rule succeeded after the rule last changed: its query as it
     stands ran without error."""
@@ -579,6 +659,57 @@ def spike_findings(counts: Dict[Any, int], changes: List[Tuple[datetime, str, st
     else:
         why = ", with no change to the rule recorded in the two weeks before: its data may have changed."
     return [("alert_spike", "", KNOWN["alert_spike"].severity, rose + why)]
+
+
+# Alerts stopped after a change: at least 5 a day in the 14 days before a change in the last 30, and none in
+# the 3 or more full days since. The changes that can tune a rule into silence.
+DROP_MIN_A_DAY, DROP_BASE_DAYS, DROP_QUIET_DAYS, DROP_LOOKBACK_DAYS = 5, 14, 3, 30
+_DROP_CHANGES = ("edited", "exception_added", "exception_changed", "upstream_update")
+
+
+def drop_findings(counts: Dict[Any, int], changes: List[Tuple[datetime, str, str, Dict[str, Any]]],
+                  until: Any) -> List[Tuple[str, str, str, str]]:
+    """The mirror of ``spike_findings``: an enabled rule that averaged ``DROP_MIN_A_DAY`` alerts a day in the
+    ``DROP_BASE_DAYS`` before a change recorded in its history (``_DROP_CHANGES``, in the last
+    ``DROP_LOOKBACK_DAYS``) and has raised none since, ``DROP_QUIET_DAYS`` full days or more. The latest such
+    change is named. ``counts`` are its alerts per UTC day, ``until`` today (UTC); history keeps local time."""
+    from app.services import rule_alerts
+    for when, action, actor, detail in sorted(changes, key=lambda c: c[0], reverse=True):
+        if action not in _DROP_CHANGES:
+            continue
+        day = when.astimezone(timezone.utc).date()
+        if day < until - timedelta(days=DROP_LOOKBACK_DAYS):
+            break
+        quiet = (until - day).days - 1           # whole days since, today not one of them
+        if quiet < DROP_QUIET_DAYS:
+            continue                             # too soon to tell; an earlier change may be the one
+        if any(n for d, n in counts.items() if d > day):
+            return []                            # it raised alerts after this change, so after any earlier one too
+        before = rule_alerts.recent(counts, DROP_BASE_DAYS, day - timedelta(days=1)) / DROP_BASE_DAYS
+        if before >= DROP_MIN_A_DAY:
+            return [("alert_drop", "", KNOWN["alert_drop"].severity,
+                     f"Averaged {before:,.0f} alerts a day in the {DROP_BASE_DAYS} days before {actor or 'someone'} "
+                     f"{_change_text(action, detail)} on {when:%d %b}, and none in the {quiet} full days since.")]
+    return []
+
+
+# Alerts left open: of the alerts raised UNREVIEWED_AFTER to UNREVIEWED_DAYS days ago, at least UNREVIEWED_MIN,
+# UNREVIEWED_PCT % or more still open. The client can turn it off (rule_alerts.DEFAULTS, alerts_unreviewed).
+UNREVIEWED_MIN, UNREVIEWED_PCT, UNREVIEWED_AFTER, UNREVIEWED_DAYS = 50, 80, 7, 30
+
+
+def unreviewed_findings(by_status: Dict[str, int], in_closed_cases: int = 0) -> List[Tuple[str, str, str, str]]:
+    """An enabled rule whose alerts of more than a week ago (``by_status``: those days' alerts by
+    workflow status, ``rule_alerts.by_status``) are mostly still open: nobody closes or acknowledges them.
+    Those left open in a case that was closed (``in_closed_cases``) were looked at, so don't count (D11)."""
+    total = sum(by_status.values())
+    still = max(0, by_status.get("open", 0) - in_closed_cases)
+    if total < UNREVIEWED_MIN or still * 100 < UNREVIEWED_PCT * total:
+        return []
+    cased = f" A further {in_closed_cases:,} are open in closed cases." if in_closed_cases else ""
+    return [("alerts_unreviewed", "", KNOWN["alerts_unreviewed"].severity,
+             f"{still:,} of the {total:,} alerts it raised {UNREVIEWED_AFTER + 1} to {UNREVIEWED_DAYS} days ago are "
+             f"still open ({still / total:.0%}).{cased}")]
 
 
 # Slow searches (#76): the median of the last SLOW_RUNS (as the score's search-time check takes it) at
@@ -1111,6 +1242,15 @@ def detect(db, conn, scopes: Optional[Set[Tuple[str, str]]] = None,
             delays = {}
         # Each rule's alerts per day, and each space's (#68); its recent changes (#69, #70).
         alerts = rule_alerts.daily(conn, {(siem_id, sp) for _r, sp, *_x in parsed})
+        # The statuses of its alerts of more than a week ago, for Alerts left open, unless the client turned it off.
+        statuses = rule_alerts.by_status(conn, {(siem_id, sp) for _r, sp, *_x in parsed},
+                                         until - timedelta(days=UNREVIEWED_DAYS - 1),
+                                         until - timedelta(days=UNREVIEWED_AFTER + 1)) if limits.get("alerts_unreviewed") else {}
+        # Those days' alerts left open in a case that was closed (rule_outcomes): looked at, so not counted.
+        from app.services import rule_outcomes
+        in_cases = {k: sum(v.get("case_open", {}).values()) for k, v in rule_outcomes.scope_totals(
+            conn, {(siem_id, sp) for _r, sp, *_x in parsed}, until - timedelta(days=UNREVIEWED_DAYS - 1),
+            until - timedelta(days=UNREVIEWED_AFTER + 1)).items()} if statuses else {}
         history = _rule_history(conn, siem_id)
         first_seen = _first_seen(conn, siem_id)
         searches = _search_samples(conn, siem_id)      # each rule's search times (#76)
@@ -1139,7 +1279,7 @@ def detect(db, conn, scopes: Optional[Set[Tuple[str, str]]] = None,
             return own["hours"] if own else default_hours
 
         for rule_id, space, enabled, last, rule, updated_at, last_updated in parsed:
-            kibana = kibana_findings(last) if enabled else []
+            kibana = still_searched(kibana_findings(last), rule) if enabled else []
             for issue, cause, severity, detail in kibana:
                 add(issue, cause, siem_id, space, rule_id, severity, detail)
             catalogued = catalogue_findings(rule, entries, {f[0] for f in kibana})
@@ -1186,11 +1326,37 @@ def detect(db, conn, scopes: Optional[Set[Tuple[str, str]]] = None,
                 explained = (_explains_silence(rule_found.get((siem_id, space, rule_id), {}))
                              or (rule["source"] == "wazuh" and not rule["custom"]))
                 since = _enabled_since(rule["created"], changes, first_seen.get((rule_id, space)))
+                # Wazuh's alerts have no workflow status: Alerts left open is Kibana's alone.
+                kibana_alerts = rule["source"] != "wazuh"
                 for issue, cause, severity, detail in (
                         alert_findings(counts, space_alerts.get(space, {}), limits, until)
                         + spike_findings(counts, changes, until)
-                        + ([] if explained else silent_findings(counts, since, limits, until, datetime.now()))):
+                        + ([] if explained else silent_findings(counts, since, limits, until, datetime.now())
+                           + drop_findings(counts, changes, until))
+                        + (unreviewed_findings(statuses.get((siem_id, space, rule["kibana_id"]), {}),
+                                               in_cases.get((siem_id, space, rule["kibana_id"]), 0))
+                           if limits.get("alerts_unreviewed") and kibana_alerts else [])):
                     add(issue, cause, siem_id, space, rule_id, severity, detail)
+
+    # Rules people marked for tuning (rule_tuning), enabled or not: a person chose them.
+    try:
+        from app.services import rule_tuning
+        held = {(r[0], r[1], r[2]) for r in rules}
+        for (rule_id, siem_id, space), (cause, detail) in rule_tuning.mark_findings(conn, held).items():
+            if wanted(siem_id, space, rule_id):
+                add("marked_for_tuning", cause, siem_id, space, rule_id, KNOWN["marked_for_tuning"].severity, detail)
+        # Tunings that didn't help, on enabled rules (as TIDE's other tuning findings).
+        enabled_rules = {(r[0], r[1], r[2]) for r in rules if r[3]}
+        for (rule_id, siem_id, space), (cause, detail) in rule_tuning.no_effect_findings(conn, enabled_rules).items():
+            if wanted(siem_id, space, rule_id):
+                add("tuning_no_effect", cause, siem_id, space, rule_id, KNOWN["tuning_no_effect"].severity, detail)
+        # What their alerts turned out to be: Kibana's outcomes, else people's (D10), on enabled rules.
+        for (rule_id, siem_id, space), found_here in rule_tuning.outcome_findings(conn, enabled_rules, limits).items():
+            if wanted(siem_id, space, rule_id):
+                for issue, detail in found_here:
+                    add(issue, "", siem_id, space, rule_id, KNOWN[issue].severity, detail)
+    except Exception:
+        logger.warning("Could not read the rules marked for tuning", exc_info=True)
 
     tables = {r[0] for r in conn.execute("SELECT table_name FROM duckdb_tables()").fetchall()}
     # Custom rules under the rule id of one of Elastic's rules (rule_origins.elastic_id_held, in SQL).
@@ -1204,6 +1370,14 @@ def detect(db, conn, scopes: Optional[Set[Tuple[str, str]]] = None,
                     f"Uses Elastic's rule id {rule_id}.")
     except Exception:
         logger.debug("No Elastic rule index to check custom rules against", exc_info=True)
+    # Names with spaces round them (#113), on the rules TIDE can rename: not Elastic's prebuilt ones, nor Wazuh's.
+    for rule_id, siem_id, space, name in conn.execute(
+            f"SELECT rule_id, siem_id, space, name FROM detection_rules WHERE NOT COALESCE(deprecated, false) "
+            f"AND name <> trim(name) AND trim(name) <> '' AND NOT {PREBUILT_SQL} "
+            f"AND COALESCE(json_extract_string(raw_data, '$.type'), '') <> 'wazuh'").fetchall():
+        if wanted(siem_id, space, rule_id):
+            add("name_spaces", "", siem_id, space, rule_id, KNOWN["name_spaces"].severity,
+                f'Named "{name}" in Kibana.')
     # Custom rules linked to an Elastic rule they don't match, until the link is reviewed (rule_updates).
     try:
         from app.services.rule_diff import sections_text
@@ -1304,6 +1478,12 @@ def detect(db, conn, scopes: Optional[Set[Tuple[str, str]]] = None,
                 source = "Wazuh" if siem_id in wazuh_ids else "Kibana"
                 add("alerts_unreadable", "", siem_id, space, "", KNOWN["alerts_unreadable"].severity,
                     f"{source} didn't give its alerts at the last sync: {read['error'] or 'no answer'}.")
+        # A space whose closed cases the key couldn't read, while its alerts were (rule tuning, R30).
+        from app.services import rule_outcomes
+        for (siem_id, space), read in rule_outcomes.reads(conn).items():
+            if not read["cases_ok"] and (reads.get((siem_id, space)) or {}).get("ok") and wanted(siem_id, space):
+                add("cases_unreadable", "", siem_id, space, "", KNOWN["cases_unreadable"].severity,
+                    f"Kibana didn't give its closed cases at the last sync: {read['cases_error'] or 'no answer'}.")
     return found
 
 
@@ -1493,6 +1673,11 @@ def _refresh(db, conn, scopes: Optional[Set[Tuple[str, str]]] = None,
                      "WHERE w.siem_id = x.s AND w.space = x.sp)", [now, [p[0] for p in pairs], [p[1] for p in pairs]])
     conn.execute("DELETE FROM rule_issues WHERE resolved_at < ?", [now - timedelta(days=RESOLVED_DAYS)])
     conn.execute("DELETE FROM rule_issue_history WHERE resolved_at < ?", [now - timedelta(days=HISTORY_DAYS)])
+    try:            # the effect of tunings whose days have passed, kept while the alerts are (rule_tuning)
+        from app.services import rule_tuning
+        rule_tuning.settle(conn)
+    except Exception:
+        logger.warning("Could not keep the effect of past tunings", exc_info=True)
     return {"open": len(found), "new": new, "resolved": len(resolved)}
 
 
@@ -1714,6 +1899,7 @@ def pending_changes(client_id: Optional[str]) -> List[Dict[str, Any]]:
 # ── the Rule Monitoring page ─────────────────────────────────────────────
 
 SEVERITIES = (("error", "Error"), ("warning", "Warning"), ("info", "Info"))
+KINDS = (("health", "Health"), ("tuning", "Tuning"))      # does the rule work; is it worth its alerts
 GROUPS = (("issue", "Issue"), ("fixer", "Who fixes"), ("destination", "SIEM / destination"), ("rule", "Rule"))
 SHOW = (("open", "Open"), ("resolved", "Resolved recently"))
 RULES = (("enabled", "Enabled"), ("all", "Include disabled"))
@@ -1766,7 +1952,8 @@ def view(conn, destinations: List[Dict[str, Any]], filters: Dict[str, Any],
         f["destination"] = names.get((f["siem_id"], f["space"]))
         known = KNOWN.get(f["issue"], KNOWN["other"])
         # sort_name: as a rule's row shows it, its name or, for a rule TIDE no longer holds, its rule id.
-        f.update(title=known.title, fixer=known.fixer, fixer_label=FIXERS[known.fixer], age=_age(f["first_seen"], now),
+        fixer = fixer_of(f["issue"], f["cause"])
+        f.update(title=known.title, fixer=fixer, fixer_label=FIXERS[fixer], kind=known.kind, age=_age(f["first_seen"], now),
                  sort_name=str(f["name"] or f["rule_id"] or "").lower(),
                  copies=copies.get(_item(f), []) if f["issue"] == "shared_rule_id" else [],
                  unlinkable=f["issue"] == "custom_elastic_id" and _item(f) in linked,
@@ -1785,14 +1972,13 @@ def view(conn, destinations: List[Dict[str, Any]], filters: Dict[str, Any],
         """The filter bar's other choices, all but ``skip`` (a filter's counts leave out its own choice)."""
         if scope and skip != "scope":
             rows = [f for f in rows if f"{f['siem_id']}|{f['space']}" == scope]
-        for field in ("severity", "fixer", "issue"):
+        for field in ("severity", "fixer", "issue", "kind"):
             wanted = set(filters.get(field) or [])
             if wanted and field != skip:
                 rows = [f for f in rows if f[field] in wanted]
-        search = str(filters.get("search") or "").strip().lower()
+        search = SearchQuery(filters.get("search"))
         if search:
-            rows = [f for f in rows if any(search in str(f.get(k) or "").lower()
-                                           for k in ("name", "cause", "detail", "title", "destination"))]
+            rows = [f for f in rows if search.matches(*(f.get(k) for k in ("name", "cause", "detail", "title", "destination")))]
         return rows
 
     def tally(rows, field) -> Dict[str, int]:
@@ -1826,7 +2012,7 @@ def view(conn, destinations: List[Dict[str, Any]], filters: Dict[str, Any],
     # Each choice's count is what the list holds once it is picked, with the other filters as they are.
     counts = {field: tally(narrowed(before, field), key) for field, key in (
         ("severity", lambda f: f["severity"]), ("fixer", lambda f: f["fixer"]), ("issue", lambda f: f["issue"]),
-        ("scope", lambda f: f"{f['siem_id']}|{f['space']}"))}
+        ("kind", lambda f: f["kind"]), ("scope", lambda f: f"{f['siem_id']}|{f['space']}"))}
     found = narrowed(before)
     group = filters.get("group") or "issue"
     open_rows = found if show == "open" else narrowed(shown("open"))
@@ -1873,7 +2059,8 @@ def rule_findings(conn, keys: Iterable[Tuple[str, str, str]],
         if ack and counts.get(_cause_key(f), 0) > ack["rules"]:
             ack = None                   # the cause affects more rules than when it was muted: it's back
         mute = _muted(mutes, f)
-        f.update(title=known.title, fixer=known.fixer, fixer_label=FIXERS[known.fixer], age=_age(first_seen, now),
+        fixer = fixer_of(issue, cause)
+        f.update(title=known.title, fixer=fixer, fixer_label=FIXERS[fixer], kind=known.kind, age=_age(first_seen, now),
                  muted={**mute, "what": "rule"} if mute else {**ack, "what": "cause"} if ack else None)
         out.setdefault((rule_id, siem_id, space), []).append(f)
     for found in out.values():
@@ -1882,22 +2069,30 @@ def rule_findings(conn, keys: Iterable[Tuple[str, str, str]],
 
 
 def card_problems(found: List[Dict[str, Any]], enabled: bool) -> Optional[Dict[str, Any]]:
-    """What a rule's card flags of its findings (``rule_findings``): every one not muted, as a pill
-    for each severity among them, errors first (#107). ``{disabled, pills}``, each pill
-    ``{severity, tone, count, lines}``, or None. A pill's ``tone`` is its severity on an enabled rule,
-    and on a disabled one when TIDE's own (its rule id) are among them, which matter either way; else
-    "muted": they would stop the rule working only if it were switched on, so its card shows them in grey."""
+    """What a rule's card flags of its findings (``rule_findings``): every one not muted. Those about
+    whether it works as a pill for each severity among them, errors first (#107); those about whether it
+    is worth its alerts (``kind`` tuning) as one tuning pill. ``{disabled, pills, tuning}``, each pill
+    ``{severity, tone, count, lines}``, ``tuning`` ``{count, lines}`` or None; None when nothing shows.
+    A pill's ``tone`` is its severity on an enabled rule, and on a disabled one when TIDE's own (its rule
+    id) are among them, which matter either way; else "muted": they would stop the rule working only if
+    it were switched on, so its card shows them in grey."""
     shown = [f for f in found if not f["muted"]]
     if not shown:
         return None
+
+    def line(f):
+        return f["title"] + (f" ({f['cause']})" if f["cause"] else "")
+
     pills = []
     for severity, _ in SEVERITIES:
-        these = [f for f in shown if f["severity"] == severity]
+        these = [f for f in shown if f["severity"] == severity and f.get("kind") != "tuning"]
         if these:
             live = enabled or any(f["fixer"] == "tide" for f in these)
             pills.append({"severity": severity, "tone": severity if live else "muted", "count": len(these),
-                          "lines": [f["title"] + (f" ({f['cause']})" if f["cause"] else "") for f in these]})
-    return {"disabled": not enabled, "pills": pills}
+                          "lines": [line(f) for f in these]})
+    tuning = [f for f in shown if f.get("kind") == "tuning"]
+    return {"disabled": not enabled, "pills": pills,
+            "tuning": {"count": len(tuning), "lines": [line(f) for f in tuning]} if tuning else None}
 
 
 FLOW_CARDS = ("rules", "errors", "warnings", "info", "causes")
@@ -1935,14 +2130,14 @@ def flows(conn, destinations: List[Dict[str, Any]], filters: Dict[str, Any], sta
     start = since or start
     all_rules = (filters.get("rules") or "enabled") == "all"
     wanted = {"severity": set(filters.get("severity") or []), "fixer": set(fixer_values(filters.get("fixer"))),
-              "issue": set(filters.get("issue") or [])}
+              "issue": set(filters.get("issue") or []), "kind": set(filters.get("kind") or [])}
     acks, counts_now, mutes = _acks(conn), _open_counts(conn), _mutes(conn)
     spans: Dict[str, Dict[Any, List[Tuple[datetime, Optional[datetime], datetime]]]] = {k: {} for k in FLOW_CARDS}
     for issue, cause, s, sp, rule_id, severity, opened, resolved, enabled in stored:
         if (s, sp) not in in_scope or (s, sp) not in watched:
             continue
         f = {"issue": issue, "cause": cause, "siem_id": s, "space": sp, "rule_id": rule_id, "severity": severity,
-             "fixer": KNOWN.get(issue, KNOWN["other"]).fixer, "cluster": clusters.get(s, s)}
+             "fixer": fixer_of(issue, cause), "kind": KNOWN.get(issue, KNOWN["other"]).kind, "cluster": clusters.get(s, s)}
         if any(v and f[k] not in v for k, v in wanted.items()):
             continue
         if not (all_rules or not rule_id or enabled or f["fixer"] == "tide"):
@@ -2389,9 +2584,11 @@ def _issue_markdown(issue: str, nodes: List[Dict[str, Any]], labels: Dict[str, s
     else:
         title = f"### {known.title}"
     either = _EITHER_SIDE.get(issue)
-    role = audience if either and audience in (known.fixer, either[0]) else known.fixer
-    who = (f"{FIXERS[known.fixer]}, or {FIXERS[either[0]]} {either[1]}" if either and role == known.fixer
-           else f"{FIXERS[role]} {either[1]}, or else {FIXERS[known.fixer]}" if either else FIXERS[known.fixer])
+    causes = {n["cause"] for n in nodes}
+    own = fixer_of(issue, causes.pop() if len(causes) == 1 else "")
+    role = audience if either and audience in (own, either[0]) else own
+    who = (f"{FIXERS[own]}, or {FIXERS[either[0]]} {either[1]}" if either and role == own
+           else f"{FIXERS[role]} {either[1]}, or else {FIXERS[own]}" if either else FIXERS[own])
     places = {(f["siem_id"], f["space"]) for f in rows}
     affects = (f"- **Rules affected:** {_rules_count(rules)}" if rules
                else "- **Affects:** the whole destination" if len(places) == 1
@@ -2560,7 +2757,9 @@ def _issues(rows, within: Tuple[str, ...] = ()) -> List[Dict[str, Any]]:
     nodes = []
     for issue, part in _split(rows, lambda f: f["issue"]).items():
         known = KNOWN.get(issue, KNOWN["other"])
-        node = _node("issue", issue, known.title, part, fixer=FIXERS[known.fixer], meaning=known.meaning,
+        fixers = {f["fixer"] for f in part if f.get("fixer")}
+        node = _node("issue", issue, known.title, part, fixer=FIXERS[fixers.pop() if len(fixers) == 1 else known.fixer],
+                     meaning=known.meaning,
                      check=known.check, path=[*within, issue])
         node["children"] = _causes(part)
         nodes.append(node)

@@ -63,7 +63,7 @@
         </div>
     </div>
 </div>
-{% set rh_filter_include = "[name='search'], [name='space'], [name='enabled'], [name='state'], [name='linked_to'], [name='upstream'], [name='rule_type'], [name='language'], [name='min_score'], [name='max_score'], [name='validation'], [name='validated_from'], [name='validated_to'], [name='sort_score'], [name='sort_validated'], [name='sort_name'], [name='sort_col'], [name='sort_dir'], [name='view']" %}
+{% set rh_filter_include = "[name='search'], [name='space'], [name='enabled'], [name='state'], [name='linked_to'], [name='upstream'], [name='rule_type'], [name='language'], [name='min_score'], [name='max_score'], [name='validation'], [name='tuning'], [name='validated_from'], [name='validated_to'], [name='updated_from'], [name='updated_to'], [name='sort_score'], [name='sort_validated'], [name='sort_name'], [name='sort_updated'], [name='sort_col'], [name='sort_dir'], [name='view']" %}
 
 <div class="rule-browser-controls">
 <!-- Metrics Row -->
@@ -105,8 +105,8 @@
                      enabled, counts.enabled or {}, rh_hx) }}
 
     {# The count names the filters that narrow the list; a sort (data-filter-order) only orders it. #}
-    {% set active = [state or linked_to, upstream, rule_type, language, min_score or max_score,
-                     validation or validated_from or validated_to] | select | list | length %}
+    {% set active = [state or linked_to, upstream, rule_type, language, tuning, min_score or max_score,
+                     validation or validated_from or validated_to, updated_from or updated_to] | select | list | length %}
     {% set rh_sort = rh_hx ~ ' data-filter-order' %}
     {% call more_filters('filters', active) %}
         {# State: the card's badge. Linked to narrows Linked to the rules linked to a copy at one of the SIEM
@@ -149,8 +149,14 @@
                         {'kuery': 'Kibana Query Language', 'lucene': 'Lucene query syntax',
                          'eql': 'Event Query Language', 'esql': 'Elasticsearch Query Language'}) }}
 
-        {# Score, Validate and Name sort (Score and Validate narrow too); the page script names them on their buttons.
-           Validate's date range narrows the validated rules; Never validated has no date, so it sets the range aside. #}
+        {# Marked for tuning (an open mark, from Record outcome… in the rule window), or tuned lately. #}
+        {{ filter_multi('rh-tuning', 'tuning', 'Tuning', tuning_options, tuning, 'Any', counts.tuning or {}, rh_hx,
+                        {'marked': 'Someone marked it for tuning, and it is not yet tuned or dismissed',
+                         'tuned': 'Marked as tuned in the last 30 days'}) }}
+
+        {# Score, Validate, Last updated and Name sort (all but Name narrow too); the page script names them on their
+           buttons. Validate's date range narrows the validated rules; Never validated has no date, so it sets the
+           range aside. Last updated is when Kibana last changed the rule; a range leaves out rules with no date. #}
         {% call filter_dropdown('rh-score', 'Score', 'Score') %}
             <div class="tide-filter-section-label">Sort</div>
             {{ choice_rows('rh-sort-score', 'sort_score', [('desc', 'High → Low'), ('asc', 'Low → High'), ('', 'Off')], sort_score, attrs=rh_sort) }}
@@ -174,6 +180,16 @@
             <div class="tide-filter-range">
                 <input type="date" name="validated_from" value="{{ validated_from }}" class="form-input" {{ rh_hx | safe }}>
                 <input type="date" name="validated_to" value="{{ validated_to }}" class="form-input" {{ rh_hx | safe }}>
+            </div>
+        {% endcall %}
+
+        {% call filter_dropdown('rh-updated', 'Last updated', 'Last updated', tip='When the rule was last changed in Kibana') %}
+            <div class="tide-filter-section-label">Sort</div>
+            {{ choice_rows('rh-sort-updated', 'sort_updated', [('desc', 'Newest → Oldest'), ('asc', 'Oldest → Newest'), ('', 'Off')], sort_updated, attrs=rh_sort) }}
+            <div class="tide-filter-section-label">Date range</div>
+            <div class="tide-filter-range">
+                <input type="date" name="updated_from" value="{{ updated_from }}" class="form-input" aria-label="Last updated from" {{ rh_hx | safe }}>
+                <input type="date" name="updated_to" value="{{ updated_to }}" class="form-input" aria-label="Last updated to" {{ rh_hx | safe }}>
             </div>
         {% endcall %}
 
@@ -211,6 +227,12 @@
                 title="Give each selected custom rule that uses one of Elastic's rule ids a rule id of its own">{{ icon('copy', '14') }} Give own rule id</button>
         <button type="button" class="btn btn-secondary btn-sm" data-bulk-action="raise_issue"
                 title="Raise a GitLab issue for each selected rule, with its Rule Monitoring problems">{{ icon('gitlab', '14') }} Raise issue</button>
+        {% if can_tune %}
+        <button type="button" class="btn btn-secondary btn-sm" data-bulk-action="record_outcome"
+                title="Record the same outcome on each selected rule, and whether they need tuning">{{ icon('sliders-horizontal', '14') }} Record outcome</button>
+        <button type="button" class="btn btn-secondary btn-sm" data-bulk-action="mark_tuned"
+                title="Close the mark for tuning on each selected rule that has one: they were tuned">{{ icon('circle-check', '14') }} Mark as tuned</button>
+        {% endif %}
         <button type="button" class="btn btn-danger btn-sm" data-bulk-action="delete">{{ icon('trash-2', '14') }} Delete</button>
     </span>
     <p class="bulk-bar__hint" id="bulk-hint"></p>

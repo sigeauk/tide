@@ -174,6 +174,11 @@ hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset" hx-trigger="
             hx-post="/api/promotion/compare-copies" hx-vals='{"items": {{ node.rule_keys | tojson | tojson }}}'
             hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
             title="Compare each copy with Elastic's rule in turn, and choose for each">{{ icon_text('git-branch', 'Compare them one by one', '13') }}</button>
+    {% elif node.rule_keys and node.issue == 'name_spaces' %}
+    <button name="Remove The Spaces" type="button" class="btn btn-secondary btn-sm"
+            hx-post="/api/rules/bulk-edit/dialog" hx-vals='{"action": "trim_name", "items": {{ node.rule_keys | tojson | tojson }}}'
+            hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+            title="Rename each of these rules in Kibana without the spaces around its name, in one go">{{ icon_text('pencil', 'Remove the spaces', '13') }}</button>
     {% elif node.rule_keys and node.issue == 'change_pending' %}
     <button name="Finish Them In TIDE" type="button" class="btn btn-secondary btn-sm"
             hx-post="/api/rules/bulk-edit/dialog" hx-vals='{"action": "finish", "items": {{ node.rule_keys | tojson | tojson }}}'

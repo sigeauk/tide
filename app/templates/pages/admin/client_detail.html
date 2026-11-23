@@ -12,7 +12,7 @@
 {% block content %}
 {# The header as every page has it (Rule Health's, the System page's): breadcrumb, then the title with
    its pill and ?, the description, and the ⋮ level with the title. #}
-{{ breadcrumb(items=[('Home', '/'), ('Settings', '/settings'), ('Clients', '/settings/management?tab=clients'), (client.name, none)]) }}
+{{ breadcrumb(items=[('Settings', '/settings'), ('Clients', '/settings/management?tab=clients'), (client.name, none)]) }}
 <div class="page-header flex items-start justify-between gap-md">
     <div>
         <h1 class="page-title-hero">
@@ -80,12 +80,12 @@
     {% for key, ico, label in tabs %}
     <button name="{{ label }}" type="button" role="tab" id="client-tab-btn-{{ key }}" class="settings-tab{% if key == tab %} active{% endif %}"
             aria-selected="{{ 'true' if key == tab else 'false' }}" aria-controls="client-tab-{{ key }}"
-            data-click="clientDetail.tab" data-tab="{{ key }}">{{ icon(ico, '16') }} {{ label }}</button>
+            data-click="ui.tab" data-tab="{{ key }}">{{ icon(ico, '16') }} {{ label }}</button>
     {% endfor %}
 </div>
 
 {% macro tab_panel(key) -%}
-<div id="client-tab-{{ key }}" role="tabpanel" aria-labelledby="client-tab-btn-{{ key }}" data-client-tab="{{ key }}"
+<div id="client-tab-{{ key }}" role="tabpanel" aria-labelledby="client-tab-btn-{{ key }}"
      data-fold-store="tide.clientPageFolds"{% if key != tab %} hidden{% endif %}>
     {{ caller() }}
 </div>
@@ -136,6 +136,13 @@
 {% call tab_panel('settings') %}
     {% call section('validation', 'Validation', 'client-validation') %}{% include "partials/client_validation.html" %}{% endcall %}
     {% call section('monitoring', 'Rule Monitoring', 'client-monitoring') %}{% include "partials/client_monitoring.html" %}{% endcall %}
+    {# Outcomes from Kibana: loaded on demand (partials/client_outcomes.html replaces #client-outcomes, head and all) #}
+    <section class="card card-padded card-mb sys-section" id="client-outcomes-card" data-fold="outcomes" aria-label="Outcomes from Kibana">
+        <div id="client-outcomes" hx-get="/api/management/clients/{{ client.id }}/outcomes" hx-trigger="load" hx-swap="outerHTML">
+            {{ section_head('Outcomes from Kibana', 'sliders-horizontal') }}
+            <div class="sys-section__body">{{ loading_state("Loading outcomes from Kibana…", inline=true) }}</div>
+        </div>
+    </section>
     {# Rule scoring: loaded on demand (partials/client_scoring.html replaces #client-scoring, head and all) #}
     <section class="card card-padded card-mb sys-section" id="client-scoring-card" data-fold="scoring" aria-label="Rule scoring">
         <div id="client-scoring" hx-get="/api/management/clients/{{ client.id }}/scoring" hx-trigger="load" hx-swap="outerHTML">

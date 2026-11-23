@@ -199,17 +199,21 @@ def unlinked_name(conn, row: Optional[Dict[str, Any]]) -> str:
 
 
 def search(conn, origin: str, text: str, limit: int = 8) -> List[Dict[str, Any]]:
-    """Elastic's or the Sigma rules (``origin``) whose name holds ``text``, or whose rule id is it: the
-    exact name first, then those still in use, by name. ``[{"rule_id", "name", "deprecated"}]``."""
+    """Elastic's or the Sigma rules (``origin``) whose name matches ``text`` (TIDE's search), or whose
+    rule id is it: the exact name first, then names holding ``text`` as typed (the start of a name,
+    say), then those still in use, by name. ``[{"rule_id", "name", "deprecated"}]``."""
+    from app.services.search_query import SearchQuery
     table, name = {"elastic": ("elastic_rules_index", "name"), "sigma": ("sigma_rules_index", "title")}.get(origin, (None, None))
     text = (text or "").strip()
     if not table or len(text) < 2:
         return []
+    cond, search_params = SearchQuery(text).sql(name)
     try:
         return [{"rule_id": r, "name": n, "deprecated": s == "deprecated"} for r, n, s in conn.execute(
-            f"SELECT rule_id, {name}, status FROM {table} WHERE {name} ILIKE ? OR rule_id = ? "
-            f"ORDER BY lower({name}) = lower(?) DESC, status = 'deprecated', lower({name}) LIMIT ?",
-            [f"%{text}%", text, text, int(limit)]).fetchall()]
+            f"SELECT rule_id, {name}, status FROM {table} WHERE {cond} OR rule_id = ? "
+            f"ORDER BY lower({name}) = lower(?) DESC, contains(lower({name}), lower(?)) DESC, "
+            f"status = 'deprecated', lower({name}) LIMIT ?",
+            [*search_params, text, text, text, int(limit)]).fetchall()]
     except Exception as exc:
         logger.warning("Searching the %s rules failed: %s", origin, exc)
         return []

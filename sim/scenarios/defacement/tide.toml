@@ -1,0 +1,75 @@
+# What a simulation of this scenario sets up in its client's TIDE when it starts, and removes when it
+# ends: the attack as a baseline, the system it hit (with the baseline applied, counting the
+# simulation's space as its coverage), and the steps known to be uncovered. The rules in rules.toml are
+# mapped to the baseline's techniques by their `covers`, which is a technique's title here.
+#
+# priority: critical, high, medium or low. category: identity, endpoint, network (and TIDE's others).
+
+[baseline]
+name = "Web defacement: Po1s0n1vy"
+description = "How Po1s0n1vy took over and defaced imreallynotbatman.com on 10 August 2016, as recorded in Splunk's Boss of the SOC v1."
+
+[[baseline.technique]]
+tactic = "Reconnaissance"
+techniques = ["T1595.002"]
+title = "Vulnerability scan of the website"
+priority = "medium"
+category = "network"
+description = "An Acunetix scan of imreallynotbatman.com from 40.80.148.42 looks for weaknesses in the Joomla site."
+
+[[baseline.technique]]
+tactic = "Initial Access"
+techniques = ["T1190"]
+title = "SQL injection probing of the website"
+priority = "high"
+category = "network"
+description = "The scanner sends SQL injection and other exploit attempts at the site's pages."
+
+[[baseline.technique]]
+tactic = "Credential Access"
+techniques = ["T1110.001"]
+title = "Brute force of the Joomla administrator login"
+priority = "high"
+category = "identity"
+description = "23.22.63.114 tries hundreds of passwords against /joomla/administrator/index.php; 40.80.148.42 then logs in."
+
+[[baseline.technique]]
+tactic = "Persistence"
+techniques = ["T1505.003"]
+title = "Web shell on the web server"
+priority = "critical"
+category = "endpoint"
+description = "Commands run through the web server: php-cgi.exe starts cmd.exe on we1149srv."
+
+[[baseline.technique]]
+tactic = "Command and Control"
+techniques = ["T1105"]
+title = "Attacker tool uploaded and run"
+priority = "high"
+category = "endpoint"
+description = "3791.exe is uploaded into the Joomla web root and started."
+
+[[baseline.technique]]
+tactic = "Discovery"
+techniques = ["T1087.001", "T1033"]
+title = "Account and network discovery"
+priority = "medium"
+category = "endpoint"
+description = "whoami, net user, net view and tasklist, run through 3791.exe's reverse shell to 23.22.63.114."
+
+[[baseline.technique]]
+tactic = "Impact"
+techniques = ["T1491.002"]
+title = "Website defaced"
+priority = "high"
+category = "network"
+description = "The home page is replaced with poisonivy-is-coming-for-you-batman.jpeg, fetched from the attacker's server."
+
+[[system]]
+name = "imreallynotbatman.com"
+description = "Wayne Enterprises' public website: Joomla on IIS, on we1149srv."
+hosts = [{ name = "we1149srv", ip = "192.168.250.70", os = "Windows Server 2012 R2" }]
+
+[[known_gap]]
+technique = "Website defaced"
+reason = "No file integrity monitoring on the web root: the defacement shows only as the image download in the network capture, and nothing alerts on it."

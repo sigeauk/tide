@@ -1,0 +1,40 @@
+{#
+  Rule Tuning's four figures (rule_tuning.page ``metrics``), for the filters shown, laid out as Rule Health's:
+  the rules to tune, the alerts a day they raise, the client's share of judged alerts not needing action,
+  and the rules tuned lately with the alerts a day that saved.
+#}
+{% from "macros/metrics.html" import metric_card %}
+{% set m = metrics %}
+{% macro per_day(x) -%}{{ '%.1f' | format(x) if x < 10 else '{:,.0f}'.format(x) }}{%- endmacro %}
+
+{% call metric_card('rules', none, none, 'metric-card--tip', tip=true) %}
+    <p class="metric-value{{ ' warning' if m.rules }}">{{ m.rules }}</p>
+    <p class="metric-label">Rules to tune</p>
+    <p class="metric-sub">{{ m.people }} by people · {{ m.kibana }} from Kibana · {{ m.tide }} by TIDE</p>
+    <div class="metric-tip" role="tooltip">Rules with a reason to tune them, for the filters shown: a mark for tuning, what Kibana says their
+        alerts turned out to be, or something TIDE found in their alerts, exceptions or updates. A rule can have several.</div>
+{% endcall %}
+
+{% call metric_card('per_day', none, none, 'metric-card--tip', tip=true) %}
+    <p class="metric-value">{{ per_day(m.per_day) }}</p>
+    <p class="metric-label">Alerts a day from them</p>
+    <p class="metric-sub">{% if m.all_per_day %}{{ '{:.0%}'.format(m.per_day / m.all_per_day) }} of all {{ per_day(m.all_per_day) }} a day{% else %}No alerts counted{% endif %}</p>
+    <div class="metric-tip" role="tooltip">Alerts a day over the last 7 days, as of the last sync: the rules to tune, then every rule in the destinations shown.</div>
+{% endcall %}
+
+{% call metric_card('not_actionable', none, none, 'metric-card--tip', tip=true) %}
+    <p class="metric-value">{{ '{:.0%}'.format(m.not_actionable) if m.not_actionable is not none else '—' }}</p>
+    <p class="metric-label">Not actionable</p>
+    <p class="metric-sub">of {{ '{:,}'.format(m.judged) }} judged alert{{ '' if m.judged == 1 else 's' }}, {{ m.days }} days{% if m.none %} · {{ '{:,}'.format(m.none) }} closed with no outcome{% endif %}</p>
+    <div class="metric-tip" role="tooltip">Of the alerts judged in the last {{ m.days }} days, on any rule, the share that needed no action:
+        benign true positives, false positives and duplicates. Each rule's come from Kibana when it holds any, else from what people
+        recorded in TIDE. Shown once {{ m.min_judged }} are judged.</div>
+{% endcall %}
+
+{% call metric_card('tuned', none, none, 'metric-card--tip', tip=true) %}
+    <p class="metric-value{{ ' success' if m.tuned }}">{{ m.tuned }}</p>
+    <p class="metric-label">Tuned</p>
+    <p class="metric-sub">{% if m.ready %}{{ per_day(m.saved) }} alerts a day {{ 'saved' if m.saved >= 0 else 'added' }}{% else %}in the last {{ m.tuned_days }} days{% endif %}</p>
+    <div class="metric-tip" role="tooltip">Rules marked as tuned in the last {{ m.tuned_days }} days. Beneath: how many fewer alerts a day they raise in
+        the 14 days after their tuning than in the 14 before, for those 14 days on.</div>
+{% endcall %}

@@ -1,0 +1,31 @@
+{#
+  Record outcome's fields (rule_tuning.OUTCOMES), in the rule window's dialog and bulk edit's: the outcome, its
+  meaning beneath it as it is chosen, how many alerts, a note, and Needs tuning, ticked for an outcome that calls
+  for tuning, with who fixes what it calls for (shell.js, tuning.outcome).
+#}
+{% macro outcome_fields(outcomes, max_alerts, max_note, alerts_label='Alerts') -%}
+<div class="mb-md">
+    <label class="form-label" for="tuning-outcome">Outcome</label>
+    <select id="tuning-outcome" name="outcome" class="form-input" required data-change="tuning.outcome">
+        <option value="" selected disabled>Choose an outcome…</option>
+        {% for o in outcomes %}
+        <option value="{{ o.key }}" data-meaning="{{ o.meaning }}" data-tune="{{ 'true' if o.tune else 'false' }}"
+                data-fixer="{{ {'author': 'Author', 'engineer': 'Engineer'}.get(o.fixer, '') }}">{{ o.label }}</option>
+        {% endfor %}
+    </select>
+    <p class="text-muted fs-sm mt-xs" data-tuning-meaning>What the alerts turned out to be.</p>
+</div>
+<div class="mb-md">
+    <label class="form-label" for="tuning-alerts">{{ alerts_label }}</label>
+    <input id="tuning-alerts" name="alerts" type="number" class="form-input" value="1" min="1" max="{{ max_alerts }}" required>
+</div>
+<div class="mb-md">
+    <label class="form-label" for="tuning-note">Note</label>
+    <textarea id="tuning-note" name="note" class="form-input" rows="3" maxlength="{{ max_note }}"
+              placeholder="For example: SCCM runs this hourly on the build servers."></textarea>
+</div>
+<label class="flex items-center gap-sm mb-md">
+    <input type="checkbox" name="needs_tuning" value="true" data-tuning-needs> Needs tuning
+    <span class="text-muted fs-sm" data-tuning-fixer></span>
+</label>
+{%- endmacro %}

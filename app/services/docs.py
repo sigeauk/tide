@@ -54,6 +54,7 @@ PAGES: List[Page] = [
     Page("getting-started", "Getting started", DOCS / "GETTING_STARTED.md", "use", "Signing in, choosing a client, and the controls every page shares."),
     Page("systems", "Systems & baselines", DOCS / "SYSTEMS.md", "use", "Systems, baselines and their techniques, coverage, risks, devices and CVEs."),
     Page("threats", "Threat intelligence", DOCS / "THREATS.md", "use", "Threat Landscape, the Heatmap and the MITRE pages."),
+    Page("simulations", "Simulations", DOCS / "SIMULATIONS.md", "use", "Replaying an attack into your SIEM for your analysts to investigate, and playing one."),
     Page("rules", "Rules", DOCS / "RULES.md", "engineer", "Rule Health, the rule window, Move, Compare and Merge, and upstream updates."),
     Page("libraries", "Sigma, Elastic & Hunting", DOCS / "LIBRARIES.md", "engineer", "Converting and deploying Elastic's and the Sigma rules, and running hunts."),
     Page("install", "Installing TIDE", ROOT / "README.md", "admin", "What TIDE needs, and installing it."),
@@ -70,7 +71,7 @@ _FILE_URLS = {"README": "/settings/docs/install", "CONFIGURATION": "/settings/do
               "GETTING_STARTED": "/settings/docs/getting-started", "SYSTEMS": "/settings/docs/systems",
               "THREATS": "/settings/docs/threats", "RULES": "/settings/docs/rules",
               "LIBRARIES": "/settings/docs/libraries", "CLIENTS": "/settings/docs/clients",
-              "AT_A_GLANCE": "/settings/docs/at-a-glance",
+              "AT_A_GLANCE": "/settings/docs/at-a-glance", "SIMULATIONS": "/settings/docs/simulations",
               "CHANGELOG": "/settings/changelog"}
 _DOC_LINK = re.compile(r'href="(?:\.\./)?(?:docs/)?(' + "|".join(_FILE_URLS) + r')\.md(#[^"]*)?"')
 
@@ -192,6 +193,7 @@ HELP = {
     "cves": ("systems", "devices-and-cves"),
     "rule-health": ("rules", "rule-health"),
     "rule-monitoring": ("rules", "rule-monitoring"),
+    "rule-tuning": ("rules", "rule-tuning"),
     "sigma": ("libraries", "sigma-rules"),
     "elastic": ("libraries", "elastic-rules"),
     "hunting": ("libraries", "hunting"),
@@ -203,6 +205,8 @@ HELP = {
     "client": ("clients", "link-destinations-to-a-client"),
     "diagnostics": ("operations", "diagnostics"),
     "profile": ("getting-started", "your-profile"),
+    "simulations": ("simulations", "the-simulations-page"),
+    "simulation": ("simulations", "playing-a-simulation"),
 }
 
 

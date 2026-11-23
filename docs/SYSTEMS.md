@@ -44,12 +44,13 @@ The page's **⋮** menu has **Edit system** and **Export report**. As on the Bas
 Who can: anyone who can edit Systems.
 
 1. In the **Baselines** section's **⋮** menu, choose **Add baseline**.
-2. Either pick a template and click **Apply**, or name an empty baseline of the system's own and click **Create baseline**. Applying gives the system its own copy, with each technique's risks as a starting point.
+2. Either pick a template and click **Apply**, or name an empty baseline of the system's own and click **Create baseline**, or under **Or import one** choose a baseline's TIDE JSON **File** (a baseline's or a template's **Export**, from this TIDE or another) and click **Import**. Applying gives the system its own copy, with each technique's risks as a starting point; importing makes one of the system's own, with the file's techniques, their priority and category, and its rule mappings.
 
 The page then shows the new baseline, even an empty one. Each baseline's heading has its own **⋮**:
 
 - **Edit baseline** changes its name and description on this system.
 - **Add technique** adds a technique to it (see [Add techniques to a baseline](#add-techniques-to-a-baseline)).
+- **Export** downloads it as **TIDE JSON**, with each technique's priority and category, to import as a template here or on another TIDE. Its coverage is in the system's **Export report**.
 - **Remove baseline** removes it from the system, with its techniques, mappings and known gaps. The template and other systems aren't affected.
 
 The techniques are grouped by baseline until you choose otherwise in **Group by**. A baseline's **⋮** shows only while they're grouped by baseline.
@@ -149,7 +150,7 @@ From the **⋮** on the template's heading:
 
 - **Edit baseline** changes its **Name** and **Description**. This changes the template only; systems keep their own copy and name.
 - **Apply to a system** gives that system its own copy and opens it. (Needs permission to edit Systems.)
-- **Export** downloads a PDF or Markdown report of the template, or **TIDE JSON** to import elsewhere.
+- **Export** downloads a PDF or Markdown report of the template, or **TIDE JSON** to import elsewhere, with each technique's priority and category.
 - **Delete template** removes the template and its techniques, once you confirm. Systems it was applied to keep their copy.
 
 ## Working with a technique

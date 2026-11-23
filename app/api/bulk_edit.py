@@ -39,11 +39,18 @@ ACTIONS = {
     # TIDE's own fixes (Rule Monitoring, #81): only the selected rules they apply to run.
     "own_rule_id": "Give own rule ids to",
     "finish": "Finish in TIDE for",
+    "trim_name": "Remove the spaces from",   # names with spaces around them (Rule Monitoring, #113)
     # A GitLab issue for each rule (#106), as its window's Raise issue does.
     "raise_issue": "Raise issues for",
+    # Rule tuning, as the rule window's Record outcome… and Mark as tuned… (rule_tuning); Rule Tuning's write.
+    "record_outcome": "Record outcome for",
+    "mark_tuned": "Mark as tuned",
 }
+TUNING_ACTIONS = {"record_outcome", "mark_tuned"}
+NO_TUNING = "Recording outcomes and marking rules as tuned needs write access to Rule Tuning."
 MAX_ITEMS = 2000
 MAX_ISSUES = 50          # issues one Raise issue run may raise, so a Select all can't flood a project
+MAX_TUNING = 500         # rules one Record outcome or Mark as tuned run may change
 # A synced rule Kibana no longer has: marked deprecated, and listed when the run ends.
 NOT_IN_ELASTIC = "Not in Elastic: marked deprecated."
 
@@ -78,7 +85,7 @@ def _parse_items(raw: str) -> List[Dict[str, str]]:
 
 
 # Actions that change the rule in Kibana: a Wazuh rule is read from Wazuh and changed there.
-KIBANA_WRITES = {"enable", "disable", "move", "delete"}
+KIBANA_WRITES = {"enable", "disable", "move", "delete", "trim_name"}
 ALL_WAZUH = "These are Wazuh rules: TIDE reads them from Wazuh, so change them there."
 
 
@@ -104,7 +111,9 @@ _NONE_ELIGIBLE = {
     "own_rule_id": "None of these rules is a custom rule using one of Elastic's rule ids, so none needs a rule id "
                    "of its own.",
     "finish": "None of these rules has a change left to finish in TIDE.",
+    "trim_name": "None of these rules has spaces around its name.",
     "raise_issue": "Every one of these rules already has an open GitLab issue raised for it.",
+    "mark_tuned": "None of these rules is marked for tuning.",
 }
 
 
@@ -115,11 +124,25 @@ def _applicable(db, action: str, client_id: str, items: List[Dict[str, str]]) ->
     open issue raised for it (gitlab_issues). Other actions: all of them."""
     if action not in _NONE_ELIGIBLE:
         return items
+    if action == "mark_tuned":
+        from app.services import rule_tuning
+        with db.get_connection() as conn:
+            marked = rule_tuning.open_marks(conn, [(i["rule_id"], i["siem_id"], i["space"]) for i in items])
+        return [i for i in items if (i["rule_id"], i["siem_id"], i["space"]) in marked]
     if action == "raise_issue":
         from app.services import gitlab_issues
         with db.get_connection() as conn:
             raised = {tuple(k) for i in gitlab_issues.every(conn) if i["state"] == "opened" for k in i["rules"]}
         return [i for i in items if (i["rule_id"], i["siem_id"], i["space"]) not in raised]
+    if action == "trim_name":
+        from app.services import rule_origins
+        out = []
+        for item in items:
+            rule = db.get_rule_by_id(item["rule_id"], item["space"], siem_id=item["siem_id"] or None, client_id=client_id)
+            if (rule and not rule.deprecated and not rule_origins.is_prebuilt(rule.raw_data or {})
+                    and rule.name != rule.name.strip() and rule.name.strip()):
+                out.append(item)
+        return out
     from app.services import pending_actions, rule_origins
     out = []
     for item in items:
@@ -156,8 +179,11 @@ def matching_rule_ids(
     min_score: Optional[str] = Query(None),
     max_score: Optional[str] = Query(None),
     validation: List[str] = Query([]),
+    tuning: List[str] = Query([]),
     validated_from: Optional[str] = Query(None),
     validated_to: Optional[str] = Query(None),
+    updated_from: Optional[str] = Query(None),
+    updated_to: Optional[str] = Query(None),
 ):
     """Every rule matching the Rule Health filters (all pages), as selection items."""
     from app.api.rules import _get_filtered_deduped_rules, _parse_date_bound
@@ -177,8 +203,11 @@ def matching_rule_ids(
         min_score=_int(min_score),
         max_score=_int(max_score),
         validation=[v for v in validation if v],
+        tuning=[t for t in tuning if t],
         validated_from=_parse_date_bound(validated_from, end_of_day=False),
         validated_to=_parse_date_bound(validated_to, end_of_day=True),
+        updated_from=_parse_date_bound(updated_from, end_of_day=False),
+        updated_to=_parse_date_bound(updated_to, end_of_day=True),
     )
     rules = _get_filtered_deduped_rules(db, filters, client_id)
     return JSONResponse([
@@ -208,8 +237,11 @@ def bulk_edit_dialog(
         return _render(request, "components/bulk_edit_dialog.html", {"job": job})
     parsed = _parse_items(items)
     ctx: Dict[str, Any] = {"action": action, "label": ACTIONS[action], "total": len(parsed), "skipped": 0}
-    if len(parsed) > MAX_ITEMS:
-        ctx["error"] = f"That is {len(parsed)} rules. Bulk edit handles up to {MAX_ITEMS} at a time; narrow the filters first."
+    if action in TUNING_ACTIONS and user and not user.can_write("page:rule_tuning"):
+        ctx["error"] = NO_TUNING
+    elif len(parsed) > MAX_ITEMS or (action in TUNING_ACTIONS and len(parsed) > MAX_TUNING):
+        most = MAX_TUNING if action in TUNING_ACTIONS else MAX_ITEMS
+        ctx["error"] = f"That is {len(parsed)} rules. {ACTIONS[action]} handles up to {most} at a time; narrow the filters first."
     else:
         ctx["error"] = _eligibility(action, len(parsed))
         if not ctx["error"] and action in KIBANA_WRITES:
@@ -239,6 +271,10 @@ def bulk_edit_dialog(
         elif len(parsed) > MAX_ISSUES:
             ctx["error"] = (f"That would raise {len(parsed)} issues. Raise issue raises up to {MAX_ISSUES} at a time: "
                             f"select fewer rules.")
+    if not ctx["error"] and action == "record_outcome":
+        from app.services import rule_tuning
+        ctx.update(outcomes=list(rule_tuning.OUTCOMES.values()), max_alerts=rule_tuning.MAX_ALERTS,
+                   max_note=rule_tuning.MAX_NOTE)
     client = db.get_client(client_id) or {}
     ctx.update({
         "items_json": json.dumps(parsed),
@@ -290,6 +326,20 @@ def _apply_one(db, action: str, user_id: str, username: str, client_id: str,
 
     if action == "raise_issue":
         return _raise_issue(db, client_id, username, item, opts)
+
+    if action == "trim_name":
+        from app.api.rules import rename_rule
+        rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id or None, client_id=client_id)
+        if not rule:
+            return 404, "Rule not found.", None
+        if rule.name == rule.name.strip():
+            return 200, "No spaces around its name.", rule.name
+        status, message = rename_rule(db, client_id, rule, rule.name.strip(), user_id, username,
+                                      "Took the spaces off its name (Rule Monitoring)")
+        return status, message, rule.name.strip()
+
+    if action in TUNING_ACTIONS:
+        return _tune(db, client_id, user_id, item, opts)
 
     if action == "finish":
         from app.services import pending_actions
@@ -416,6 +466,35 @@ def _raise_issue(db, client_id: str, username: str, item: Dict[str, str], opts: 
     return 200, f"Raised {link['project']}#{issue['iid']}.", name
 
 
+def _tune(db, client_id: str, user_id: str, item: Dict[str, str], opts: Dict[str, Any]):
+    """Record outcome or Mark as tuned on one rule, as its window does (rule_tuning), with its History.
+    Rule Monitoring finds the marks once the run ends (``_run_job``)."""
+    from app.services import rule_tuning
+    key = (item["rule_id"], item["siem_id"], item["space"])
+    if not item["siem_id"] or (key[1], key[2]) not in set(db.get_client_siem_scopes(client_id) or []):
+        return 404, "Its destination isn't linked to this client.", None
+    rule = db.get_rule_by_id(key[0], key[2], siem_id=key[1], client_id=client_id)
+    if not rule:
+        return 404, "Rule not found.", None
+    by = opts["by"]
+    with db.get_connection() as conn:
+        if opts.get("outcome"):
+            done = rule_tuning.record(conn, key, opts["outcome"], opts["alerts"], opts["note"], opts["needs_tuning"], by)
+            action = "marked_for_tuning" if done == "marked" else "outcome_recorded"
+            message = rule_tuning.record_text(opts["outcome"], opts["alerts"], opts["note"], opts["needs_tuning"])
+        else:
+            kept = rule_tuning.tuned(conn, key, by, opts["note"], limits=opts.get("limits"))
+            if not kept:
+                return 409, "It isn't marked for tuning any more.", rule.name
+            changes = "; ".join(c["text"] for c in kept["changes"])
+            action = "tuned"
+            message = ("Marked as tuned (bulk edit)." + (f" Changes since it was marked: {changes}." if changes else "")
+                       + (f" {opts['note']}" if opts["note"] else ""))
+    db.record_rule_history(rule_id=key[0], siem_id=key[1], space=key[2], client_id=client_id, action=action,
+                           actor_user_id=user_id, actor_name=by, detail={"message": message})
+    return 200, "Recorded." if opts.get("outcome") else "Marked as tuned.", rule.name
+
+
 async def _run_in_context(fn, *args):
     from app.api.promotion import _run_in_context as run
     return await run(fn, *args)
@@ -491,6 +570,12 @@ async def _run_job(job: Dict[str, Any], db, user_id: str, username: str, client_
                 if len(job["errors"]) < 10:
                     shown = name or label(item)
                     job["errors"].append(f"{shown}: {_readable(message, item, shown)}")
+        if action in TUNING_ACTIONS and job["ok"]:
+            # Rule Monitoring lists the marks now, not at the next sync: once, for the rules changed.
+            from app.services import rule_issues
+            job["current"] = "Updating Rule Monitoring…"
+            await _run_in_context(rule_issues.refresh_tenant, db, client_id, None,
+                                  [(i["rule_id"], i["siem_id"], i["space"]) for i in items if i["siem_id"]])
         job["state"] = "cancelled" if job["cancel"] else "done"
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("Bulk edit crashed")
@@ -519,6 +604,9 @@ async def bulk_edit_start(
     assignee_id: str = Form(""),
     labels: str = Form(""),
     note: str = Form(""),
+    outcome: str = Form(""),       # record_outcome: as the rule window's Record outcome…
+    alerts: str = Form("1"),
+    needs_tuning: str = Form(""),
 ):
     """Re-check the selection, then run ``action`` on it in the background."""
     job = _EDIT_JOBS.get(client_id)
@@ -533,6 +621,11 @@ async def bulk_edit_start(
     parsed = _without_wazuh(db, action, parsed)
     if not why and not parsed:
         why = ALL_WAZUH
+    if not why and action in TUNING_ACTIONS:
+        if user and not user.can_write("page:rule_tuning"):
+            why = NO_TUNING
+        elif len(parsed) > MAX_TUNING:
+            why = f"{ACTIONS[action]} handles up to {MAX_TUNING} rules at a time."
     if why:
         return HTMLResponse(f'<div class="toast toast-danger">{escape(why)}</div>', status_code=400)
 
@@ -562,6 +655,16 @@ async def bulk_edit_start(
         # The project's id only: its token is looked up for each rule, and never logged with the options.
         opts.update(link_id=link_id, assignee_id=int(assignee_id) if assignee_id.strip().isdigit() else None,
                     labels=[s.strip() for s in labels.split(",") if s.strip()], note=note.strip()[:5000])
+    if action in TUNING_ACTIONS:
+        from app.services import rule_alerts, rule_tuning
+        opts.update(by=user.label if user else "Unknown", note=note.strip()[:rule_tuning.MAX_NOTE],
+                    limits=rule_alerts.thresholds(db, client_id))
+        if action == "record_outcome":
+            fields, problem = rule_tuning.check(outcome, alerts, note)
+            if not fields:
+                return HTMLResponse(f'<div class="toast toast-danger">{escape(problem)}</div>', status_code=400)
+            opts.update(outcome=fields[0], alerts=fields[1], note=fields[2],
+                        needs_tuning=needs_tuning.lower() in {"1", "true", "on", "yes"})
 
     job = {
         "state": "running", "action": action, "label": ACTIONS[action], "total": len(parsed),

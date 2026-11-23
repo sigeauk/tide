@@ -32,6 +32,24 @@ Children are indented, slightly muted, icon-free.
             <span class="nav-label">Dashboard</span>
         </a>
         {% endif %}
+
+        {% if not user or user.can_read('page:simulations') %}
+        <a name="Simulations" href="/simulations" class="nav-item {% if active_page == 'simulations' %}active{% endif %}" data-tooltip="Simulations">
+            <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/><line x1="22" x2="18" y1="12" y2="12"/><line x1="6" x2="2" y1="12" y2="12"/><line x1="12" x2="12" y1="2" y2="6"/><line x1="12" x2="12" y1="18" y2="22"/>
+            </svg>
+            <span class="nav-label">Simulations</span>
+        </a>
+        {% endif %}
+
+        {% if sim_playing or active_page == 'simulation' %}
+        <a name="Simulation" href="/simulation" class="nav-item {% if active_page == 'simulation' %}active{% endif %}" data-tooltip="Simulation">
+            <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M10 10h4"/><path d="M19 7V4a1 1 0 0 0-1-1h-2a1 1 0 0 0-1 1v3"/><path d="M20 21a2 2 0 0 0 2-2v-3.851c0-1.39-2-2.962-2-4.829V8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v11a2 2 0 0 0 2 2z"/><path d="M22 16H2"/><path d="M4 21a2 2 0 0 1-2-2v-3.851c0-1.39 2-2.962 2-4.829V8a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v11a2 2 0 0 1-2 2z"/><path d="M9 7V4a1 1 0 0 0-1-1H6a1 1 0 0 0-1 1v3"/>
+            </svg>
+            <span class="nav-label">Simulation</span>
+        </a>
+        {% endif %}
         
         <!-- ── Systems: the systems you protect, what they are measured against, and what to build next ── -->
         {% if not user or user.can_read('page:systems') or user.can_read('page:baselines') or user.can_read('page:detection_backlog') or user.can_read('page:cve_overview') %}
@@ -81,6 +99,11 @@ Children are indented, slightly muted, icon-free.
                 <a name="Rule Monitoring" href="/rule-monitoring" class="nav-child {% if active_page == 'rule_monitoring' %}active{% endif %}">
                     <span class="nav-label">Rule Monitoring</span>
                 </a>
+                {% if not user or user.can_read('page:rule_tuning') %}
+                <a name="Rule Tuning" href="/rule-tuning" class="nav-child {% if active_page == 'rule_tuning' %}active{% endif %}">
+                    <span class="nav-label">Rule Tuning</span>
+                </a>
+                {% endif %}
             </div>
         </div>
         {% endif %}

@@ -9,7 +9,6 @@
 
 {% block content %}
     {{ breadcrumb(items=[
-        ('Home', '/'),
         ('Systems', '/systems'),
         (system.name, '/systems/' ~ system.id),
         (host.name, none),

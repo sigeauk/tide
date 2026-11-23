@@ -1,0 +1,86 @@
+{#
+  Rule Tuning's list (rule_tuning.page): one row per rule, as sorted. A row is its name (opens its window),
+  destination, each reason (a mark's with its outcome; TIDE's with a bell, Mute rule…, for who can change
+  Rule Health), its alerts a day and the outcomes recorded, the mark, its open GitLab issues, and Mark as
+  tuned… and Raise issue. Show tuned lists the rules tuned lately with how their alerts changed. With
+  ``oob``, the figures are swapped too.
+#}
+{% from "macros/icons.html" import icon, icon_text %}
+{% from "macros/modal.html" import empty_state %}
+{% from "macros/rule_ui.html" import severity_icon, issues_badge %}
+{% from "components/window_ui.html" import tag %}
+
+{% if oob %}
+<div class="metrics-grid" id="rtune-metrics" hx-swap-oob="true">{% include "partials/rule_tuning_metrics.html" %}</div>
+{% endif %}
+
+{% macro per_day(x) -%}{{ '%.1f' | format(x) if x < 10 else '{:,.0f}'.format(x) }}{%- endmacro %}
+
+{% if rows %}
+<div class="rm-items">
+    {% for r in rows %}
+    {% set qs = 'rule_id=' ~ (r.key[0] | urlencode) ~ '&siem_id=' ~ (r.key[1] | urlencode) ~ '&space=' ~ (r.key[2] | urlencode) %}
+    <div class="rm-item rm-item--tuning" data-rule-row>
+        <div class="rm-item__main">
+            <div class="rm-item__name" title="{{ r.name }}">
+                <button type="button" class="rm-item__open" hx-get="/api/rules/{{ r.key[0] | urlencode }}/history-modal?space={{ r.key[2] | urlencode }}&amp;siem_id={{ r.key[1] | urlencode }}"
+                        hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset" title="Open this rule">{{ r.name }}</button>
+                {{ issues_badge(r.issues) }}
+            </div>
+            <div class="rm-item__meta">
+                {% if r.destination %}{{ tag(r.destination, title='Destination') }}{% endif %}
+                {% for x in r.reasons %}
+                <span class="rtune-reason" title="{{ x.detail }} Who fixes: {{ x.fixer_label }}.">{{ severity_icon(x.severity) }} {{ x.title }}{% if x.issue == 'marked_for_tuning' and x.cause %}: {{ x.cause }}{% endif %}
+                    {%- if can_fix and x.issue != 'marked_for_tuning' %}
+                    <button name="Mute Rule" type="button" class="btn-icon"
+                            hx-get="/api/rule-monitoring/mute-form?{{ qs }}&amp;issue={{ x.issue | urlencode }}&amp;cause={{ (x.cause or '') | urlencode }}&amp;name={{ r.name | urlencode }}&amp;where={{ (r.destination or '') | urlencode }}"
+                            hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+                            title="Mute rule…: this problem, every problem on it, or its cause" aria-label="Mute rule…">{{ icon('bell-off', '12') }}</button>
+                    {%- endif %}</span>
+                {% endfor %}
+            </div>
+            <div class="rm-item__meta text-muted">
+                <span title="Alerts a day over the last 7 days, as of the last sync">{% if r.per_day %}{{ per_day(r.per_day) }} alerts a day{% else %}No alerts in 7 days{% endif %}</span>
+                {% set _from = 'from Kibana' if r.outcome_source == 'kibana' else 'recorded by people' %}
+                {% if r.share is not none %}
+                <span title="Of the {{ r.judged }} alerts judged in the last {{ metrics.days }} days, {{ _from }}: {% for _k, label, n in r.counts %}{{ label }} {{ n }}{{ '; ' if not loop.last }}{% endfor %}">· {{ '{:.0%}'.format(r.share) }} not needing action, of {{ r.judged }} judged {{ _from }}</span>
+                {% elif r.counts %}
+                <span title="Outcomes {{ _from }} in the last {{ metrics.days }} days">· {% for _k, label, n in r.counts %}{{ label }} {{ n }}{{ ', ' if not loop.last }}{% endfor %}</span>
+                {% else %}
+                <span>· No outcomes</span>
+                {% endif %}
+                {% if r.none %}<span title="Alerts closed in the last {{ metrics.days }} days with no outcome Kibana holds">· {{ '{:,}'.format(r.none) }} closed with no outcome</span>{% endif %}
+                {% if r.mark %}<span>· Marked by {{ r.mark.entries[-1].by }} on {{ r.mark.since.strftime('%d %b') }}</span>{% endif %}
+                {% if r.tuning %}
+                <span>· Tuned {{ r.tuning.at.strftime('%d %b') }} by {{ r.tuning.by }}:
+                    {% if not r.tuning.ready %}its effect shows from {{ r.tuning.from_day.strftime('%d %b') }}
+                    {% elif r.tuning.before is none or r.tuning.after is none %}its alerts weren't read before and after
+                    {% else %}alerts a day {{ per_day(r.tuning.before) }} → {{ per_day(r.tuning.after) }}{% if r.tuning.change is not none %} ({{ '%+d' | format(r.tuning.change) }}%){% endif %}{% endif %}</span>
+                {% endif %}
+            </div>
+        </div>
+        <div class="rmon-actions">
+            {% if can_tune and r.mark %}
+            <button name="Mark As Tuned" type="button" class="btn btn-secondary btn-sm"
+                    hx-get="/api/rule-tuning/tuned-form?{{ qs }}&amp;from=page" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+                    title="Close the mark: the rule was tuned. TIDE shows the effect after 14 days">{{ icon_text('circle-check', 'Mark as tuned…', '13') }}</button>
+            {% endif %}
+            <button name="Raise Issue" type="button" class="btn btn-secondary btn-sm"
+                    hx-get="/api/rule-monitoring/copy?{{ qs }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+                    title="Raise a GitLab issue for this rule, with its findings, mark and outcomes, or copy it as Markdown">{{ icon_text('gitlab', 'Raise issue', '13') }}</button>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+{% set narrowed = ' that matches the filters' if filters.search or filters.scope or filters.reason or filters.fixer or filters.source else '' %}
+{% call empty_state('sliders-horizontal') %}
+{% if filters.show == 'tuned' %}
+<p>No rule was marked as tuned in the last 30 days{{ narrowed }}.</p>
+<p class="text-muted">Use Mark as tuned… on a rule marked for tuning once it is changed.</p>
+{% else %}
+<p>No rules to tune{{ narrowed }}.</p>
+<p class="text-muted">A rule is listed when someone marks it for tuning (Record outcome… in its window), or TIDE finds a reason in its alerts, their outcomes, its exceptions or its updates.</p>
+{% endif %}
+{% endcall %}
+{% endif %}

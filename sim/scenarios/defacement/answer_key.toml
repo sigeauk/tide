@@ -1,0 +1,133 @@
+# The answer key for questions.md: points, the answers each question accepts, and hints.
+# The question text and each answer's write-up stay in questions.md and answers.md.
+#
+# An answer is compared lower-case, with quotes, backticks and extra spaces taken out. It is right if:
+#   accept        it is one of these exactly
+#   contains      it holds every one of these (for answers in several parts)
+#   contains_any  it holds one of these
+#   numbers       its first number is one of these (commas ignored), within tolerance
+# Each hint costs a quarter of the question's points when taken, solved or not.
+
+[[question]]
+n = 1
+points = 100
+accept = ["40.80.148.42"]
+hints = [
+  "The web server's access log is event.dataset : \"iis.access\". Who made most of its requests?",
+  "In ES|QL: STATS COUNT(*) BY source.ip, on logs-iis.access-botes.",
+]
+
+[[question]]
+n = 2
+points = 100
+contains = ["acunetix"]
+hints = ["IDS signatures often name the tool. Look at rule.name in the alerts (event.kind : alert) from the scanner's address."]
+
+[[question]]
+n = 3
+points = 100
+contains = ["joomla"]
+hints = ["Look at the paths (url.path) the scanner asked the web server for."]
+
+[[question]]
+n = 4
+points = 100
+accept = ["23.22.63.114"]
+hints = [
+  "A brute force is many POSTs to a login page. Which page, and from which address?",
+  "Splunk Stream's capture: event.dataset : \"network_traffic.http\" and http.request.method : POST.",
+]
+
+[[question]]
+n = 5
+points = 100
+accept = ["12345678"]
+hints = [
+  "Splunk Stream keeps each login form in http.request.body.content; the password is after passwd=.",
+  "Sort on original_timestamp, oldest first: @timestamp is when the event was replayed.",
+]
+
+[[question]]
+n = 6
+points = 200
+accept = ["yellow"]
+hints = ["ES|QL's GROK pulls the password out of the form; then keep those where LENGTH(password) == 6."]
+
+[[question]]
+n = 7
+points = 100
+accept = ["batman"]
+hints = ["The attacker logged in with the right password from a different address from the brute force's."]
+
+[[question]]
+n = 8
+points = 300
+numbers = [6]
+hints = ["Over the brute force's posts only: GROK the password out, then AVG(LENGTH(password))."]
+
+[[question]]
+n = 9
+points = 200
+numbers = [412]
+hints = ["COUNT_DISTINCT of the passwords, over the brute force's posts only."]
+
+[[question]]
+n = 10
+points = 300
+numbers = [92.17]
+tolerance = 0.005
+hints = [
+  "Find the two posts with the correct password, and use original_timestamp: the replay changes @timestamp.",
+  "In ES|QL: DATE_DIFF(\"milliseconds\", found, logged_in) / 1000.0",
+]
+
+[[question]]
+n = 11
+points = 100
+accept = ["3791.exe", "3791"]
+hints = ["Suricata records the files carried over HTTP in file.name. Look for a POST carrying an .exe."]
+
+[[question]]
+n = 12
+points = 200
+accept = ["aae3f5a29935e6abcc2c2754d12a9af0"]
+hints = ["Sysmon's process start event (event.code : 1) keeps the file's hashes in process.hash.*."]
+
+[[question]]
+n = 13
+points = 200
+accept = ["w32/swrort.c!tr", "w32/swrort.c", "swrort.c", "swrort"]
+hints = ["The FortiGate keeps its log's subtype in rule.ruleset; its antivirus subtype is virus."]
+
+[[question]]
+n = 14
+points = 200
+accept = ["php-cgi.exe", "php-cgi"]
+hints = ["Sysmon on we1149srv: which process started cmd.exe? Look at process.parent.name."]
+
+[[question]]
+n = 15
+points = 200
+contains = ["net user", "21:58"]
+hints = [
+  "Look at what started on we1149srv in the minutes after the executable ran: net.exe, whoami.exe…",
+  "Give the command and the time, for example: some command, 21:00:00",
+]
+
+[[question]]
+n = 16
+points = 100
+accept = ["poisonivy-is-coming-for-you-batman.jpeg"]
+hints = ["A web server rarely browses. What did 192.168.250.70 fetch over HTTP?"]
+
+[[question]]
+n = 17
+points = 100
+accept = ["prankglassinebracket.jumpingcrab.com"]
+hints = ["The defacement file's request has the server's name in url.domain (without its port)."]
+
+[[question]]
+n = 18
+points = 100
+accept = ["23.22.63.114"]
+hints = ["The DNS log (event.dataset : \"network_traffic.dns\") has each name's answer in dns.resolved_ip."]

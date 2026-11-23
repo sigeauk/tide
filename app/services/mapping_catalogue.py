@@ -29,6 +29,11 @@ from app.scoring import FOUND, MISSING, UNKNOWN
 logger = logging.getLogger(__name__)
 
 TTL_S = 24 * 3600
+# A pattern that matched no index is asked about again a minute on, not a day: it is what someone is
+# fixing (an integration installed, data started), and the next sync must see it, or Rule Monitoring
+# keeps "No index matches the index pattern" for a day. The minute keeps one sync, which asks for each
+# space in turn, from asking twice.
+NO_INDICES_TTL_S = 60
 
 OK, NO_INDICES = "ok", "no_indices"
 
@@ -96,7 +101,10 @@ class MappingCatalogue:
     # ── refresh policy ───────────────────────────────────────────────────
     def _is_fresh(self, pattern: str, now: datetime) -> bool:
         entry = self._entries.get(pattern)
-        return bool(entry and entry.fetched_at and now - entry.fetched_at < timedelta(seconds=self.ttl_s))
+        if not (entry and entry.fetched_at):
+            return False
+        ttl = min(self.ttl_s, NO_INDICES_TTL_S) if entry.status == NO_INDICES else self.ttl_s
+        return now - entry.fetched_at < timedelta(seconds=ttl)
 
     def ensure(self, patterns: Iterable[str], fetch: Fetcher, force: bool = False, workers: int = 20) -> Dict[str, int]:
         """Make sure every pattern has a usable entry, fetching only what is new, stale or forced."""

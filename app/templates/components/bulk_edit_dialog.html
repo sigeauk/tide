@@ -3,8 +3,11 @@
   in progress). Opened from the Rule Health bulk bar with the selected rules, or a Rule Monitoring cause with its
   rules; Start posts them back as items_json. For TIDE's own fixes (own_rule_id, finish) only the rules they apply
   to are posted back, and ``skipped`` says how many were left out; so for Raise issue (raise_issue, #106), the
-  rules without an open issue raised for them, with ``projects`` (the client's GitLab issues projects TIDE can use).
+  rules without an open issue raised for them, with ``projects`` (the client's GitLab issues projects TIDE can use),
+  and for Mark as tuned (mark_tuned), the rules marked for tuning. Record outcome (record_outcome) has
+  ``outcomes``, as the rule window's dialog.
 #}
+{% from "macros/tuning.html" import outcome_fields %}
 <div class="modal-overlay" data-bulk-edit-dialog>
     <div class="modal-content modal-md" data-stop-click>
     {% if job is defined and job %}
@@ -65,6 +68,9 @@
             <p class="text-secondary mb-md">Gives each of these custom rules, which use one of Elastic's rule ids, a rule id of its own:
                 TIDE creates each again in Kibana under a new rule id and deletes the original, keeping its history, links and
                 mappings, and still shows Elastic's updates for it. Kibana keeps each rule's past alerts and runs with the original.</p>
+            {% elif action == 'trim_name' %}
+            <p class="text-secondary mb-md">Renames each of these rules in Kibana without the spaces at the start or end of its
+                name, as Edit would, and records it in the rule's history. Nothing else about the rules changes.</p>
             {% elif action == 'finish' %}
             <p class="text-secondary mb-md">Records in TIDE the changes Kibana made to each of these rules but TIDE couldn't
                 record (a new rule id, a move, a restore), without changing Kibana again.</p>
@@ -93,6 +99,16 @@
                 <textarea name="note" id="bulk-gitlab-note" class="form-input" rows="3" maxlength="5000"
                           placeholder="What needs doing, for example: these rules alert too often, please tune them."></textarea>
             </div>
+            {% elif action == 'record_outcome' %}
+            <p class="text-secondary mb-md">Records the same outcome on each selected rule, as Record outcome… in its window
+                does: how many of its alerts turned out this way, and whether it needs tuning. Each goes into the rule's History.</p>
+            {{ outcome_fields(outcomes, max_alerts, max_note, 'Alerts, on each rule') }}
+            {% elif action == 'mark_tuned' %}
+            <p class="text-secondary mb-md">Closes the mark for tuning on each selected rule, as Mark as tuned… in its window
+                does. TIDE keeps each rule's alerts a day now, and shows in its window how they changed after 14 days.</p>
+            <label class="form-label" for="tuning-note">Note</label>
+            <textarea id="tuning-note" name="note" class="form-input mb-md" rows="3" maxlength="1000"
+                      placeholder="What was changed, for example: added exceptions for the SCCM servers."></textarea>
             {% elif action == 'delete' %}
             <div class="alert alert-warning mb-md">
                 <p>Permanently removes each selected rule from TIDE — baseline links, history and validation go with it. If any of these rules still exist in Elastic, the next sync brings them back unless you delete them there too.</p>
@@ -109,6 +125,10 @@
             {% endif %}
             {% if skipped and action == 'raise_issue' %}
             <p class="text-muted mb-md fs-sm">{{ skipped }} of the selected rule{{ '' if skipped == 1 else 's' }} already {{ 'has' if skipped == 1 else 'have' }} an open issue raised for {{ 'it' if skipped == 1 else 'them' }}, so {{ 'it is' if skipped == 1 else 'they are' }} left out. Comment on {{ 'it' if skipped == 1 else 'those' }} from the rule window.</p>
+            {% elif skipped and action == 'trim_name' %}
+            <p class="text-muted mb-md fs-sm">{{ skipped }} of the selected rule{{ ' has' if skipped == 1 else 's have' }} no spaces around {{ 'its name' if skipped == 1 else 'their names' }}, or can't be renamed from TIDE, so {{ 'it is' if skipped == 1 else 'they are' }} left out.</p>
+            {% elif skipped and action == 'mark_tuned' %}
+            <p class="text-muted mb-md fs-sm">{{ skipped }} of the selected rule{{ ' isn\'t' if skipped == 1 else 's aren\'t' }} marked for tuning, so {{ 'it is' if skipped == 1 else 'they are' }} left out.</p>
             {% elif skipped %}
             <p class="text-muted mb-md fs-sm">{{ skipped }} of the selected rule{{ '' if skipped == 1 else 's' }} {{ 'needs' if skipped == 1 else 'need' }} no {{ 'rule id of its own' if action == 'own_rule_id' else 'finishing' }}, so {{ 'it is' if skipped == 1 else 'they are' }} left out.</p>
             {% endif %}

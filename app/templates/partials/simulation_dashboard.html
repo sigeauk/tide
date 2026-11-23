@@ -1,0 +1,124 @@
+{#
+  A simulation's Dashboard tab, as the BOTES portal's dashboard has it: its figures, each player's score
+  over time (score_chart: a step line each, in the player's colour, .sim-series-N), the board, how each
+  question went, and (for the Sim Admin) the rules' alerts. On the Simulations page
+  (api.simulations.simulation_dashboard) and, for a player, on Simulation (player_dashboard, player
+  true, me: them). Asked for again (poll_url, into target) every 15 s while the simulation runs.
+#}
+{% from "macros/icons.html" import icon %}
+{% from "components/window_ui.html" import section_head %}
+{% set s = sim %}
+<div {% if live %}hx-get="{{ poll_url }}" hx-trigger="every 15s" hx-target="{{ target }}" hx-swap="innerHTML"{% endif %}>
+<div class="metrics-grid mb-lg">
+    <div class="metric-card">
+        <div class="metric-label">{{ icon('activity', '16') }} State</div>
+        <div class="metric-value fs-lg">{% include "partials/simulation_state.html" %}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">{{ icon('users', '16') }} Players</div>
+        <div class="metric-value">{{ players }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">{{ icon('check', '16') }} Answers solved</div>
+        <div class="metric-value">{{ solves }} <span class="text-secondary text-sm">of {{ items | length * players }}</span></div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">{{ icon('lightbulb', '16') }} Hints taken</div>
+        <div class="metric-value">{{ hints }}</div>
+    </div>
+</div>
+
+<section class="card card-padded card-mb sys-section" data-fold="dash-scores" aria-label="Scores over time">
+    {{ section_head('Scores over time', 'chart-column') }}
+    <div class="sys-section__body">
+        {% if chart %}
+        {% set c = chart %}
+        <svg class="rm-chart sim-chart" viewBox="0 0 {{ c.width }} {{ c.height }}" role="img"
+             aria-label="Each player's score over time: {% for l in c.lines %}{{ l.name }} {{ l.score }}{% if not loop.last %}, {% endif %}{% endfor %}">
+            {% for t in c.ticks %}
+            <line class="rm-chart__grid" x1="{{ c.pad_l }}" x2="{{ c.plot_right }}" y1="{{ t.y }}" y2="{{ t.y }}"/>
+            <text class="rm-chart__tick" x="{{ c.pad_l - 5 }}" y="{{ t.y + 3 }}" text-anchor="end">{{ t.label }}</text>
+            {% endfor %}
+            <line class="sim-chart__zero" x1="{{ c.pad_l }}" x2="{{ c.plot_right }}" y1="{{ c.zero_y }}" y2="{{ c.zero_y }}"/>
+            {% for l in c.lines %}
+            <polyline class="sim-chart__line sim-chart__line--{{ l.series }}" points="{{ l.path }}"/>
+            {% for d in l.dots %}
+            <circle class="sim-chart__dot sim-chart__dot--{{ l.series }}" cx="{{ d.x }}" cy="{{ d.y }}" r="4"><title>{{ d.tip }}</title></circle>
+            {% endfor %}
+            {% if c.direct %}
+            <text class="sim-chart__label" x="{{ c.plot_right + 8 }}" y="{{ l.label_y + 3 }}">{{ l.name | truncate(14, true, '…') }} {{ l.score }}</text>
+            {% endif %}
+            {% endfor %}
+            <text class="rm-chart__tick" x="{{ c.pad_l }}" y="{{ c.height - 4 }}" text-anchor="start">{{ c.first_label }}</text>
+            <text class="rm-chart__tick" x="{{ c.plot_right }}" y="{{ c.height - 4 }}" text-anchor="end">{{ c.last_label }}</text>
+        </svg>
+        {% if c.lines | length > 1 %}
+        <div class="rm-legend">
+            {% for l in c.lines %}
+            <span class="rm-legend__item"><i class="rm-legend__dot sim-legend--{{ l.series }}"></i> {{ l.name }}</span>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% if c.more %}<p class="text-secondary text-sm">The chart shows the first {{ c.lines | length }} players by name; the board lists all {{ players }}.</p>{% endif %}
+        {% else %}
+        <p class="rm-empty">No players.</p>
+        {% endif %}
+    </div>
+</section>
+
+<section class="card card-padded card-mb sys-section" data-fold="dash-board" aria-label="Board">
+    {{ section_head('Board', 'users') }}
+    <div class="sys-section__body">
+        {% include "partials/simulation_board.html" %}
+    </div>
+</section>
+
+<section class="card card-padded card-mb sys-section" data-fold="dash-questions" aria-label="Questions">
+    {{ section_head('Questions', 'book-open', items | length) }}
+    <div class="sys-section__body">
+        {% if items %}
+        <div class="sys-table-wrap">
+        {% set several = s.scenarios | length > 1 %}
+        <table class="rules-table sim-qtable">
+            <thead><tr><th>Question</th><th>Solved by</th><th>First</th><th>Hints</th><th>Wrong answers</th></tr></thead>
+            <tbody>
+            {% for sc, q, st in items %}
+                <tr>
+                    <td><span class="text-secondary">{% if several %}{{ sc.title or sc.label }} {% endif %}{{ q.n }}.</span> {{ (q.text | md | striptags) | truncate(110, true, '…') }}</td>
+                    <td>{{ st.solved or 0 }} of {{ players }}</td>
+                    <td>{% if st.first %}{{ st.first }} <span class="text-secondary text-sm">{{ st.first_at.strftime('%H:%M:%S') }}</span>{% else %}—{% endif %}</td>
+                    <td>{{ st.hints or 0 }}</td>
+                    <td>{{ st.wrong or 0 }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% else %}
+        <p class="rm-empty">Its scenarios have no questions.</p>
+        {% endif %}
+    </div>
+</section>
+
+{% if not player %}
+<section class="card card-padded card-mb sys-section" data-fold="dash-rules" aria-label="Rules">
+    {{ section_head('Rules', 'shield-alert', rules | length) }}
+    <div class="sys-section__body">
+        {% if rules %}
+        <div class="sys-table-wrap">
+        <table class="rules-table">
+            <thead><tr><th>Rule</th><th>Alerts</th></tr></thead>
+            <tbody>
+            {% for r in rules %}
+                <tr><td>{{ r.name }}</td><td>{{ r.alerts if r.alerts is not none else ('counted when it ends' if s.state != 'ended' else '—') }}</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% else %}
+        <p class="rm-empty">No rules yet.</p>
+        {% endif %}
+    </div>
+</section>
+{% endif %}
+</div>

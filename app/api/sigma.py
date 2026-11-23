@@ -25,11 +25,16 @@ router = APIRouter(prefix="/api/sigma", tags=["sigma"])
 # A backend's query language, for colouring the converted query (highlight_query).
 _QUERY_LANGUAGE = {"elasticsearch": "lucene", "eql": "eql", "esql": "esql", "splunk": "lucene",
                    "microsoft365defender": "kuery"}
+# What an Elastic backend's query is deployed as: Kibana's language for it, and the rule type that
+# takes that language. pySigma's elasticsearch backend writes Lucene, which Kibana can't parse as KQL
+# once the query escapes a character (a path's "\-", a space).
+_DEPLOY_AS = {"elasticsearch": ("lucene", "query"), "eql": ("eql", "eql"), "esql": ("esql", "esql")}
 
 
 def picked_filters(request: Request) -> dict:
-    """The rule browser's filters in the address, each with every value ticked (``?level=high&level=critical``)."""
-    return sigma.picked_filters({name: request.query_params.getlist(name) for name in sigma.FILTERS})
+    """The rule browser's filters in the address, each with every value ticked (``?level=high&level=critical``),
+    and Last updated's two dates."""
+    return sigma.picked_filters({name: request.query_params.getlist(name) for name in (*sigma.FILTERS, *sigma.DATE_FILTERS)})
 
 
 def rules_list_context(query: str = "", technique: str = "", filters: dict = None,
@@ -180,12 +185,13 @@ def rule_form_prefill(sigma_rule: dict, query: str, backend: str, index_pattern:
     for author in [str(a).strip() for a in parts] + [username.strip()]:
         if author and author.lower() not in {a.lower() for a in authors}:
             authors.append(author)
+    language, rule_type = _DEPLOY_AS.get(backend, (backend, "query"))
     return {
         "sigma_id": str(sigma_rule.get("id") or "").strip(),
         "name": str(sigma_rule.get("title") or "").strip(),
         "description": str(sigma_rule.get("description") or "").strip(),
         "query": query,
-        "language": "kuery" if backend == "elasticsearch" else backend,
+        "language": language,
         "severity": str(sigma_rule.get("level") or "medium").strip().lower(),
         "author": ", ".join(authors),
         "tags": sigma_rule.get("tags") or [],
@@ -196,7 +202,7 @@ def rule_form_prefill(sigma_rule: dict, query: str, backend: str, index_pattern:
         "timestamp_override": "event.ingested",
         "highlighted_fields": [],
         "enabled": False,
-        "type": "query",
+        "type": rule_type,
         "from": "now-6m",
         "interval": "5m",
     }

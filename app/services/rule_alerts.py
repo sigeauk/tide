@@ -42,9 +42,14 @@ READS_DDL = """
 
 # What the client can set for Rule Monitoring (clients columns), and what applies when it hasn't: noisy
 # and silent rules (#68, #69), how long an upstream update may wait unreviewed, and whether expired or
-# changed validations are listed (0 off, #77), and how many exception items are too many (#75).
+# changed validations are listed (0 off, #77), how many exception items are too many (#75), whether
+# Alerts left open is listed (on unless the client turns it off: 0 off), and the outcome findings' window,
+# the judged alerts a share needs, and their shares (rule tuning, R32).
 DEFAULTS = {"noisy_per_day": 100, "noisy_share_pct": 50, "silent_enabled_days": 30, "silent_days": 90,
-            "upstream_pending_days": 30, "validation_stale": 0, "exceptions_many": 10}
+            "upstream_pending_days": 30, "validation_stale": 0, "exceptions_many": 10, "alerts_unreviewed": 1,
+            "outcome_days": 30, "outcome_min": 10, "fp_share_pct": 50, "bad_data_share_pct": 25,
+            "expected_share_pct": 80, "duplicate_share_pct": 50}
+ON_BY_DEFAULT = {"alerts_unreviewed"}      # a stored 0 turns these off; nothing stored is the default
 STATUSES = ("open", "acknowledged", "closed")
 
 
@@ -67,7 +72,7 @@ def thresholds(db: Any, client_id: Optional[str]) -> Dict[str, int]:
     except Exception:   # noqa: BLE001 - no clients table to read
         return out
     for key, value in zip(names, row or ()):
-        if key in DEFAULTS and value:
+        if key in DEFAULTS and (value or (key in ON_BY_DEFAULT and value is not None)):
             out[key] = int(value)
     return out
 
@@ -120,6 +125,22 @@ def daily(conn, scopes: Iterable[Tuple[str, str]]) -> Dict[Tuple[str, str, str],
             "(SELECT unnest(?::VARCHAR[]) AS s, unnest(?::VARCHAR[]) AS sp) x WHERE x.s = c.siem_id AND x.sp = c.space) "
             "GROUP BY 1, 2, 3, 4", [[s for s, _ in scopes], [sp for _, sp in scopes]]).fetchall():
         out.setdefault((siem_id, space, uuid), {})[day] = int(n)
+    return out
+
+
+def by_status(conn, scopes: Iterable[Tuple[str, str]], first: date, last: date) -> Dict[Tuple[str, str, str], Dict[str, int]]:
+    """Each rule's alerts of the days ``first`` to ``last`` by workflow status, in ``scopes``: ``{(siem_id, space,
+    rule uuid): {status: alerts}}`` (Alerts left open)."""
+    scopes = sorted(set(scopes))
+    if not scopes or "rule_alert_counts" not in _tables(conn):
+        return {}
+    out: Dict[Tuple[str, str, str], Dict[str, int]] = {}
+    for siem_id, space, uuid, status, n in conn.execute(
+            "SELECT siem_id, space, rule_uuid, status, sum(alerts) FROM rule_alert_counts c WHERE day BETWEEN ? AND ? "
+            "AND EXISTS (SELECT 1 FROM (SELECT unnest(?::VARCHAR[]) AS s, unnest(?::VARCHAR[]) AS sp) x "
+            "WHERE x.s = c.siem_id AND x.sp = c.space) GROUP BY 1, 2, 3, 4",
+            [first, last, [s for s, _ in scopes], [sp for _, sp in scopes]]).fetchall():
+        out.setdefault((siem_id, space, uuid), {})[status] = int(n)
     return out
 
 

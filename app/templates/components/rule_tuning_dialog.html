@@ -1,0 +1,58 @@
+{#
+  Rule tuning's dialogs over a rule's window (app/api/rule_tuning.py), by ``mode``:
+    record   Record outcome…: an outcome (its meaning beneath it, and who fixes what it calls for), how many
+             alerts, a note, and Needs tuning, ticked by default for an outcome that calls for tuning;
+    tuned    Mark as tuned…: the changes History recorded since the rule was marked, and a note;
+    dismiss  Dismiss…: the mark closes with no change, with a note saying why (required).
+  Context: mode, key (rule_id, siem_id, space), name, where, outcomes, max_alerts, max_note, from_page; tuned and
+  dismiss also mark (rule_tuning.open_marks) and changes. Saving brings the window back (X-Return-Modal), or,
+  opened from the Rule Tuning page (``from_page``), closes and refreshes its list.
+#}
+{% from "macros/modal.html" import close_button %}
+{% from "macros/tuning.html" import outcome_fields %}
+{% set titles = {'record': 'Record outcome', 'tuned': 'Mark as tuned', 'dismiss': 'Dismiss mark'} %}
+{% set posts = {'record': 'record', 'tuned': 'tuned', 'dismiss': 'dismiss'} %}
+<div class="modal-overlay" data-click="backdrop.remove">
+    <div class="modal-content modal-sm" data-stop-click role="dialog" aria-modal="true" aria-labelledby="tuning-dialog-title">
+        <div class="modal-header">
+            <h3 class="modal-title" id="tuning-dialog-title">{{ titles[mode] }}</h3>
+            {{ close_button('data-click="modal.remove"', 'Cancel') }}
+        </div>
+        <form name="{{ titles[mode] }}" hx-post="/api/rule-tuning/{{ posts[mode] }}" hx-target="#modal-container" hx-swap="innerHTML"
+              {%- if not from_page %} hx-headers='{"X-Return-Modal": "rule"}'{% endif %}>
+            {% if from_page %}<input type="hidden" name="from" value="page">{% endif %}
+            <input type="hidden" name="rule_id" value="{{ key[0] }}">
+            <input type="hidden" name="siem_id" value="{{ key[1] }}">
+            <input type="hidden" name="space" value="{{ key[2] }}">
+            <p class="text-secondary mb-md"><strong>{{ name }}</strong> ({{ where }})</p>
+
+            {% if mode == 'record' %}
+            {{ outcome_fields(outcomes, max_alerts, max_note) }}
+            {% elif mode == 'tuned' %}
+            <p class="text-secondary mb-sm">Marked for tuning since {{ mark.since.strftime('%Y-%m-%d') }} ({{ mark.label }}).
+                {% if changes %}History recorded these changes to the rule since then:{% else %}History recorded no change to
+                the rule since then: say what was done in the note.{% endif %}</p>
+            {% if changes %}
+            <ul class="mb-md">
+                {% for c in changes %}<li>{{ c.at.strftime('%Y-%m-%d') }}{% if c.by %}, {{ c.by }}{% endif %}: {{ c.text }}</li>{% endfor %}
+            </ul>
+            {% endif %}
+            <p class="text-muted fs-sm mb-md">TIDE keeps the rule's alerts a day now, and shows how they changed after 14 days.</p>
+            <label class="form-label" for="tuning-note">Note</label>
+            <textarea id="tuning-note" name="note" class="form-input" rows="3" maxlength="{{ max_note }}"
+                      placeholder="What was changed, for example: added an exception for the SCCM servers."></textarea>
+            {% else %}
+            <p class="text-secondary mb-md">Closes the mark ({{ mark.label }}, since {{ mark.since.strftime('%Y-%m-%d') }})
+                with nothing changed: the alerts are wanted, or the outcome was wrong.</p>
+            <label class="form-label" for="tuning-note">Why</label>
+            <textarea id="tuning-note" name="note" class="form-input" rows="3" maxlength="{{ max_note }}" required
+                      placeholder="For example: these alerts are wanted; the SOC reviews each one."></textarea>
+            {% endif %}
+
+            <div class="modal-actions">
+                <button name="Cancel" type="button" class="btn btn-secondary" data-click="modal.remove">Cancel</button>
+                <button name="{{ titles[mode] }}" type="submit" class="btn btn-primary">{{ {'record': 'Record outcome', 'tuned': 'Mark as tuned', 'dismiss': 'Dismiss'}[mode] }}</button>
+            </div>
+        </form>
+    </div>
+</div>

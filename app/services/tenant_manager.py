@@ -426,8 +426,9 @@ def _create_tenant_schema(conn):
             deprecated BOOLEAN DEFAULT false,
             source_rule_id VARCHAR,
             kibana_rule_id VARCHAR,     -- raw_data's rule_id ('' if none), language and type ('' if
-            rule_language VARCHAR,      -- none), kept by every writer so lists of rules needn't load
-            rule_type VARCHAR,          -- the JSON
+            rule_language VARCHAR,      -- none) and updated_at (naive UTC), kept by every writer so
+            rule_type VARCHAR,          -- lists of rules needn't load the JSON
+            rule_updated_at TIMESTAMP,
             PRIMARY KEY (rule_id, siem_id, space)
         )
     """)

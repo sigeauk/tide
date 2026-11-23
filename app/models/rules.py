@@ -98,7 +98,8 @@ class DetectionRule(BaseModel):
     
     # Metadata
     mitre_ids: List[str] = Field(default_factory=list)
-    last_updated: Optional[datetime] = None
+    last_updated: Optional[datetime] = None      # when TIDE last wrote the row (a sync)
+    rule_updated_at: Optional[datetime] = None   # when Kibana last changed the rule (naive UTC), or None
     raw_data: Optional[Dict[str, Any]] = None
     deprecated: bool = False
     source_rule_id: Optional[str] = None
@@ -248,8 +249,15 @@ class RuleFilters(BaseModel):
     # Validate's Show checklist: any of "valid", "amber", "expired", "never" (a rule's
     # validation_status; database.VALIDATION_STATES). Empty = all.
     validation: List[str] = Field(default_factory=list)
+    # Tuning checklist: any of "marked" (an open mark for tuning) or "tuned" (marked as tuned in the
+    # last 30 days; rule_tuning.FILTER_STATES). Empty = all.
+    tuning: List[str] = Field(default_factory=list)
     validated_from: Optional[datetime] = None
     validated_to: Optional[datetime] = None
+    # Last updated's date range: when Kibana last changed the rule (rule_updated_at). A rule with no
+    # such date is left out while either end is set.
+    updated_from: Optional[datetime] = None
+    updated_to: Optional[datetime] = None
     sort_by: str = "score_asc"  # score_asc, score_desc, validated_asc, validated_desc, name_asc
     # Independent sort selectors ("asc" / "desc" / ""). The UI only ever
     # keeps one of these non-empty at a time — selecting a new sort clears
@@ -257,6 +265,7 @@ class RuleFilters(BaseModel):
     sort_score: str = ""
     sort_validated: str = ""
     sort_name: str = ""
+    sort_updated: str = ""
     page: int = 1
     page_size: int = 24
     # Composite (siem_id, space) allow-list — the ONLY safe tenant-scoping

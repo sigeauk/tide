@@ -19,10 +19,10 @@
         });
     });
 
-    // "Last selected wins" for the three sort selects: clearing the siblings in the CAPTURE phase
+    // "Last selected wins" for the sort selects: clearing the siblings in the CAPTURE phase
     // runs before htmx's own (bubble-phase) change listener reads them via hx-include, so only the
     // just-changed one is sent as active.
-    var SORT_IDS = ['rh-sort-score', 'rh-sort-validated', 'rh-sort-name'];
+    var SORT_IDS = ['rh-sort-score', 'rh-sort-validated', 'rh-sort-name', 'rh-sort-updated'];
     document.addEventListener('change', function (e) {
         if (SORT_IDS.indexOf(e.target.id) === -1) return;
         var col = $('rh-sort-col'), dir = $('rh-sort-dir');
@@ -35,8 +35,8 @@
         window.tideFilterSync();
     }, true);
 
-    // Score, Validate and Name are named by what they sort and narrow, State below (the other filter
-    // buttons by app.js).
+    // Score, Validate, Last updated and Name are named by what they sort and narrow, State below (the
+    // other filter buttons by app.js).
     function updateScoreLabel() {
         var label = $('rh-score-label');
         if (!label) return;
@@ -71,12 +71,25 @@
         if (from || to) parts.push((from || '…') + ' – ' + (to || '…'));
         label.textContent = parts.length ? parts.join(' · ') : 'Validate';
     }
+    function updateUpdatedLabel() {
+        var label = $('rh-updated-label');
+        if (!label) return;
+        var sort = $('rh-sort-updated').value;
+        var from = document.querySelector("#rh-updated-dropdown [name='updated_from']").value;
+        var to = document.querySelector("#rh-updated-dropdown [name='updated_to']").value;
+        var parts = [];
+        if (sort === 'desc') parts.push('Newest → Oldest');
+        else if (sort === 'asc') parts.push('Oldest → Newest');
+        if (from || to) parts.push((from || '…') + ' – ' + (to || '…'));
+        label.textContent = parts.length ? parts.join(' · ') : 'Last updated';
+    }
     document.addEventListener('change', function (e) {
         if (!e.target.matches) return;
         if (e.target.closest('#rh-score-dropdown')) updateScoreLabel();
         if (e.target.closest('#rh-validated-dropdown')) updateValidatedLabel();
+        if (e.target.closest('#rh-updated-dropdown')) updateUpdatedLabel();
         // Picking one sort clears the others (above), so every sort button follows.
-        if (SORT_IDS.indexOf(e.target.id) !== -1) { updateScoreLabel(); updateValidatedLabel(); updateNameLabel(); }
+        if (SORT_IDS.indexOf(e.target.id) !== -1) { updateScoreLabel(); updateValidatedLabel(); updateNameLabel(); updateUpdatedLabel(); }
     });
 
     // State is named by its ticks, Linked by where it is linked to ("Linked to DM3-Staging"). Linked to
@@ -145,6 +158,7 @@
             updateScoreLabel();
             updateValidatedLabel();
             updateNameLabel();
+            updateUpdatedLabel();
             htmx.trigger(document.body, 'refreshRules');
             return;
         }
@@ -181,8 +195,8 @@
     var MIN_W = 48;
     var COLUMNS = [
         ['score', 'Score'], ['name', 'Rule'], ['siem', 'SIEM'], ['state', 'State'], ['severity', 'Severity'],
-        ['validated', 'Validated'], ['upstream', 'Upstream'], ['author', 'Author'], ['mitre', 'MITRE'], ['type', 'Type'], ['lang', 'Lang'],
-        ['alerts', 'Alerts (7 days)'],
+        ['validated', 'Validated'], ['updated', 'Last updated'], ['upstream', 'Upstream'], ['author', 'Author'], ['mitre', 'MITRE'], ['type', 'Type'], ['lang', 'Lang'],
+        ['alerts', 'Alerts (7 days)'], ['actionable', 'Not actionable'],
     ];
     var TITLES = {};
     COLUMNS.forEach(function (c) { TITLES[c[0]] = c[1]; });
@@ -476,6 +490,7 @@
         updateScoreLabel();
         updateValidatedLabel();
         updateNameLabel();
+        updateUpdatedLabel();
         var viewInput = $('rh-view');
         if (viewInput) {
             if (!viewInput.value) {
@@ -497,6 +512,18 @@
         applyTable();
 
         initPageMenuAndBulk(page, region);
+
+        // A link from another page can open a rule's window here (Diagnostics, for a rule of another client
+        // it switched to): ?open=<rule_id>|<siem_id>|<space>. Taken out of the address, so a reload doesn't.
+        var params = new URLSearchParams(location.search), open = (params.get('open') || '').split('|');
+        if (params.has('open')) {
+            params.delete('open');
+            history.replaceState(history.state, '', location.pathname + (params.toString() ? '?' + params : ''));
+        }
+        if (open.length === 3 && open[0]) {
+            htmx.ajax('GET', '/api/rules/' + encodeURIComponent(open[0]) + '/history-modal?space=' + encodeURIComponent(open[2])
+                + '&siem_id=' + encodeURIComponent(open[1]), { target: '#modal-container', swap: 'innerHTML' });
+        }
     });
 
     // ── "..." actions menu, gutter alignment, bulk edit ──

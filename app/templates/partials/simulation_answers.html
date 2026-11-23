@@ -1,0 +1,24 @@
+{#
+  The Simulations page's Answers tab, for one simulation (api.simulations.simulation_answers): each of
+  its scenarios' questions with the answer, the searches that find it in the simulation's own data, and
+  the notes on its rules (With TIDE), which players never see.
+#}
+{% from "components/window_ui.html" import section_head %}
+<section class="card card-padded card-mb sys-section" data-fold="answers" aria-label="Questions and answers">
+    {{ section_head('Questions and answers', 'book-open') }}
+    <div class="sys-section__body">
+        {% for sc, items in questions %}
+        <details class="sim-answers" data-fold="answers-{{ sc.id }}">
+            <summary>{{ sc.label }}: {{ items | length }} questions</summary>
+            {% for q, writeup in items %}
+            <div class="sim-answer">
+                <p><strong>{{ q.n }}.</strong> {{ q.text | md }}</p>
+                <div class="sim-answer__writeup">{{ writeup | md }}</div>
+            </div>
+            {% endfor %}
+        </details>
+        {% else %}
+        <p class="rm-empty">Its scenarios have no questions.</p>
+        {% endfor %}
+    </div>
+</section>

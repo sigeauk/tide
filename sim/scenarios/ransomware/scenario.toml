@@ -1,0 +1,28 @@
+# A BOTES scenario: what it is, and when it happened. The folder's name is its id.
+# scenario.py writes manifest.json beside it, listing the log files in logs/ and noise/.
+
+title = "Cerber ransomware"                # short, for lists (the questions' heading is in questions.md)
+date = "24 August 2016"
+environment = "wayne-enterprises"          # whose network the logs come from
+source = "Splunk Boss of the SOC v1"
+licence = "CC0-1.0"
+download = "bots-v1"                       # scenario.py pack-bots cuts the logs from download_botes.py's data
+
+# The attack, in original time (UTC): what a replay sends. Cerber on we8105desk: USB MIRANDA_PRI 16:42,
+# Word macro -> cmd -> wscript 16:43, payload mhtr.jpg from solidaritedeproximite.org 16:48, 121214.tmp
+# -> osk.exe, shadow copies deleted 16:49, files on the we9041srv share encrypted over SMB 17:04-17:15.
+# (Starts after a Tenable scan at 16:35-16:37.)
+window = ["2016-08-24T16:40:00Z", "2016-08-24T17:20:00Z"]
+
+# Kept in the pack either side of the window, so a replay can start earlier or end later.
+lead = "30m"
+
+# At noise busy, this noise pack (noise/<id>/: the same network, earlier that day) is laid over the span.
+noise_packs = ["wayne-24aug-morning"]
+# The attacker's addresses, domains, hashes and files: scenario.py check-noise keeps them out of the noise.
+attacker = ["MIRANDA_PRI", "Miranda_Tate_unveiled", "solidaritedeproximite.org", "mhtr.jpg", "cerberhhyed5frqa",
+            "xmfir0.win", "121214.tmp"]
+
+# The noise levels (quiet, normal, busy) at which every answer has been checked: check_answers.py --fresh
+# --noise <level> passed. The portal's Run page shows them.
+checked_at = ["quiet", "normal", "busy"]   # 20 November 2026: 32 of 32 at quiet and normal; 22 November, at busy

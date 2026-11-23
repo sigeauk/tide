@@ -1,0 +1,27 @@
+# A BOTES scenario: what it is, and when it happened. The folder's name is its id.
+# scenario.py writes manifest.json beside it, listing the log files in logs/ and noise/.
+
+title = "Web defacement"                   # short, for lists (the questions' heading is in questions.md)
+date = "10 August 2016"
+environment = "wayne-enterprises"          # whose network the logs come from
+source = "Splunk Boss of the SOC v1"
+licence = "CC0-1.0"
+download = "bots-v1"                       # scenario.py pack-bots cuts the logs from download_botes.py's data
+
+# The attack, in original time (UTC): what a replay sends. imreallynotbatman.com (we1149srv): Acunetix
+# scan from 40.80.148.42 at 21:36, Joomla admin brute force from 23.22.63.114 at 21:45, web shell
+# (php-cgi -> cmd) 21:55, 3791.exe run 21:56 then whoami/net/tasklist, site defaced 22:06-22:19.
+window = ["2016-08-10T21:35:00Z", "2016-08-10T22:25:00Z"]
+
+# Kept in the pack either side of the window, so a replay can start earlier or end later.
+lead = "30m"
+
+# At noise busy, this noise pack (noise/<id>/: the same network, earlier that day) is laid over the span.
+noise_packs = ["wayne-10aug-midday"]
+# The attacker's addresses, domains, hashes and files: scenario.py check-noise keeps them out of the noise.
+attacker = ["40.80.148.42", "23.22.63.114", "acunetix", "3791.exe", "aae3f5a29935e6abcc2c2754d12a9af0",
+            "poisonivy-is-coming-for-you-batman", "jumpingcrab.com", "po1s0n1vy", "swrort"]
+
+# The noise levels (quiet, normal, busy) at which every answer has been checked: check_answers.py --fresh
+# --noise <level> passed. The portal's Run page shows them.
+checked_at = ["quiet", "normal", "busy"]   # 20 November 2026: 32 of 32 at quiet and normal; 22 November, at busy

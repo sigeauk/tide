@@ -33,6 +33,7 @@ _LABELS = {
               ("technique", "MITRE technique"), ("tactic", "Tactic"), ("level", "Level"), ("status", "Status")),
 }
 _LEFT_OUT = {"sigma": ("deprecated", "unsupported")}
+UPDATED_LABEL = "Last updated"   # the date range both browsers have (updated_from / updated_to)
 # How a name says a Profile or Noise choice that has no tag.
 _NAMED = {("Profile", "None"): "No profile", ("Noise", "Not tagged"): "Noise not tagged"}
 
@@ -129,6 +130,9 @@ def summary(library: str, q: str, technique: str, filters: Dict[str, List[str]],
         values = filters.get(name) or []
         if values:
             out.append((label, [_label(library, name, v, labels.get(name, {})) for v in values]))
+    start, end = (filters.get("updated_from") or [""])[0], (filters.get("updated_to") or [""])[0]
+    if start or end:
+        out.append((UPDATED_LABEL, [f"{start or '…'} – {end or '…'}"]))
     if q.strip():
         out.append(("Search", [f"“{q.strip()}”"]))
     return out
@@ -153,6 +157,8 @@ def suggested_name(library: str, parts: List[Tuple[str, List[str]]]) -> str:
     three choices is shortened."""
     seen, words = set(), []
     for label, values in parts:
+        if label == UPDATED_LABEL:   # dates say when, not what: in the description only
+            continue
         values = [_NAMED.get((label, v), f"{v} {label.lower()}" if label in ("Profile", "Noise") else v) for v in values]
         values = [v for v in values if v.lower() not in seen]
         seen.update(v.lower() for v in values)

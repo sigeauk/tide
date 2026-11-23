@@ -21,6 +21,7 @@ from datetime import date, datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from app.config import get_settings
+from app.services.search_query import SearchQuery
 
 logger = logging.getLogger(__name__)
 
@@ -432,6 +433,8 @@ _COLUMN_FILTERS = {"platform": "platform", "type": "rule_type", "severity": "sev
 _LIST_FILTERS = {"integration": "integrations", "tactic": "tactics"}
 _TAG_FILTERS = {"data_source": "Data Source:", "profile": "Profile:", "noise": "Noise:"}
 FILTERS = (*_COLUMN_FILTERS, *_LIST_FILTERS, *_TAG_FILTERS)
+# Last updated: when Elastic last changed the rule (its updated_date), from and to. Not counted.
+DATE_FILTERS = ("updated_from", "updated_to")
 NO_TAG = "none"
 # Tag values in the order their filter lists them; any others follow A → Z.
 _TAG_ORDER = {"profile": ("recommended", "beta", "aggressive"), "noise": ("low", "medium", "high", "unknown")}
@@ -455,13 +458,25 @@ def _values_sql(name: str) -> str:
 
 def picked(filters: Optional[Dict[str, Any]]) -> Dict[str, List[str]]:
     """``filters`` as the browser's filters take them: each of FILTERS with its values (one value or
-    several), blanks left out and tag values in lower case."""
+    several), blanks left out and tag values in lower case; and each end of Last updated
+    (DATE_FILTERS) as ``[YYYY-MM-DD]``, or ``[]`` when not a date."""
     out: Dict[str, List[str]] = {}
     for name in FILTERS:
         value = (filters or {}).get(name) or []
         values = [str(v).strip() for v in ([value] if isinstance(value, str) else value) if str(v).strip()]
         out[name] = [v.lower() for v in values] if name in _TAG_FILTERS else values
+    for name in DATE_FILTERS:
+        out[name] = picked_date((filters or {}).get(name))
     return out
+
+
+def picked_date(value: Any) -> List[str]:
+    """A date filter's value (text, or a list holding it) as ``[YYYY-MM-DD]``, or ``[]``."""
+    value = value[0] if isinstance(value, (list, tuple)) and value else value
+    try:
+        return [date.fromisoformat(str(value).strip()).isoformat()] if value else []
+    except ValueError:
+        return []
 
 
 def _where(q: str, technique: str, filters: Optional[Dict[str, Any]], deployable: bool = False,
@@ -469,16 +484,21 @@ def _where(q: str, technique: str, filters: Optional[Dict[str, Any]], deployable
     where: List[str] = ["status <> 'deprecated'"] if deployable else []
     params: List[Any] = []
     if q.strip():
-        like = f"%{q.strip()}%"
-        where.append("(name ILIKE ? OR description ILIKE ? OR rule_id ILIKE ? "
-                     "OR array_to_string(tags, ' ') ILIKE ? OR array_to_string(techniques, ' ') ILIKE ?)")
-        params += [like] * 5
+        cond, search_params = SearchQuery(q).sql(
+            "name", "description", "rule_id", "array_to_string(tags, ' ')", "array_to_string(techniques, ' ')")
+        where.append(cond)
+        params += search_params
     if technique.strip():
         where.append(technique_clause("techniques", technique, params))
-    for name, values in picked(filters).items():
-        if values and name != skip:
+    chosen = picked(filters)
+    for name in FILTERS:
+        if chosen[name] and name != skip:
             where.append(f"list_has_any({_values_sql(name)}, ?::VARCHAR[])")
-            params.append(values)
+            params.append(chosen[name])
+    for name, op in (("updated_from", ">="), ("updated_to", "<=")):   # a rule with no date fails either end
+        if chosen[name]:
+            where.append(f"updated {op} ?::DATE")
+            params.append(chosen[name][0])
     return (f"WHERE {' AND '.join(where)}" if where else ""), params
 
 
@@ -616,10 +636,10 @@ def search_hunts(conn, q: str = "", technique: str = "", platform: str = "",
     where: List[str] = []
     params: List[Any] = []
     if q.strip():
-        like = f"%{q.strip()}%"
-        where.append("(name ILIKE ? OR description ILIKE ? OR hunt_id ILIKE ? "
-                     "OR array_to_string(queries, ' ') ILIKE ? OR array_to_string(techniques, ' ') ILIKE ?)")
-        params += [like] * 5
+        cond, search_params = SearchQuery(q).sql(
+            "name", "description", "hunt_id", "array_to_string(queries, ' ')", "array_to_string(techniques, ' ')")
+        where.append(cond)
+        params += search_params
     if technique.strip():
         where.append(technique_clause("techniques", technique, params))
     if platform:

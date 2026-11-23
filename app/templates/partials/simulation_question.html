@@ -1,0 +1,38 @@
+{#
+  One question as a player sees it (api.simulations: the Simulation page, answer_question, take_hint):
+  its text, the answer box and Hint until it is answered, the hints taken, and once answered the points
+  and the write-up. message says how the last answer or hint went.
+#}
+{% from "macros/icons.html" import icon %}
+{% set q, mine = item.q, item.mine %}
+<div class="sim-q{% if mine.solved is not none %} sim-q--solved{% endif %}" id="sim-q-{{ sim.id }}-{{ q.scenario }}-{{ q.n }}">
+    <div class="sim-q__text"><strong>{{ q.n }}.</strong> {{ q.text | md }}
+        <span class="text-secondary text-sm">{{ q.points }} points</span>
+    </div>
+    {% for h in mine.hints %}<p class="sim-q__hint">{{ icon('lightbulb', '14') }} {{ h }}</p>{% endfor %}
+    {% if mine.solved is not none %}
+    <p class="sim-q__score">{{ icon('check-circle', '15') }} Answered: {{ mine.solved }} points</p>
+    <details class="sim-answers" data-fold="writeup-{{ q.scenario }}-{{ q.n }}">
+        <summary>How to find it</summary>
+        <div class="sim-answer__writeup">{{ item.writeup | md }}</div>
+    </details>
+    {% else %}
+    <form name="Answer" class="sim-q__form" hx-post="/api/simulation/{{ sim.id }}/answer"
+          hx-target="#sim-q-{{ sim.id }}-{{ q.scenario }}-{{ q.n }}" hx-swap="outerHTML">
+        <input type="hidden" name="scenario" value="{{ q.scenario }}">
+        <input type="hidden" name="n" value="{{ q.n }}">
+        <label class="sr-only" for="sim-a-{{ sim.id }}-{{ q.scenario }}-{{ q.n }}">Answer to question {{ q.n }}</label>
+        <input id="sim-a-{{ sim.id }}-{{ q.scenario }}-{{ q.n }}" name="answer" class="form-input" maxlength="200" autocomplete="off"
+               placeholder="Your answer…">
+        <button name="Answer" type="submit" class="btn btn-primary">Answer</button>
+        {% if q.hints and mine.hints | length < q.hints | length %}
+        <button name="Hint" type="button" class="btn btn-secondary" hx-post="/api/simulation/{{ sim.id }}/hint"
+                hx-include="closest form" hx-target="#sim-q-{{ sim.id }}-{{ q.scenario }}-{{ q.n }}" hx-swap="outerHTML"
+                hx-confirm="Take a hint? It costs {{ q.hint_cost() }} points, whether you answer it or not.">
+            {{ icon('lightbulb', '15') }} Hint
+        </button>
+        {% endif %}
+    </form>
+    {% endif %}
+    {% if message %}<p class="{{ 'sim-q__ok' if ok else 'inline-error' }}">{{ message }}</p>{% endif %}
+</div>

@@ -27,6 +27,18 @@
          'A rule whose Elastic or Sigma original was updated longer ago than this, and not reviewed, is listed'),
         ('exceptions_many', 'Many exceptions over (items)', monitoring_defaults.exceptions_many, 1, 10000,
          'A rule with more exception items than this, across its own and shared lists, is listed as having many exceptions'),
+        ('outcome_days', 'Outcomes over (days)', monitoring_defaults.outcome_days, 1, 90,
+         "What rules' alerts turned out to be is counted over this many days, for their shares and Rule Tuning"),
+        ('outcome_min', 'Judged alerts needed', monitoring_defaults.outcome_min, 1, 100000,
+         'A share of judged alerts is shown, and found too high, only from this many'),
+        ('fp_share_pct', 'False positives share (%)', monitoring_defaults.fp_share_pct, 1, 100,
+         'A rule with at least this share of its judged alerts false positives is listed as Mostly false positives'),
+        ('bad_data_share_pct', 'Bad data share (%)', monitoring_defaults.bad_data_share_pct, 1, 100,
+         'A rule with at least this share of its judged alerts false positives from bad data is listed for the engineers'),
+        ('expected_share_pct', 'Expected activity share (%)', monitoring_defaults.expected_share_pct, 1, 100,
+         'A rule with at least this share of its judged alerts benign true positives is listed as Mostly expected activity'),
+        ('duplicate_share_pct', 'Duplicates share (%)', monitoring_defaults.duplicate_share_pct, 1, 100,
+         'A rule with at least this share of its judged alerts duplicates is listed as Mostly duplicates'),
     ] %}
     {% for name, label, default, lo, hi, tip in rm_fields %}
     <div class="flex-none">
@@ -41,6 +53,14 @@
                title="Lists, as Info, an enabled rule whose validation has expired under the client's validation policy (above), or that was edited since it was validated. Off by default.">
             <input type="checkbox" name="validation_stale" value="1"{% if client.validation_stale %} checked{% endif %}>
             List expired or changed validations
+        </label>
+    </div>
+    <div class="flex-none">
+        <span class="form-label">Alerts left open</span>
+        <label class="flex items-center gap-sm fs-xs mt-sm nowrap"
+               title="Lists a rule when at least 50 of the alerts it raised 8 to 30 days ago, and 80% or more, are still open in Kibana: nobody closes or acknowledges them. On by default.">
+            <input type="checkbox" name="alerts_unreviewed" value="1"{% if client.alerts_unreviewed is none or client.alerts_unreviewed %} checked{% endif %}>
+            List rules whose alerts are left open
         </label>
     </div>
     <div class="flex-none">

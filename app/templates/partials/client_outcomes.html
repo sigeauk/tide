@@ -1,0 +1,69 @@
+{# Partial: client_outcomes.html — a client's Outcomes from Kibana section (its Rule settings tab): how the
+   values Kibana holds map onto TIDE's outcomes (rule_outcomes), laid out as Rule scoring is, a column per
+   source. It is the section's whole content, replaced by its own form (outerHTML of #client-outcomes).
+   Context: client, case_field, field_options [(value, label)], groups [{title, name, hint, rows:[{value,
+            count, choice, default}]}], outcome_options [(key, label)], read, cases_read, message, error #}
+{% from "macros/icons.html" import icon %}
+{% from "components/window_ui.html" import section_head %}
+<div id="client-outcomes">
+{{ section_head('Outcomes from Kibana', 'sliders-horizontal') }}
+<div class="sys-section__body scoring-editor">
+    <p class="scoring-editor__intro">
+        At each sync TIDE reads what {{ client.name }}'s closed alerts turned out to be: an alert's outcome tag, else the
+        outcome its case was closed with, for a case holding one rule's alerts only. A value named as an outcome (TP,
+        False Positive, Benign True Positive…) is taken as that outcome; choose another, or Ignore, below. Changes apply
+        from the next sync.
+    </p>
+    {% if error %}<p class="scoring-editor__msg scoring-editor__msg--error" role="alert">{{ error }}</p>{% endif %}
+    {% if message %}<p class="scoring-editor__msg scoring-editor__msg--ok" role="status">{{ message }}</p>{% endif %}
+    {% if not read %}
+    <p class="rm-empty">No sync has read this client's alert outcomes yet: the values Kibana holds show here after the next one.</p>
+    {% elif not cases_read %}
+    <p class="rm-note rm-note--warn">{{ icon('triangle-alert', '13') }} Kibana didn't give the closed cases at the last sync: the SIEM's API key needs Cases read under Security in each space.</p>
+    {% endif %}
+
+    <form name="Submit Outcome Mappings" class="scoring-form"
+          hx-post="/api/management/clients/{{ client.id }}/outcomes" hx-target="#client-outcomes" hx-swap="outerHTML">
+        <div class="flex gap-ms items-start flex-wrap mb-sm">
+            <div class="flex-none">
+                <label class="form-label" for="outcomes-case-field">Case outcome</label>
+                <select id="outcomes-case-field" name="case_field" class="form-select"
+                        title="Where your case tool leaves the outcome as it closes a case. Off: cases give no outcome.">
+                    {% for value, label in field_options %}
+                    <option value="{{ value }}"{% if value == case_field %} selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+        <div class="scoring-groups">
+            {% for g in groups %}
+            <div class="scoring-group">
+                <h4 class="scoring-group__title">{{ g.title }}</h4>
+                {% if g.rows %}
+                {% for r in g.rows %}
+                <label class="scoring-row scoring-row--choice" title="{{ g.hint }}">
+                    <span class="scoring-row__label">{{ r.value }}</span>
+                    <input type="hidden" name="{{ g.name }}_value" value="{{ r.value }}">
+                    <select name="{{ g.name }}_outcome" class="form-select" aria-label="{{ r.value }}">
+                        {% for key, label in outcome_options %}
+                        <option value="{{ key }}"{% if key == r.choice %} selected{% endif %}>{{ label }}{% if key == r.default %} (default){% endif %}</option>
+                        {% endfor %}
+                    </select>
+                    <span class="scoring-row__default">{{ '{:,}'.format(r.count) }}</span>
+                </label>
+                {% endfor %}
+                {% else %}
+                <p class="rm-empty">{{ g.empty }}</p>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        <div class="scoring-editor__foot">
+            <span class="scoring-editor__total">Counts are of the last 90 days: closed alerts for tags and reasons, closed cases for case values.</span>
+            <span class="scoring-editor__actions">
+                <button name="Save Outcome Mappings" type="submit" class="btn btn-primary btn-sm">{{ icon('save', '14') }} Save</button>
+            </span>
+        </div>
+    </form>
+</div>
+</div>

@@ -47,8 +47,9 @@
 {#- What Rule Monitoring found on a rule, as its card and table row flag it (rule_issues.card_problems):
    a pill for each severity among them, its icon and how many (red errors, amber warnings, blue
    information); grey on a disabled rule, whose problems would stop it working only if it were
-   switched on (unless TIDE's own are among them); hovered, each of them. The rule window's Rule
-   Monitoring section has them in full. Nothing when there are none. -#}
+   switched on (unless TIDE's own are among them); hovered, each of them. Then one tuning pill, the
+   sliders and how many reasons it needs tuning (a mark included). The rule window's Rule Monitoring
+   and Tuning sections have them in full. Nothing when there are none. -#}
 {%- if p -%}
 {%- for pill in p.pills -%}
 {%- set look = SEVERITY_LOOK[pill.severity] -%}
@@ -56,6 +57,11 @@
 <span class="status-pill status-{{ look.tone if pill.tone != 'muted' else 'muted' }}" data-problems="{{ pill.severity }}"
       title="Rule Monitoring found {{ pill.count }} {{ noun }}{{ ' (the rule is disabled: these would stop it working if it were switched on)' if p.disabled }}: {{ pill.lines | join('; ') }}. Open the rule for more.">{{ icon(look.icon, '11') }} <span class="status-pill__text">{{ pill.count }}<span class="sr-only"> {{ noun }}</span></span></span>
 {%- endfor -%}
+{%- if p.tuning -%}
+{%- set noun = 'reason' if p.tuning.count == 1 else 'reasons' -%}
+<span class="status-pill status-tuning" data-problems="tuning"
+      title="Needs tuning, {{ p.tuning.count }} {{ noun }}: {{ p.tuning.lines | join('; ') }}. Open the rule for more.">{{ icon('sliders-horizontal', '11') }} <span class="status-pill__text">{{ p.tuning.count }}<span class="sr-only"> tuning {{ noun }}</span></span></span>
+{%- endif -%}
 {%- endif -%}
 {%- endmacro %}
 

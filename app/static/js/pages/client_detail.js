@@ -34,19 +34,6 @@
         }
     }
 
-    // ── Tabs (#108): show the chosen tab's panel, and put it in the address so a reload or a link keeps it ──
-    function showTab(e, btn) {
-        var key = btn.dataset.tab;
-        btn.parentElement.querySelectorAll('.settings-tab').forEach(function (t) {
-            t.classList.toggle('active', t === btn);
-            t.setAttribute('aria-selected', t === btn ? 'true' : 'false');
-        });
-        document.querySelectorAll('[data-client-tab]').forEach(function (p) { p.hidden = p.dataset.clientTab !== key; });
-        var url = new URL(window.location.href);
-        url.searchParams.set('tab', key);
-        history.replaceState(history.state, '', url);
-    }
-
     // ── Move a system (from the Manage Systems dialog) ──
     function moveSystem(e, el) {
         $('edit-systems-modal').style.display = 'none';
@@ -174,7 +161,7 @@
         if (fields && backup) fields.hidden = !backup.checked;
     }
 
-    TIDE.actions('clientDetail', { submitEdit: submitEdit, moveSystem: moveSystem, tab: showTab });
+    TIDE.actions('clientDetail', { submitEdit: submitEdit, moveSystem: moveSystem });
     TIDE.actions('clientSiems', { toggleEdit: toggleEdit, pickColor: pickColor, validationMode: validationMode, addSiem: addSiemChange });
     TIDE.actions('clientGitlab', { uses: gitlabUses });
 })();

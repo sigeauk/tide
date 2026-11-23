@@ -7,11 +7,12 @@
       breadcrumb(request)              -- uses crumbs from request
       breadcrumb(items=[...])          -- pass an explicit list of (label,href) tuples
 
-    Renders nothing when the trail is empty so unmapped pages stay clean.
+    Renders nothing for an empty trail, or one holding only the page itself (its title says it).
+    No trail starts at Home.
 #}
 {% macro breadcrumb(request=None, items=None) %}
     {% set trail = items if items is not none else (crumbs(request) if request else []) %}
-    {% if trail %}
+    {% if trail|length > 1 %}
     <nav class="breadcrumb" aria-label="Breadcrumb">
         <ol class="breadcrumb__list">
         {% for label, href in trail %}

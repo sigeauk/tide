@@ -1,9 +1,9 @@
 /*
  * Controls used across the app, over the helpers in app.js: the sidebar (nav groups, the account
  * group's theme switch, collapse) and client switcher, MITRE technique pills (open the side panel), the rule
- * window's Move / Delete / Add link, the rule compare window, clickable list rows, Expand / Collapse
- * all, a few form helpers (diagnostics, generate baselines, a system's Add baseline), and the
- * scrollbar inset of a page in Rule Health's layout.
+ * window's Move / Delete / Add link and Record outcome…, the rule compare window, clickable list rows, Expand / Collapse
+ * all, inline tabs, a select that loads what it picks, a few form helpers (diagnostics, generate baselines, a
+ * system's Add baseline), and the scrollbar inset of a page in Rule Health's layout.
  */
 (function () {
     'use strict';
@@ -50,6 +50,18 @@
         moveResolve: function (e, btn) { window.tideMoveResolve(btn); },
     });
 
+    // Record outcome…: the outcome's meaning beneath it, who fixes what it calls for, and Needs tuning
+    // ticked for an outcome that calls for tuning.
+    TIDE.actions('tuning', {
+        outcome: function (e, sel) {
+            var opt = sel.selectedOptions[0], form = sel.form;
+            if (!opt || !opt.value) return;
+            form.querySelector('[data-tuning-meaning]').textContent = opt.dataset.meaning;
+            form.querySelector('[data-tuning-needs]').checked = opt.dataset.tune === 'true';
+            form.querySelector('[data-tuning-fixer]').textContent = opt.dataset.fixer ? 'Who fixes: ' + opt.dataset.fixer : '';
+        },
+    });
+
     TIDE.actions('ui', {
         // A list row that opens its page (data-href).
         go: function (e, el) { window.location = el.dataset.href; },
@@ -64,6 +76,25 @@
         sysBaselineApply: function (e, btn) {
             htmx.ajax('POST', '/api/baselines/' + encodeURIComponent(document.getElementById('sys-bl-apply').value) +
                       '/apply/' + btn.dataset.systemId + '?return=system-dialog', { target: '#modal-container', swap: 'innerHTML' });
+        },
+        // Inline tabs (.settings-tabs--inline, role="tablist"): the tab shows the panel its aria-controls
+        // names and hides its siblings', and puts ?tab=<data-tab> in the address so a reload or a link
+        // keeps it (a client's page, Simulations).
+        tab: function (e, btn) {
+            btn.closest('[role="tablist"]').querySelectorAll('[role="tab"]').forEach(function (t) {
+                var on = t === btn, panel = document.getElementById(t.getAttribute('aria-controls'));
+                t.classList.toggle('active', on);
+                t.setAttribute('aria-selected', on ? 'true' : 'false');
+                if (panel) panel.hidden = !on;
+            });
+            var url = new URL(window.location.href);
+            url.searchParams.set('tab', btn.dataset.tab);
+            history.replaceState(history.state, '', url);
+        },
+        // A select that shows what its choice picks: data-url with {id} as the chosen value, into data-target.
+        load: function (e, sel) {
+            htmx.ajax('GET', sel.dataset.url.replace('{id}', encodeURIComponent(sel.value)),
+                      { target: sel.dataset.target, swap: 'innerHTML' });
         },
     });
 

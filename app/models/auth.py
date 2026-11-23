@@ -142,7 +142,7 @@ class User(BaseModel):
             username="developer",
             email="dev@localhost",
             name="Local Developer",
-            roles=["ADMIN", "ANALYST", "ENGINEER"],
+            roles=["ADMIN", "ANALYST", "ENGINEER", "SIM_ADMIN"],
             groups=["/admins", "/developers"],
             auth_provider="local",
             is_superadmin=True,

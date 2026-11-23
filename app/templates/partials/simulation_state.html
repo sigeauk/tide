@@ -1,0 +1,14 @@
+{# A simulation's state as a pill (s: a simulation from app.services.sim.simulation, states: its names). #}
+{% if s.interrupted %}
+<span class="status-pill status-pill--fail" title="TIDE restarted while it was {{ states.get(s.state, s.state) | lower }}: {{ 'clean it up' if s.state == 'cleaning_up' else 'end it' }} again"><span class="status-dot"></span>Interrupted</span>
+{% elif s.state == 'failed' %}
+<span class="status-pill status-pill--fail" title="{{ s.error or 'It failed' }}"><span class="status-dot"></span>Failed</span>
+{% elif s.state == 'ended' and s.cleanup_failed %}
+<span class="status-pill status-pill--fail" title="Something it made couldn't be removed: clean it up again"><span class="status-dot"></span>Not cleaned up</span>
+{% elif s.state == 'ended' and s.cleaned %}
+<span class="status-pill status-pill--unknown"><span class="status-dot"></span>Cleaned up</span>
+{% elif s.state == 'ended' %}
+<span class="status-pill status-pill--unknown" title="Its space, logs and rules are still on the SIEM: clean it up when you're done with them"><span class="status-dot"></span>Ended</span>
+{% else %}
+<span class="status-pill status-pill--ok"><span class="status-dot"></span>{{ states.get(s.state, s.state) }}</span>
+{% endif %}

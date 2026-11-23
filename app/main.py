@@ -31,7 +31,7 @@ except Exception:  # pragma: no cover
 from app.config import get_settings
 from app.api.deps import CurrentUser, DbDep, ActiveClient, OptionalClient
 from app.services import keycloak_config
-from app.api import auth, rules, heatmap, threats, promotion, sigma, elastic as elastic_api, rule_upstream as rule_upstream_api, hunting as hunting_api, settings as settings_api, inventory, external_sharing, clients as clients_api, management as management_api, mitre as mitre_api, bulk_edit as bulk_edit_api, diagnostics as diagnostics_api, dashboard as dashboard_api, rule_monitoring as rule_monitoring_api, maintenance as maintenance_api, backlog as backlog_api
+from app.api import auth, rules, heatmap, threats, promotion, sigma, elastic as elastic_api, rule_upstream as rule_upstream_api, hunting as hunting_api, settings as settings_api, inventory, external_sharing, clients as clients_api, management as management_api, mitre as mitre_api, bulk_edit as bulk_edit_api, diagnostics as diagnostics_api, dashboard as dashboard_api, rule_monitoring as rule_monitoring_api, rule_tuning as rule_tuning_api, maintenance as maintenance_api, backlog as backlog_api, simulations as simulations_api
 
 # 4.1.0 P1: structured JSON logging with per-request context. Replaces the
 # old basicConfig() call. Format selected by TIDE_LOG_FORMAT env (default
@@ -901,6 +901,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Rule Monitoring is Rule Health's: whoever can see rules sees what needs action.
         "/rule-monitoring": "page:rules",
         "/api/rule-monitoring": "page:rules",
+        # The Rule Tuning page, recording outcomes and marking rules for tuning (rule_tuning).
+        "/rule-tuning": "page:rule_tuning",
+        "/api/rule-tuning": "page:rule_tuning",
         "/sigma": "page:sigma",
         "/elastic": "page:elastic",
         "/hunting": "page:hunting",
@@ -946,6 +949,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/settings/docs": "page:documentation",
         "/settings/changelog": "page:documentation",
         "/api/diagnostics": "page:diagnostics",
+        # Simulations (#118): the Sim Admin's page, and the players' page (a player sees only the
+        # simulations they were chosen for: each route checks).
+        "/simulations": "page:simulations",
+        "/api/simulations": "page:simulations",
+        "/simulation": "page:simulation",
+        "/api/simulation": "page:simulation",
     }
 
     # Baseline templates are the Baselines page's, including one made from a rule library's rules
@@ -970,6 +979,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/api/threats": "page:threats",
         "/api/rules": "page:rules",
         "/api/rule-monitoring": "page:rules",
+        "/api/rule-tuning": "page:rule_tuning",
         "/api/promotion": "page:promotion",
         "/api/sigma": "page:sigma",
         "/api/elastic": "page:elastic",
@@ -980,6 +990,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/api/clients": "page:clients",
         "/api/management": "page:management",
         "/api/diagnostics": "page:diagnostics",   # fixes: Support (or a super admin) on that client
+        "/api/simulations": "page:simulations",   # start, end, clean up and clear a simulation
+        "/api/simulation": "page:simulation",     # a player's answers and hints
         **_BASELINE_RESOURCES,
     }
 
@@ -1902,6 +1914,8 @@ def create_app() -> FastAPI:
 
                 # Fetch client record
                 ctx["active_client"] = _db.get_client(_cid) if _cid else None
+                # The sidebar's Simulation: only while the user plays one of the client's (#118)
+                ctx.setdefault("sim_playing", simulations_api.playing_cached(_db, _cid, _user))
 
                 # Fetch user's available clients (admin sees all)
                 if _user and hasattr(_user, "is_admin") and _user.is_admin():
@@ -1940,6 +1954,8 @@ def create_app() -> FastAPI:
     app.include_router(rules.router)
     app.include_router(bulk_edit_api.router)
     app.include_router(rule_monitoring_api.router)
+    app.include_router(rule_tuning_api.router)
+    app.include_router(simulations_api.router)
     app.include_router(maintenance_api.router)
     app.include_router(heatmap.router)
     app.include_router(threats.router)
@@ -2137,7 +2153,8 @@ def create_app() -> FastAPI:
         # and they'd fill the first screen. An address with any filter (a link to find a rule by its
         # name), or with "enabled=" (empty, as the page keeps it when Status is All), shows them all.
         filtered = any(qp.get(k) for k in ("search", "space", "state", "linked_to", "upstream", "rule_type", "language",
-                                           "min_score", "max_score", "validation", "validated_from", "validated_to"))
+                                           "min_score", "max_score", "validation", "tuning", "validated_from",
+                                           "validated_to", "updated_from", "updated_to"))
         enabled_q = qp.get("enabled", "" if filtered else "true")
         from app.services.database import VALIDATION_STATES, normalize_rule_states
         state_q = normalize_rule_states(qp.getlist("state"))
@@ -2148,8 +2165,12 @@ def create_app() -> FastAPI:
         min_score_q = qp.get("min_score") or ""
         max_score_q = qp.get("max_score") or ""
         validation_q = [v for v in qp.getlist("validation") if v]
+        from app.services.rule_tuning import FILTER_STATES as tuning_options
+        tuning_q = [t for t in qp.getlist("tuning") if t in dict(tuning_options)]
         validated_from_q = qp.get("validated_from") or ""
         validated_to_q = qp.get("validated_to") or ""
+        updated_from_q = qp.get("updated_from") or ""
+        updated_to_q = qp.get("updated_to") or ""
         # Table-header column sort (siem / state / severity / author / type / language) — when
         # active it replaces the score default so the filter selects don't claim a sort.
         from app.api.rules import _COLUMN_SORTS
@@ -2157,9 +2178,12 @@ def create_app() -> FastAPI:
         sort_dir_q = qp.get("sort_dir") if (sort_col_q and qp.get("sort_dir") in ("asc", "desc")) else ""
         if not sort_dir_q:
             sort_col_q = ""
-        sort_score_q = qp.get("sort_score") or ("" if sort_col_q else "desc")
         sort_validated_q = qp.get("sort_validated") or ""
         sort_name_q = qp.get("sort_name") or ""
+        sort_updated_q = qp.get("sort_updated") or ""
+        # Score sorts High → Low by default, unless the address asks for another sort.
+        sort_score_q = qp.get("sort_score") or (
+            "" if (sort_col_q or sort_validated_q or sort_name_q or sort_updated_q) else "desc")
         min_score_int = int(min_score_q) if min_score_q.strip().lstrip('-').isdigit() else None
         max_score_int = int(max_score_q) if max_score_q.strip().lstrip('-').isdigit() else None
 
@@ -2185,8 +2209,11 @@ def create_app() -> FastAPI:
             min_score=min_score_int,
             max_score=max_score_int,
             validation=validation_q,
+            tuning=tuning_q,
             validated_from=_parse_date_bound(validated_from_q, end_of_day=False),
             validated_to=_parse_date_bound(validated_to_q, end_of_day=True),
+            updated_from=_parse_date_bound(updated_from_q, end_of_day=False),
+            updated_to=_parse_date_bound(updated_to_q, end_of_day=True),
         )
         _all_rules, _deduped_rules = _get_filtered_rules(db, page_filters, _cid)
         metrics = _metrics_from_rules(_deduped_rules, _all_rules)
@@ -2265,17 +2292,53 @@ def create_app() -> FastAPI:
                 "max_score": max_score_q,
                 "validation": validation_q,
                 "validation_options": VALIDATION_STATES,
+                "tuning": tuning_q,
+                "tuning_options": tuning_options,
+                "can_tune": not user or user.can_write("page:rule_tuning"),
                 "validated_from": validated_from_q,
                 "validated_to": validated_to_q,
+                "updated_from": updated_from_q,
+                "updated_to": updated_to_q,
                 "sort_by": "score_desc",
                 "sort_score": sort_score_q,
                 "sort_validated": sort_validated_q,
                 "sort_name": sort_name_q,
+                "sort_updated": sort_updated_q,
                 "sort_col": sort_col_q,
                 "sort_dir": sort_dir_q,
                 "view": qp.get("view") if qp.get("view") in ("cards", "table") else "",
                 "offline_notice": offline_notice,
             }
+        )
+
+    @app.get("/simulations", response_class=HTMLResponse, name="simulations")
+    def simulations_page(request: Request, user: CurrentUser, db: DbDep, client_id: ActiveClient):
+        """Simulations (#118): start one on the client's SIEM, follow it, end it, keep its results."""
+        return render_template(
+            "pages/simulations/simulations.html", request,
+            {"user": user, "active_page": "simulations",
+             **simulations_api.page_context(db, client_id, user, request.query_params.get("tab", ""))},
+        )
+
+    @app.get("/simulation", response_class=HTMLResponse, name="simulation")
+    def simulation_page(request: Request, user: CurrentUser, db: DbDep, client_id: ActiveClient):
+        """Simulation (#118): the open simulations this person was chosen to play; Home when there is none,
+        so the page goes with its sidebar entry."""
+        ctx = simulations_api.player_context(db, client_id, user)
+        if not ctx["games"]:
+            return RedirectResponse(url="/", status_code=303)
+        tab = request.query_params.get("tab", "")
+        return render_template("pages/simulations/simulation.html", request,
+                               {"user": user, "active_page": "simulation", **ctx,
+                                "tab": tab if tab in ("questions", "dashboard") else "questions"})
+
+    @app.get("/rule-tuning", response_class=HTMLResponse, name="rule_tuning")
+    def rule_tuning_page(request: Request, user: CurrentUser, db: DbDep, client_id: ActiveClient):
+        """Rule Tuning: the rules whose alerts need tuning, the costliest first."""
+        from app.api.rule_tuning import page_context
+        return render_template(
+            "pages/rules/rule_tuning.html", request,
+            {"user": user, "active_page": "rule_tuning", **page_context(db, client_id, request.query_params, user)},
         )
 
     @app.get("/rule-monitoring", response_class=HTMLResponse, name="rule_monitoring")
@@ -2916,7 +2979,7 @@ def create_app() -> FastAPI:
         if slug and slug not in docs.PAGES_BY_SLUG:
             raise HTTPException(status_code=404, detail="No such documentation page")
         current = docs.PAGES_BY_SLUG.get(slug)
-        set_crumbs(request, [("Home", "/"), ("Settings", "/settings"),
+        set_crumbs(request, [("Settings", "/settings"),
                              ("Documentation", "/settings/docs" if slug else None)] + ([(current.title, None)] if current else []))
         doc = docs.page(slug, settings.tide_version) if current else None
         if doc:

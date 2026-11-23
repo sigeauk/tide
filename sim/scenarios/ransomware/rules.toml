@@ -1,0 +1,75 @@
+# The detection rules a simulation of this scenario runs in its own Kibana space, created when it
+# starts and deleted with the space when it ends. Each rule's index patterns are narrowed to the
+# simulation's own data streams (logs-*-<its namespace>), so none of them searches anything else.
+#
+# source = "elastic": one of Elastic's prebuilt rules, by its rule_id.
+# source = "sigma":   a Sigma rule, by its id, converted with a pipeline from sim/sigma/ (ecs.yml).
+# source = "custom":  the rule in full, here.
+# rule_id is kept, so a rule's results can be compared from one simulation to the next. covers names
+# the step of the attack it is there to catch.
+
+[[rule]]
+source = "elastic"
+rule_id = "8a1d4831-3ce6-4859-9891-28931fa6101d"
+name = "Suspicious Execution from a Mounted Device"
+covers = "Infected USB drive"
+
+[[rule]]
+source = "elastic"
+rule_id = "a624863f-a70d-417f-a7d2-7a404638d47f"
+name = "Suspicious MS Office Child Process"
+covers = "Malicious Word document opened"
+
+[[rule]]
+source = "elastic"
+rule_id = "2d62889e-e758-4c5e-b57e-c735914ee32a"
+name = "Command and Scripting Interpreter via Windows Scripts"
+covers = "Script dropper runs a command shell"
+
+[[rule]]
+source = "sigma"
+rule_id = "379fa130-190e-4c3f-b7bc-6c8e834485f3"
+name = "File Deletion Via Del"
+covers = "Ransomware hides and deletes itself"
+
+[[rule]]
+source = "elastic"
+rule_id = "b5ea4bfe-a1b2-421f-9d47-22a75a6f2921"
+name = "Volume Shadow Copy Deleted or Resized via VssAdmin"
+covers = "Shadow copies deleted and recovery disabled"
+
+[[rule]]
+source = "elastic"
+rule_id = "dc9c1f74-dac3-48e3-b47f-eb79db358f57"
+name = "Volume Shadow Copy Deletion via WMIC"
+covers = "Shadow copies deleted and recovery disabled"
+
+[[rule]]
+source = "elastic"
+rule_id = "69c251fb-a5d6-4035-b5ec-40438bd829ff"
+name = "Modification of Boot Configuration"
+covers = "Shadow copies deleted and recovery disabled"
+
+[[rule]]
+source = "elastic"
+rule_id = "b2318c71-5959-469a-a3ce-3a0768e63b9c"
+name = "Potential Network Share Discovery"
+covers = "Network share enumeration"
+
+[[rule]]
+source = "custom"
+rule_id = "7fd5a2bb-d74a-46ee-ae8d-f12883b1bb8a"
+name = "Mass file access on a network share"
+covers = "Files on the file share encrypted"
+description = "One client checking access to hundreds of files on a file share within minutes, as ransomware does while it encrypts the share."
+type = "threshold"
+language = "kuery"
+query = 'winlog.channel : "Security" and event.code : "5145"'
+index = ["logs-system.security-*"]
+threshold_field = ["source.ip", "host.name"]
+threshold_value = 300
+severity = "critical"
+risk_score = 99
+techniques = ["T1486", "T1021.002"]
+tactic = "Impact"
+tags = ["Domain: Endpoint"]

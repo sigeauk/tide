@@ -18,9 +18,9 @@
     });
 
     function filterActors(e, input) {
-        var q = input.value.toLowerCase();
+        var q = TIDE.searchMatcher(input.value);
         document.querySelectorAll('[data-actor-row]').forEach(function (item) {
-            var matches = (item.dataset.name || '').includes(q) || (item.dataset.aliases || '').includes(q);
+            var matches = !q || q([item.dataset.name, item.dataset.aliases]);
             item.style.display = matches ? 'flex' : 'none';
         });
     }
@@ -35,11 +35,9 @@
 
     // Highlight the techniques matching the search in the matrix.
     function filterTechniques(e, input) {
-        var q = input.value.toLowerCase().trim();
+        var q = TIDE.searchMatcher(input.value);
         document.querySelectorAll('.ttp-card').forEach(function (cell) {
-            var matches = !q || (cell.dataset.techId || '').toLowerCase().includes(q)
-                || (cell.dataset.techName || '').toLowerCase().includes(q)
-                || TIDE.titleOf(cell).toLowerCase().includes(q);
+            var matches = !q || q([cell.dataset.techId, cell.dataset.techName, TIDE.titleOf(cell)]);
             var hit = !!q && matches;
             cell.style.opacity = matches ? '1' : '0.2';
             cell.style.transform = hit ? 'scale(1.08)' : '';

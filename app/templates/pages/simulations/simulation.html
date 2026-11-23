@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{#
+  Simulation (#118): the simulations this person was chosen to play, while they are open (api.simulations.
+  player_context), in two tabs (ui.tab, ?tab=). Questions: each simulation's story, its space in Kibana,
+  its questions (an answer box and hints each; the write-up once answered) and the board, asked again
+  every 15 s and when an answer scores (which also takes the player Home once it has ended). Dashboard:
+  each simulation's scores over time, the board and how each question went (simulation_dashboard.html).
+#}
+{% from "macros/icons.html" import icon %}
+{% from "macros/help.html" import help_button with context %}
+{% from "components/ui/loading_state.html" import loading_state %}
+
+{% block title %}Simulation | TIDE{% endblock %}
+
+{% block content %}
+<div class="page-header flex items-start justify-between gap-md">
+    <div>
+        <h1 class="page-title-hero">
+            Simulation
+            {{ help_button('simulation') }}
+        </h1>
+        <p class="page-subtitle">An attack replayed into its own space on your SIEM: find what happened, and answer the questions.</p>
+    </div>
+</div>
+
+{% set tabs = [('questions', 'binoculars', 'Questions'), ('dashboard', 'chart-column', 'Dashboard')] %}
+<div class="settings-tabs settings-tabs--inline" role="tablist" aria-label="Simulation">
+    {% for key, ico, label in tabs %}
+    <button name="{{ label }}" type="button" role="tab" id="play-tab-btn-{{ key }}" class="settings-tab{% if key == tab %} active{% endif %}"
+            aria-selected="{{ 'true' if key == tab else 'false' }}" aria-controls="play-tab-{{ key }}"
+            data-click="ui.tab" data-tab="{{ key }}">{{ icon(ico, '16') }} {{ label }}</button>
+    {% endfor %}
+</div>
+
+<div id="play-tab-dashboard" role="tabpanel" aria-labelledby="play-tab-btn-dashboard" data-fold-store="tide.simulationFolds"{% if tab != 'dashboard' %} hidden{% endif %}>
+{% for g in games %}
+    {% if games | length > 1 %}<h2 class="sim-subhead">{% for part in g.parts %}{{ part.scenario.label }}{% if not loop.last %}, {% endif %}{% endfor %}</h2>{% endif %}
+    <div id="sim-dashboard-{{ g.sim.id }}" hx-get="/api/simulation/{{ g.sim.id }}/dashboard" hx-trigger="load" hx-swap="innerHTML">
+        {{ loading_state('Loading…') }}
+    </div>
+{% endfor %}
+</div>
+
+<div id="play-tab-questions" role="tabpanel" aria-labelledby="play-tab-btn-questions" data-fold-store="tide.simulationFolds"{% if tab != 'questions' %} hidden{% endif %}>
+{% for g in games %}
+{% set s, sim = g.sim, g.sim %}
+<section class="card card-padded card-mb sys-section" data-fold="play-{{ s.id }}" aria-label="Simulation">
+    <div class="sys-section__head">
+        <h2 class="sys-section__title">{{ icon('binoculars', '18') }}
+            {% for part in g.parts %}{{ part.scenario.label }}{% if not loop.last %}, {% endif %}{% endfor %}
+            {% include "partials/simulation_state.html" %}
+        </h2>
+    </div>
+    <div class="sys-section__body">
+        {% if g.kibana %}
+        <div class="modal-actions">
+            <a name="Open in Kibana" class="btn btn-primary" href="{{ g.kibana }}" target="_blank" rel="noopener">{{ icon('external-link', '15') }} Open the space in Kibana</a>
+        </div>
+        {% endif %}
+        {% if s.state == 'setting_up' %}
+        <p class="rm-note">{{ icon('loader', '13', 'spin') }} Setting up: its space, rules and logs are on their way. Read the questions now; answers open when the replay starts, and this page shows it.</p>
+        {% endif %}
+        {% for part in g.parts %}
+        <div class="sim-story">{{ part.story | md }}</div>
+        <div class="sim-questions">
+            {% for item in part.questions %}
+            {% set message, ok = '', false %}
+            {% include "partials/simulation_question.html" %}
+            {% endfor %}
+        </div>
+        {% endfor %}
+        <h3 class="sim-subhead">Board</h3>
+        <div id="sim-board-{{ s.id }}" hx-get="/api/simulation/{{ s.id }}/board{% if s.state == 'setting_up' %}?setting_up=1{% endif %}"
+             hx-trigger="every {{ '5s' if s.state == 'setting_up' else '15s' }}, boardChanged from:body" hx-swap="innerHTML">
+            {% set board, me = g.board, g.me %}
+            {% include "partials/simulation_board.html" %}
+        </div>
+    </div>
+</section>
+{% endfor %}
+</div>
+{% endblock %}

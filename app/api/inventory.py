@@ -81,53 +81,9 @@ def _templates(request: Request):
 
 
 def _render(name: str, request: Request, ctx: dict):
-    from app.config import get_settings
-    settings = get_settings()
-    base = {
-        "brand_hue": settings.brand_hue,
-        "cache_bust": settings.tide_version,
-        "settings": settings,
-    }
-    base.update(ctx)
-
-    # Inject active client info for client switcher component
-    if "active_client" not in base:
-        try:
-            from app.services.database import get_database_service
-            _db = get_database_service()
-            _user = base.get("user")
-
-            _cid = request.cookies.get("active_client_id")
-            if not _cid and _user:
-                with _db.get_shared_connection() as conn:
-                    row = conn.execute(
-                        "SELECT client_id FROM user_clients WHERE user_id = ? AND is_default = true LIMIT 1",
-                        [_user.id],
-                    ).fetchone()
-                    if row:
-                        _cid = row[0]
-            if not _cid:
-                with _db.get_shared_connection() as conn:
-                    row = conn.execute(
-                        "SELECT id FROM clients WHERE is_default = true LIMIT 1",
-                    ).fetchone()
-                    if row:
-                        _cid = row[0]
-
-            base["active_client"] = _db.get_client(_cid) if _cid else None
-
-            if _user and hasattr(_user, "is_admin") and _user.is_admin():
-                base["user_clients"] = _db.list_clients()
-            elif _user:
-                _ids = _db.get_user_client_ids(_user.id)
-                base["user_clients"] = [c for c in (_db.get_client(i) for i in _ids) if c]
-            else:
-                base["user_clients"] = []
-        except Exception:
-            base["active_client"] = None
-            base["user_clients"] = []
-
-    return _templates(request).TemplateResponse(request, name, base)
+    """The app's render_template (main.py): the active client, the client switcher's list and the
+    sidebar's state (its Simulation entry among them), as every other page gets them."""
+    return request.app.state.render_template(name, request, ctx)
 
 
 
@@ -802,7 +758,8 @@ def cve_overview_view(cves, params) -> dict:
     """The cards the filter bar asks for (``params``: search, matched, system and coverage, each
     repeated, "none" for none ticked, sort, dir, offset), 50 from ``offset``, with how many match and
     the address of the next 50. Partly covered CVEs count as Has rules."""
-    q = (params.get("search") or "").strip().lower()
+    from app.services.search_query import SearchQuery
+    q = SearchQuery(params.get("search"))
     systems, coverage = set(params.getlist("system")), set(params.getlist("coverage"))
     sort = params.get("sort") if params.get("sort") in _CVE_SORTS else "cve_id"
     try:
@@ -819,7 +776,7 @@ def cve_overview_view(cves, params) -> dict:
             continue
         if coverage and ("detected" if status == "partial" else status) not in coverage:
             continue
-        if q and q not in " ".join((c.cve_id, c.vulnerability_name, c.short_description or "", c.vendor_project, c.product)).lower():
+        if not q.matches(c.cve_id, c.vulnerability_name, c.short_description, c.vendor_project, c.product):
             continue
         rows.append({"cve": c, "status": status, "system_ids": system_ids})
     rows.sort(key=lambda r: _CVE_SORT_KEYS[sort](r["cve"]), reverse=params.get("dir") != "asc")
@@ -1304,6 +1261,8 @@ def _baseline_export_payload(baseline_id: str, client_id: str, include_rules: bo
             "required_rule": step.required_rule,
             "tactic": step.tactic,
             "description": step.description,
+            "priority": step.priority,
+            "category": step.category,
             "techniques": [tech.technique_id for tech in (step.techniques or [])],
             "detections": detections,
             **({"source_library": step.source_library, "source_rule_id": step.source_rule_id}
@@ -1396,7 +1355,7 @@ async def import_baseline_json(
     imported_ids = {}
     logical_sources = []
     with db.get_connection() as conn:
-        db._ensure_rule_key_columns(conn)   # imported rules fill kibana_rule_id / rule_language / rule_type
+        db._ensure_rule_key_columns(conn)   # imported rules fill kibana_rule_id / rule_language / rule_type / rule_updated_at
         for source in source_rules:
             original_id = str(source.get("rule_id") or source.get("source_rule_id") or "").strip()
             if not original_id:
@@ -1419,13 +1378,14 @@ async def import_baseline_json(
                     score_search_time, score_language, score_note, score_override,
                     score_tactics, score_techniques, score_author, score_highlights,
                     last_updated, mitre_ids, raw_data, client_id, deprecated, source_rule_id,
-                    kibana_rule_id, rule_language, rule_type
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, true, ?, ?, ?, ?)
+                    kibana_rule_id, rule_language, rule_type, rule_updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, true, ?, ?, ?, ?, ?)
                 ON CONFLICT (rule_id, siem_id, space) DO UPDATE SET
                     name = EXCLUDED.name, severity = EXCLUDED.severity,
                     author = EXCLUDED.author, enabled = EXCLUDED.enabled,
                     raw_data = EXCLUDED.raw_data, mitre_ids = EXCLUDED.mitre_ids,
                     kibana_rule_id = EXCLUDED.kibana_rule_id, rule_language = EXCLUDED.rule_language, rule_type = EXCLUDED.rule_type,
+                    rule_updated_at = EXCLUDED.rule_updated_at,
                     deprecated = true, source_rule_id = EXCLUDED.source_rule_id
                 """,
                 [
@@ -1484,6 +1444,8 @@ async def import_baseline_json(
             client_id=client_id,
             source_library=step_data.get("source_library") if step_data.get("source_library") in ("sigma", "elastic") else "",
             source_rule_id=str(step_data.get("source_rule_id") or "") if step_data.get("source_library") in ("sigma", "elastic") else "",
+            priority=str(step_data.get("priority") or ""),
+            category=str(step_data.get("category") or ""),
         )
         for technique_id in step_data.get("techniques") or []:
             add_step_technique(step.id, technique_id, client_id=client_id)
@@ -1589,7 +1551,7 @@ async def _import_baseline_payload(payload: dict, client_id: str, system_id: str
     imported_ids = {}
     logical_sources = []
     with db.get_connection() as conn:
-        db._ensure_rule_key_columns(conn)   # imported rules fill kibana_rule_id / rule_language / rule_type
+        db._ensure_rule_key_columns(conn)   # imported rules fill kibana_rule_id / rule_language / rule_type / rule_updated_at
         for source in source_rules:
             original_id = str(source.get("rule_id") or source.get("source_rule_id") or "").strip()
             if not original_id:
@@ -1610,13 +1572,14 @@ async def _import_baseline_payload(payload: dict, client_id: str, system_id: str
                     score_search_time, score_language, score_note, score_override,
                     score_tactics, score_techniques, score_author, score_highlights,
                     last_updated, mitre_ids, raw_data, client_id, deprecated, source_rule_id,
-                    kibana_rule_id, rule_language, rule_type
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, true, ?, ?, ?, ?)
+                    kibana_rule_id, rule_language, rule_type, rule_updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, true, ?, ?, ?, ?, ?)
                 ON CONFLICT (rule_id, siem_id, space) DO UPDATE SET
                     name = EXCLUDED.name, severity = EXCLUDED.severity,
                     author = EXCLUDED.author, enabled = EXCLUDED.enabled,
                     raw_data = EXCLUDED.raw_data, mitre_ids = EXCLUDED.mitre_ids,
                     kibana_rule_id = EXCLUDED.kibana_rule_id, rule_language = EXCLUDED.rule_language, rule_type = EXCLUDED.rule_type,
+                    rule_updated_at = EXCLUDED.rule_updated_at,
                     deprecated = true, source_rule_id = EXCLUDED.source_rule_id
                 """,
                 [
@@ -1639,7 +1602,12 @@ async def _import_baseline_payload(payload: dict, client_id: str, system_id: str
         )
     baseline_info = payload.get("baseline") or {}
     imported_name = baseline_info.get("name") or "Imported baseline"
-    if not system_id:
+    if system_id:
+        # As Apply names a second copy: "<name> (copy)" when the system has a baseline of that name.
+        from app.inventory_engine import _unique_baseline_name
+        with db.get_connection() as conn:
+            imported_name = _unique_baseline_name(conn, system_id, imported_name)
+    else:
         existing_names = {item.get("name") for item in (get_baselines_overview(client_id=client_id) or [])}
         imported_name = _import_name(imported_name, existing_names)
     baseline = create_playbook(
@@ -1663,6 +1631,8 @@ async def _import_baseline_payload(payload: dict, client_id: str, system_id: str
             client_id=client_id,
             source_library=step_data.get("source_library") if step_data.get("source_library") in ("sigma", "elastic") else "",
             source_rule_id=str(step_data.get("source_rule_id") or "") if step_data.get("source_library") in ("sigma", "elastic") else "",
+            priority=str(step_data.get("priority") or ""),
+            category=str(step_data.get("category") or ""),
         )
         for technique_id in step_data.get("techniques") or []:
             add_step_technique(step.id, technique_id, client_id=client_id)
@@ -2242,11 +2212,12 @@ def api_search_siem_rules_for_step(
     all_rules = get_all_siem_rules(client_id=client_id)
     dict_key = lambda r: (r["rule_id"], f"{r.get('siem_id') or ''}|{r.get('space') or 'default'}")  # noqa: E731
     own = [r for r in all_rules if dict_key(r) in own_keys]
-    q_lower = q.strip().lower()
-    if q_lower:
-        own = [r for r in own if q_lower in r["name"].lower()]
-        mapped = [r for r in mapped if q_lower in r.name.lower()]
-        all_rules = [r for r in all_rules if q_lower in r["name"].lower()]
+    from app.services.search_query import SearchQuery
+    search = SearchQuery(q)
+    if search:
+        own = [r for r in own if search.matches(r["name"])]
+        mapped = [r for r in mapped if search.matches(r.name)]
+        all_rules = [r for r in all_rules if search.matches(r["name"])]
     own.sort(key=lambda r: (r.get("destination") or "", r["name"] or ""))
     mapped.sort(key=lambda r: (r.name or "", scope_of(r)))
     all_rules.sort(key=lambda r: (r["name"] or "", r.get("destination") or ""))
@@ -2839,6 +2810,31 @@ def api_system_baseline_create(
     if not name.strip():
         raise HTTPException(status_code=422, detail="A baseline needs a name")
     create_system_baseline(system_id, name.strip(), description.strip(), client_id=client_id, actor=_actor(user))
+    return _system_page_reload()
+
+
+@router.post("/api/systems/{system_id}/baselines/import", response_class=HTMLResponse)
+async def api_system_baseline_import(
+    request: Request, system_id: str, user: RequireUser, client_id: ActiveClient, file: UploadFile = File(...),
+):
+    """Import a baseline's TIDE JSON (a system baseline's Export, or a template's) as this system's own,
+    from the Add baseline window: its techniques with their priority and category, and the rule
+    mappings in the file. Then reload the page; a file that isn't one says why in the window."""
+    missing = _system_not_found(system_id, client_id)
+    if missing:
+        return missing
+
+    def refused(why: str) -> HTMLResponse:
+        # 200, so htmx shows it in the window (a 4xx would only raise app.js's generic toast).
+        return HTMLResponse(f'<div class="alert alert-danger">Could not import it: {why}</div>')
+
+    try:
+        payload = json.loads((await file.read()).decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return refused("that file isn't JSON.")
+    if not isinstance(payload, dict) or payload.get("tide_export_version") != 1 or payload.get("export_type") != "baseline":
+        return refused("that file isn't a TIDE baseline export (a baseline's or a template's Export, as TIDE JSON).")
+    await _import_baseline_payload(payload, client_id, system_id=system_id, actor=_actor(user))
     return _system_page_reload()
 
 

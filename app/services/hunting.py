@@ -112,6 +112,7 @@ def search(conn, q: str = "", technique: str = "", platform: str = "", source: s
     """Hunts matching every filter, by name: ``(rows, matching, total)``, ``limit`` of them from
     ``offset`` on."""
     from app.services.elastic_rules import rows_as_dicts, technique_clause
+    from app.services.search_query import SearchQuery
 
     union = _union(conn)
     if not union:
@@ -119,10 +120,10 @@ def search(conn, q: str = "", technique: str = "", platform: str = "", source: s
     where: List[str] = []
     params: List[Any] = []
     if q.strip():
-        like = f"%{q.strip()}%"
-        where.append("(name ILIKE ? OR description ILIKE ? OR hunt_id ILIKE ? OR body ILIKE ? "
-                     "OR array_to_string(techniques, ' ') ILIKE ?)")
-        params += [like] * 5
+        cond, search_params = SearchQuery(q).sql(
+            "name", "description", "hunt_id", "body", "array_to_string(techniques, ' ')")
+        where.append(cond)
+        params += search_params
     if technique.strip():
         where.append(technique_clause("techniques", technique, params))
     for column, value in (("platform", platform), ("source", source)):

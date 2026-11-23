@@ -9,6 +9,7 @@ import os
 import re
 
 from app.services.credentials import PREFIX as CREDENTIAL_PREFIX, reveal_fields, reveal_or_none, seal
+from app.services.search_query import SearchQuery
 import time
 import uuid
 import pandas as pd
@@ -148,11 +149,15 @@ def in_validated_range(rule, lo: Optional[datetime], hi: Optional[datetime], sta
 
 
 # Schema version for migrations
-SCHEMA_VERSION = 110
+SCHEMA_VERSION = 114
 
 # The per-client role that opens Diagnostics for that client. Only a super admin can grant or
 # revoke it (set_user_roles(grant_support=...)).
 SUPPORT_ROLE = "SUPPORT"
+# The role that runs a client's simulations (page:simulations), beside ADMIN, ANALYST and ENGINEER
+# (decided 2026-11-22). Only a super admin can grant or revoke it, as SUPPORT.
+SIM_ADMIN_ROLE = "SIM_ADMIN"
+SUPER_ADMIN_ROLES = (SUPPORT_ROLE, SIM_ADMIN_ROLE)     # roles only a super admin grants or revokes
 
 # Default colours offered (and auto-assigned) for a linked SIEM+space destination -- distinct
 # from each other at a glance, and legible as small dots/pills in both light and dark themes.
@@ -231,6 +236,9 @@ def validation_key(rule_id, raw_data=None) -> str:
 # SQL for the same key, for queries that do not load the rule JSON
 VALIDATION_KEY_SQL = "COALESCE(json_extract_string(raw_data, '$.rule_id'), rule_id)"
 
+# What Rule Health's search looks in (and the technique side panel's, which shows the grid's rules).
+RULE_SEARCH_COLUMNS = ("name", "author", "rule_id", "array_to_string(mitre_ids, ',')")
+
 # Why a rule left TIDE, in its history (record_rule_removals), for each removal TIDE makes itself.
 _NO_RULES_LEFT = "Removed from TIDE: Kibana returned no rules for its space at a sync."
 RULE_REMOVED_UNLINKED = "Removed from TIDE: its destination was unlinked from this client."
@@ -239,20 +247,21 @@ RULE_REMOVED_NOT_HELD = ("Removed from TIDE: its Wazuh destination holds only th
                          "and the custom ones.")
 
 
-def rule_json_keys(raw_data) -> Tuple[str, Optional[str], str]:
-    """``(kibana_rule_id, rule_language, rule_type)`` from a rule's Kibana JSON (dict or text), as
-    stored in detection_rules' columns of the same names: '' when the JSON has no rule_id or type,
-    None when it has no language. Every writer of raw_data keeps them in step."""
+def rule_json_keys(raw_data) -> Tuple[str, Optional[str], str, Optional[datetime]]:
+    """``(kibana_rule_id, rule_language, rule_type, rule_updated_at)`` from a rule's Kibana JSON
+    (dict or text), as stored in detection_rules' columns of the same names: '' when the JSON has no
+    rule_id or type, None when it has no language or no ``updated_at`` (when Kibana last changed the
+    rule, as naive UTC: kibana_utc). Every writer of raw_data keeps them in step."""
     if isinstance(raw_data, str):
         try:
             raw_data = json.loads(raw_data)
         except Exception:
             raw_data = None
     if not isinstance(raw_data, dict):
-        return "", None, ""
+        return "", None, "", None
     language = raw_data.get("language")
     return (str(raw_data.get("rule_id") or ""), (str(language) if language is not None else None),
-            str(raw_data.get("type") or ""))
+            str(raw_data.get("type") or ""), kibana_utc(raw_data.get("updated_at")))
 
 
 def kibana_utc(value) -> Optional[datetime]:
@@ -309,6 +318,13 @@ RULE_TYPE_BACKFILL_SQL = (
     "UPDATE detection_rules SET "
     "rule_type = CASE WHEN json_valid(raw_data) THEN COALESCE(json_extract_string(raw_data, '$.type'), '') ELSE '' END "
     "WHERE rule_type IS NULL"
+)
+# rule_updated_at (7.0.1, Rule Health's Last updated): Kibana writes updated_at in UTC ("…Z"), kept naive
+# as kibana_utc does. A rule whose JSON has none stays NULL.
+RULE_UPDATED_AT_SQL = "TRY_CAST(replace(substr(json_extract_string(raw_data, '$.updated_at'), 1, 19), 'T', ' ') AS TIMESTAMP)"
+RULE_UPDATED_BACKFILL_SQL = (
+    f"UPDATE detection_rules SET rule_updated_at = {RULE_UPDATED_AT_SQL} "
+    "WHERE rule_updated_at IS NULL AND json_valid(raw_data) AND json_extract_string(raw_data, '$.updated_at') IS NOT NULL"
 )
 
 
@@ -4293,19 +4309,78 @@ class DatabaseService:
             self._set_schema_version(conn, 110)
             logger.info("Migration 110: page:detection_backlog seeded from page:systems for every client.")
 
+        # ── Migration 111: Rule Tuning ──
+        # Recording what a rule's alerts turned out to be and marking it for tuning. Every role that can
+        # read Rule Health starts able to do both (decided 2026-11-17).
+        if current_version < 111:
+            self.seed_page_permissions(conn, "page:rule_tuning", "page:rules", all_write=True)
+            self._set_schema_version(conn, 111)
+            logger.info("Migration 111: page:rule_tuning seeded from page:rules, read and write, for every client.")
+
+        # ── Migration 112: Alerts left open, a Rule Monitoring setting ──
+        # NULL is TIDE's default (on); 0 turns it off for the client (rule_alerts.ON_BY_DEFAULT). Additive only.
+        if current_version < 112:
+            conn.execute("ALTER TABLE clients ADD COLUMN IF NOT EXISTS alerts_unreviewed INTEGER")
+            self._set_schema_version(conn, 112)
+            logger.info("Migration 112: clients can turn Alerts left open off.")
+
+        # ── Migration 113: Outcomes from Kibana (rule tuning, phase 3) ──
+        # The outcome findings' window, judged alerts needed and shares (NULL: rule_alerts.DEFAULTS), and the
+        # client's mappings of Kibana's values onto outcomes (JSON, rule_outcomes.parse). Additive only.
+        if current_version < 113:
+            for column in ("outcome_days", "outcome_min", "fp_share_pct", "bad_data_share_pct", "expected_share_pct",
+                           "duplicate_share_pct"):
+                conn.execute(f"ALTER TABLE clients ADD COLUMN IF NOT EXISTS {column} INTEGER")
+            conn.execute("ALTER TABLE clients ADD COLUMN IF NOT EXISTS outcome_mapping VARCHAR")
+            self._set_schema_version(conn, 113)
+            logger.info("Migration 113: clients can set outcome thresholds and map Kibana's outcome values.")
+
+        # ── Migration 114: Simulations (#118) ──
+        # SIM_ADMIN, a fourth main role granted by super admins only (decided 2026-11-22), runs the
+        # client's simulations: page:simulations, read and write. Elsewhere it starts able to read what
+        # ENGINEER reads, and write nothing. On page:simulations ADMIN reads and writes too; ANALYST and
+        # ENGINEER have no access. page:simulation, the players' page, is open to every role: a player
+        # sees only the simulations a Sim Admin chose them for. Additive only.
+        if current_version < 114:
+            conn.execute(
+                "INSERT INTO roles (name, description) VALUES (?, ?) ON CONFLICT DO NOTHING",
+                [SIM_ADMIN_ROLE, "Runs the client's simulations. Granted by super admins."],
+            )
+            sim_admin = conn.execute("SELECT id FROM roles WHERE name = ?", [SIM_ADMIN_ROLE]).fetchone()[0]
+            conn.execute(
+                "INSERT INTO role_permissions (role_id, client_id, resource, can_read, can_write) "
+                "SELECT ?, rp.client_id, rp.resource, rp.can_read, false FROM role_permissions rp "
+                "JOIN roles r ON r.id = rp.role_id WHERE r.name = 'ENGINEER' AND rp.client_id IS NOT NULL "
+                "ON CONFLICT DO NOTHING", [sim_admin])
+            roles = dict(conn.execute(
+                "SELECT name, id FROM roles WHERE name IN ('ADMIN', 'ANALYST', 'ENGINEER', ?)", [SIM_ADMIN_ROLE]).fetchall())
+            access = {"page:simulations": {"ADMIN": True, "ANALYST": False, "ENGINEER": False, SIM_ADMIN_ROLE: True},
+                      "page:simulation": {"ADMIN": True, "ANALYST": True, "ENGINEER": True, SIM_ADMIN_ROLE: True}}
+            for (cid,) in conn.execute("SELECT id FROM clients").fetchall():
+                for resource, by_role in access.items():
+                    for name, allowed in by_role.items():
+                        if name in roles:
+                            conn.execute(
+                                "INSERT INTO role_permissions (role_id, client_id, resource, can_read, can_write) "
+                                "VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+                                [roles[name], cid, resource, allowed, allowed])
+            self._set_schema_version(conn, 114)
+            logger.info("Migration 114: the SIM_ADMIN role, page:simulations and page:simulation for every client.")
+
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
 
     @staticmethod
-    def seed_page_permissions(conn, resource: str, like: str) -> None:
+    def seed_page_permissions(conn, resource: str, like: str, all_write: bool = False) -> None:
         """A new page's resource for every client (shared DB). Idempotent. Each role starts with what
         it has on ``like`` on that client; a built-in role with no entry there gets the defaults:
-        read for all, write for ADMIN and ANALYST."""
+        read for all, write for ADMIN and ANALYST. With ``all_write``, every role that can read it may
+        write it too, ENGINEER included."""
         conn.execute(
             "INSERT INTO role_permissions (role_id, client_id, resource, can_read, can_write) "
-            "SELECT role_id, client_id, ?, can_read, can_write FROM role_permissions "
+            f"SELECT role_id, client_id, ?, can_read, {'can_read' if all_write else 'can_write'} FROM role_permissions "
             "WHERE resource = ? AND client_id IS NOT NULL ON CONFLICT DO NOTHING", [resource, like]
         )
-        writes = {"ADMIN": True, "ANALYST": True, "ENGINEER": False}
+        writes = {"ADMIN": True, "ANALYST": True, "ENGINEER": all_write}
         roles = conn.execute(
             "SELECT id, name FROM roles WHERE name IN ('ADMIN', 'ANALYST', 'ENGINEER')").fetchall()
         for (cid,) in conn.execute("SELECT id FROM clients").fetchall():
@@ -4958,19 +5033,20 @@ class DatabaseService:
         - Without `client_id` (legacy): replaces roles across every client the
           user is currently assigned to (or the default client when the user has
           no assignments). Falls back to the system default when neither exists.
-        - The SUPPORT role can only be granted or revoked by a super admin: unless
-          `grant_support` is set, the user keeps exactly the SUPPORT roles they had
-          and a requested SUPPORT is ignored. Callers pass `user.is_superadmin`.
+        - The SUPPORT and SIM_ADMIN roles (SUPER_ADMIN_ROLES) can only be granted or revoked by
+          a super admin: unless `grant_support` is set, the user keeps exactly those roles they
+          had and a requested one is ignored. Callers pass `user.is_superadmin`.
         """
         role_names = list(role_names)
         with self.get_shared_connection() as conn:
             if not grant_support:
-                role_names = [r for r in role_names if r != SUPPORT_ROLE]
-                kept_support = [r[0] for r in conn.execute(
-                    "SELECT ur.client_id FROM user_roles ur JOIN roles r ON r.id = ur.role_id "
-                    "WHERE ur.user_id = ? AND r.name = ?" + (" AND ur.client_id = ?" if client_id is not None else ""),
-                    [user_id, SUPPORT_ROLE] + ([client_id] if client_id is not None else []),
-                ).fetchall()]
+                role_names = [r for r in role_names if r not in SUPER_ADMIN_ROLES]
+                kept_support = conn.execute(
+                    "SELECT ur.client_id, r.id FROM user_roles ur JOIN roles r ON r.id = ur.role_id "
+                    f"WHERE ur.user_id = ? AND r.name IN ({', '.join('?' for _ in SUPER_ADMIN_ROLES)})"
+                    + (" AND ur.client_id = ?" if client_id is not None else ""),
+                    [user_id, *SUPER_ADMIN_ROLES] + ([client_id] if client_id is not None else []),
+                ).fetchall()
             else:
                 kept_support = []
             if client_id is not None:
@@ -5004,12 +5080,10 @@ class DatabaseService:
                         "VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
                         [user_id, cid, role_row[0]],
                     )
-            support_row = conn.execute("SELECT id FROM roles WHERE name = ?", [SUPPORT_ROLE]).fetchone() \
-                if kept_support else None
-            for cid in kept_support if support_row else []:
+            for cid, rid in kept_support:
                 conn.execute(
                     "INSERT INTO user_roles (user_id, client_id, role_id) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
-                    [user_id, cid, support_row[0]],
+                    [user_id, cid, rid],
                 )
 
     def set_user_superadmin(self, user_id: str, value: bool) -> None:
@@ -5294,9 +5368,10 @@ class DatabaseService:
             return rule_origins.statuses(conn, keys)
 
     def _ensure_rule_key_columns(self, conn) -> None:
-        """Add detection_rules.kibana_rule_id / rule_language / rule_type and fill them for rows
-        written before they existed, once per tenant DB per process. A row whose JSON has no rule_id
-        or type gets '', so the backfill never runs over the same rows twice."""
+        """Add detection_rules.kibana_rule_id / rule_language / rule_type / rule_updated_at and fill
+        them for rows written before they existed, once per tenant DB per process. A row whose JSON
+        has no rule_id or type gets '', so the backfill never runs over the same rows twice; one with
+        no updated_at keeps NULL, and only rows that have one are written."""
         from app.services.tenant_manager import get_tenant_db_path
         key = get_tenant_db_path()
         if key in self._rule_keys_ready:
@@ -5305,8 +5380,10 @@ class DatabaseService:
             conn.execute("ALTER TABLE detection_rules ADD COLUMN IF NOT EXISTS kibana_rule_id VARCHAR")
             conn.execute("ALTER TABLE detection_rules ADD COLUMN IF NOT EXISTS rule_language VARCHAR")
             conn.execute("ALTER TABLE detection_rules ADD COLUMN IF NOT EXISTS rule_type VARCHAR")
+            conn.execute("ALTER TABLE detection_rules ADD COLUMN IF NOT EXISTS rule_updated_at TIMESTAMP")
             conn.execute(RULE_KEY_BACKFILL_SQL)
             conn.execute(RULE_TYPE_BACKFILL_SQL)
+            conn.execute(RULE_UPDATED_BACKFILL_SQL)
         except duckdb.CatalogException:
             return   # no detection_rules here yet: the first sync creates it with the columns
         self._rule_keys_ready.add(key)
@@ -5560,16 +5637,20 @@ class DatabaseService:
                 query += f" AND LOWER(COALESCE(rule_language, '')) IN ({', '.join('?' for _ in languages)})"
                 params.extend(languages)
 
+            # Last updated: when Kibana last changed the rule, from its column (rule_json_keys). A rule
+            # with no date fails either end, so a range leaves it out.
+            if filters.updated_from is not None:
+                query += " AND rule_updated_at >= ?"
+                params.append(filters.updated_from)
+            if filters.updated_to is not None:
+                query += " AND rule_updated_at <= ?"
+                params.append(filters.updated_to)
+
             # Apply search filter IN SQL (not post-fetch) so pagination works correctly
             if filters.search:
-                search_term = f"%{filters.search}%"
-                query += """ AND (
-                    LOWER(name) LIKE LOWER(?) 
-                    OR LOWER(author) LIKE LOWER(?) 
-                    OR LOWER(rule_id) LIKE LOWER(?)
-                    OR LOWER(array_to_string(mitre_ids, ',')) LIKE LOWER(?)
-                )"""
-                params.extend([search_term, search_term, search_term, search_term])
+                cond, search_params = SearchQuery(filters.search).sql(*RULE_SEARCH_COLUMNS)
+                query += f" AND {cond}"
+                params.extend(search_params)
             
             # Get total count before pagination
             count_query = query.replace("SELECT *", "SELECT COUNT(*)")
@@ -5588,6 +5669,8 @@ class DatabaseService:
                 sort_spec.append(("validated", filters.sort_validated))
             if (filters.sort_name or "") in ("asc", "desc"):
                 sort_spec.append(("name", filters.sort_name))
+            if (filters.sort_updated or "") in ("asc", "desc"):
+                sort_spec.append(("updated", filters.sort_updated))
 
             if not sort_spec:
                 legacy_map = {
@@ -5613,7 +5696,8 @@ class DatabaseService:
             needs_validated_range = (filters.validated_from is not None or filters.validated_to is not None
                                      or bool(filters.validation))
             needs_upstream_filter = bool(filters.upstream)
-            needs_post_filter = needs_state_filter or needs_validated_range or needs_upstream_filter
+            needs_tuning_filter = bool(filters.tuning)
+            needs_post_filter = needs_state_filter or needs_validated_range or needs_upstream_filter or needs_tuning_filter
             fetch_all = is_validation_sort or needs_post_filter
             
             # Apply sorting (DB-side for DB columns)
@@ -5626,6 +5710,8 @@ class DatabaseService:
                         order_parts.append(f"COALESCE(score, 0) {dir_sql}")
                     elif field == "name":
                         order_parts.append(f"COALESCE(name, '') {dir_sql}")
+                    elif field == "updated":   # rules with no date after the dated ones, either way
+                        order_parts.append(f"rule_updated_at {dir_sql} NULLS LAST")
                 if not any(field == "name" for field, _ in sort_spec):
                     order_parts.append("COALESCE(name, '') ASC")
                 query += f" ORDER BY {', '.join(order_parts)}"
@@ -5692,6 +5778,11 @@ class DatabaseService:
                 upstream = self.upstream_statuses()
                 rules = [r for r in rules
                          if filter_value(upstream.get((r.rule_id, r.siem_id, r.space))) in wanted_upstream]
+            if needs_tuning_filter:
+                # Marked for tuning, or tuned lately (rule_tuning): any of those picked.
+                tuning = self.tuning_states(client_id)
+                wanted_tuning = [tuning.get(t, set()) for t in filters.tuning]
+                rules = [r for r in rules if any((r.rule_id, r.siem_id, r.space) in keys for keys in wanted_tuning)]
             total = len(rules)
         
         # Python-side sort for any order involving validation date.
@@ -5798,16 +5889,17 @@ class DatabaseService:
         severity = payload.get("severity")
         enabled = payload.get("enabled")
         mitre_ids = payload.get("mitre_ids") or []
-        kibana_rule_id, rule_language, rule_type = rule_json_keys(payload)
+        kibana_rule_id, rule_language, rule_type, rule_updated_at = rule_json_keys(payload)
         with self.get_connection() as conn:
             self._ensure_rule_key_columns(conn)
             row = conn.execute(
                 "UPDATE detection_rules SET name = COALESCE(?, name), "
                 "severity = COALESCE(?, severity), enabled = COALESCE(?, enabled), "
-                "mitre_ids = ?, raw_data = ?, kibana_rule_id = ?, rule_language = ?, rule_type = ?, last_updated = now() "
+                "mitre_ids = ?, raw_data = ?, kibana_rule_id = ?, rule_language = ?, rule_type = ?, "
+                "rule_updated_at = ?, last_updated = now() "
                 "WHERE rule_id = ? AND siem_id = ? AND space = ? RETURNING rule_id",
                 [name, severity, enabled, mitre_ids, raw_json, kibana_rule_id, rule_language, rule_type,
-                 rule_id, siem_id, space],
+                 rule_updated_at, rule_id, siem_id, space],
             ).fetchone()
         return row is not None
 
@@ -5930,6 +6022,15 @@ class DatabaseService:
                 for detection_id in mappings:
                     relink_step_detection(detection_id, rule_ref=new_rule_id, siem_id=new_siem_id, space=new_space,
                                           actor=actor, client_id=client_id, conn=conn)
+                # What people recorded on the rule, and its marks for tuning, go with it as its mappings do
+                # (rule_tuning); a copy leaves them with the source.
+                tables = {r[0] for r in conn.execute("SELECT table_name FROM duckdb_tables() "
+                                                     "WHERE database_name = current_database()").fetchall()}
+                for table in ("rule_tuning_marks", "rule_tuning_effects"):
+                    if table in tables:
+                        conn.execute(f"UPDATE {table} SET rule_id = ?, siem_id = ?, space = ? "
+                                     "WHERE rule_id = ? AND siem_id = ? AND space = ?",
+                                     [new_rule_id, new_siem_id, new_space, old_rule_id, old_siem_id, old_space])
                 conn.execute(
                     "UPDATE detection_rules SET deprecated = true "
                     "WHERE rule_id = ? AND siem_id = ? AND space = ?",
@@ -5958,6 +6059,8 @@ class DatabaseService:
         ("rule_issues", "rule_id", "siem_id", "space"),
         ("rule_issue_history", "rule_id", "siem_id", "space"),
         ("rule_issue_mutes", "rule_id", "siem_id", "space"),
+        ("rule_tuning_marks", "rule_id", "siem_id", "space"),
+        ("rule_tuning_effects", "rule_id", "siem_id", "space"),
     )
 
     def rekey_rule(self, old_rule_id: str, new_rule_id: str, siem_id: str, space: str,
@@ -6361,20 +6464,22 @@ class DatabaseService:
         exclude_rule_id: Optional[str] = None, exclude_siem_id: Optional[str] = None,
         exclude_space: Optional[str] = None, limit: int = 8,
     ) -> List[Dict[str, Any]]:
-        """Rule names in one destination matching ``query`` (case-insensitive substring) --
+        """Rule names in one destination matching ``query`` (TIDE's search: words, NOT, OR), those
+        holding it as typed first --
         backs the rule modal's Add-link search box. Excludes deprecated rules and, if given, one
         exact (rule_id, siem_id, space) row -- the rule you're linking from, in case the chosen
         target destination happens to be its own. A portable rule_id is shared by every copy of
         the same rule across destinations by design, so excluding by rule_id alone would hide
         every *other* copy too -- the exact thing Add-link searches for.
         """
+        cond, search_params = SearchQuery(query).sql("name")
         with self.get_connection() as conn:
             rows = conn.execute(
-                "SELECT rule_id, name FROM detection_rules "
-                "WHERE siem_id = ? AND space = ? AND name ILIKE ? AND NOT deprecated "
+                f"SELECT rule_id, name FROM detection_rules "
+                f"WHERE siem_id = ? AND space = ? AND {cond} AND NOT deprecated "
                 "AND NOT (rule_id = COALESCE(?, '') AND siem_id = COALESCE(?, '') AND space = COALESCE(?, '')) "
-                "ORDER BY name LIMIT ?",
-                [siem_id, space, f"%{query}%", exclude_rule_id, exclude_siem_id, exclude_space, limit],
+                "ORDER BY contains(lower(name), lower(?)) DESC, name LIMIT ?",
+                [siem_id, space, *search_params, exclude_rule_id, exclude_siem_id, exclude_space, query.strip(), limit],
             ).fetchall()
         return [{"rule_id": r[0], "name": r[1]} for r in rows]
 
@@ -6539,21 +6644,24 @@ class DatabaseService:
         ``state`` by the card's badge, ``upstream`` by ``rule_origins.filter_value`` (``own`` when the
         rule has no origin), ``linked_to`` by destination: how many of the Linked rules are linked
         to a copy there, ``validation`` by the rule's validation status (Validate's Show), and
-        ``rule_type`` / ``language`` by the rule's type and query language (``rule_language_of``)."""
+        ``rule_type`` / ``language`` by the rule's type and query language (``rule_language_of``), and
+        ``tuning`` by ``rule_tuning.FILTER_STATES`` (a rule can be in both)."""
         from app.models.rules import rule_language_of
         from app.services.rule_origins import filter_value, filter_values
         f = filters or RuleFilters()
         counts = {k: Counter() for k in ("scope", "enabled", "state", "upstream", "linked_to", "validation",
-                                         "rule_type", "language")}
+                                         "rule_type", "language", "tuning")}
         # Search and score narrow every count; the counted filters, and Validate's date range (which
         # Never validated sets aside), are applied here.
         rules = self.get_rules(f.model_copy(update={
             "siem_id": None, "space": None, "enabled": None, "state": [], "upstream": [], "linked_to": None,
             "validation": [], "validated_from": None, "validated_to": None, "rule_type": [], "language": [],
-            "page": 1, "page_size": 1_000_000}), client_id=client_id, slim=True)[0]
+            "tuning": [], "page": 1, "page_size": 1_000_000}), client_id=client_id, slim=True)[0]
         offline, links, upstream = self.get_offline_scopes(), self.rule_link_destinations(), self.upstream_statuses()
+        tuning = self.tuning_states(client_id)
         states, wanted_upstream = set(normalize_rule_states(f.state)), set(filter_values(f.upstream))
         wanted_validation, wanted_types, wanted_languages = set(f.validation), set(f.rule_type), set(f.language)
+        wanted_tuning = [tuning.get(t, set()) for t in f.tuning]
         siem = destination_key(f.siem_id or "", f.space) if f.space else ""
         linked_to = f.linked_to if "linked" in states else None
         for r in rules:
@@ -6571,25 +6679,43 @@ class DatabaseService:
                              and in_validated_range(r, f.validated_from, f.validated_to, wanted_validation))
             in_type = not wanted_types or kind in wanted_types
             in_language = not wanted_languages or language in wanted_languages
-            if in_status and in_state and in_upstream and in_validation and in_type and in_language \
+            in_tuning = not wanted_tuning or any(key in keys for keys in wanted_tuning)
+            if in_status and in_state and in_upstream and in_validation and in_type and in_language and in_tuning \
                     and (states or not r.deprecated):
                 counts["scope"][dest] += 1
-            if in_siem and in_state and in_upstream and in_validation and in_type and in_language:
+            if in_siem and in_state and in_upstream and in_validation and in_type and in_language and in_tuning:
                 counts["enabled"]["true" if r.enabled else "false"] += 1
-            if at_siem and in_status and in_upstream and in_validation and in_type and in_language:
+            if at_siem and in_status and in_upstream and in_validation and in_type and in_language and in_tuning:
                 counts["state"][rule_badge(r, offline, links, f.linked_to)] += 1
-            if in_siem and in_status and in_state and in_validation and in_type and in_language:
+            if in_siem and in_status and in_state and in_validation and in_type and in_language and in_tuning:
                 counts["upstream"][up] += 1
-            if badge == "linked" and at_siem and in_status and in_upstream and in_validation and in_type and in_language:
+            if badge == "linked" and at_siem and in_status and in_upstream and in_validation and in_type and in_language \
+                    and in_tuning:
                 counts["linked_to"].update(links[key])
-            if in_siem and in_status and in_state and in_upstream and in_type and in_language and in_validated_range(
-                    r, f.validated_from, f.validated_to, {"never"}):
+            if in_siem and in_status and in_state and in_upstream and in_type and in_language and in_tuning \
+                    and in_validated_range(r, f.validated_from, f.validated_to, {"never"}):
                 counts["validation"][r.validation_status] += 1
-            if in_siem and in_status and in_state and in_upstream and in_validation and in_language:
+            if in_siem and in_status and in_state and in_upstream and in_validation and in_language and in_tuning:
                 counts["rule_type"][kind] += 1
-            if in_siem and in_status and in_state and in_upstream and in_validation and in_type and language:
+            if in_siem and in_status and in_state and in_upstream and in_validation and in_type and language and in_tuning:
                 counts["language"][language] += 1
+            if in_siem and in_status and in_state and in_upstream and in_validation and in_type and in_language:
+                for state, keys in tuning.items():
+                    if key in keys:
+                        counts["tuning"][state] += 1
         return counts
+
+    def tuning_states(self, client_id: Optional[str] = None) -> Dict[str, set]:
+        """The rules each of Rule Health's Tuning choices shows (``rule_tuning.filter_states``). Never
+        raises: the page works without them."""
+        from app.services import rule_tuning
+        try:
+            with self.get_connection() as conn:
+                from app.services import rule_alerts
+                return rule_tuning.filter_states(conn, rule_alerts.thresholds(self, client_id))
+        except Exception:
+            logger.warning("Could not read the rules marked for tuning", exc_info=True)
+            return {}
 
     def get_rule_links_bulk(
         self, items: List[Tuple[str, str, str]]
@@ -6978,6 +7104,8 @@ class DatabaseService:
             score_highlights=_si(row.get('score_highlights')),
             mitre_ids=mitre_ids,
             last_updated=self._safe_dt(row.get('last_updated')),
+            rule_updated_at=(self._safe_dt(row.get('rule_updated_at')) if 'rule_updated_at' in row
+                             else kibana_utc((raw_data or {}).get('updated_at') if isinstance(raw_data, dict) else None)),
             raw_data=raw_data,
             deprecated=bool(row.get('deprecated') or False),
             source_rule_id=_ss(row.get('source_rule_id')) or None,
@@ -8821,9 +8949,9 @@ class DatabaseService:
         where_clause = "" if include_all else "WHERE LOWER(g.domain) = LOWER(?)"
         params = [] if include_all else [domain]
         if search:
-            like = f"%{search}%"
-            where_clause += (" WHERE " if not where_clause else " AND ") + "(LOWER(g.group_code) LIKE LOWER(?) OR LOWER(g.group_name) LIKE LOWER(?))"
-            params.extend([like, like])
+            cond, search_params = SearchQuery(search).sql("g.group_code", "g.group_name")
+            where_clause += (" WHERE " if not where_clause else " AND ") + cond
+            params.extend(search_params)
         with self.get_shared_connection() as conn:
             rows = conn.execute(
                 f"""
@@ -8886,9 +9014,9 @@ class DatabaseService:
             capability_where = where_domain
             capability_params = list(params)
             if search:
-                like = f"%{search}%"
-                capability_where += " AND (LOWER(c.capability_description) LIKE LOWER(?) OR LOWER(COALESCE(c.comments, '')) LIKE LOWER(?) OR LOWER(COALESCE(c.capability_id, '')) LIKE LOWER(?))"
-                capability_params.extend([like, like, like])
+                cond, search_params = SearchQuery(search).sql("c.capability_description", "c.comments", "c.capability_id")
+                capability_where += f" AND {cond}"
+                capability_params.extend(search_params)
 
             capabilities = conn.execute(
                 f"""
@@ -9270,9 +9398,9 @@ class DatabaseService:
         where = [] if include_all else [f"LOWER(mt.domain) = '{domain_sql}'"]
         params: list = []
         if search:
-            like = f"%{search}%"
-            where.append("(LOWER(mt.id) LIKE LOWER(?) OR LOWER(mt.name) LIKE LOWER(?) OR LOWER(COALESCE(mt.description, '')) LIKE LOWER(?))")
-            params.extend([like, like, like])
+            cond, search_params = SearchQuery(search).sql("mt.id", "mt.name", "mt.description")
+            where.append(cond)
+            params.extend(search_params)
         if tactic_id:
             where.append("EXISTS (SELECT 1 FROM mitre_technique_tactics mtt JOIN mitre_tactics t ON t.stix_id = mtt.tactic_stix_id AND LOWER(t.domain) = LOWER(mtt.domain) WHERE mtt.technique_stix_id = mt.stix_id AND LOWER(mtt.domain) = LOWER(mt.domain) AND UPPER(t.tactic_id) = ?)")
             params.append((tactic_id or "").upper())
@@ -9310,19 +9438,17 @@ class DatabaseService:
             ).fetchall()
 
         if search:
-            needle = search.strip().upper()
+            needle, query = search.strip().upper(), SearchQuery(search)
 
             def _rank(row: tuple) -> tuple:
                 row_id = (row[0] or "").upper()
-                row_name = (row[1] or "").lower()
-                row_desc = (row[2] or "").lower()
                 if row_id == needle:
                     return (0, row_id)
                 if row_id.startswith(needle):
                     return (1, row_id)
-                if needle.lower() in row_name:
+                if query.matches(row[1]):
                     return (2, row_id)
-                if needle.lower() in row_desc:
+                if query.matches(row[2]):
                     return (3, row_id)
                 return (9, row_id)
 
@@ -9710,9 +9836,9 @@ class DatabaseService:
         params: list = [] if include_all else [domain]
         where_clause = "" if include_all else "WHERE LOWER(mg.domain) = LOWER(?)"
         if search:
-            like = f"%{search}%"
-            where_clause += (" WHERE " if not where_clause else " AND ") + "(LOWER(mg.group_id) LIKE LOWER(?) OR LOWER(mg.name) LIKE LOWER(?) OR LOWER(COALESCE(mg.aliases, '')) LIKE LOWER(?))"
-            params.extend([like, like, like])
+            cond, search_params = SearchQuery(search).sql("mg.group_id", "mg.name", "mg.aliases")
+            where_clause += (" WHERE " if not where_clause else " AND ") + cond
+            params.extend(search_params)
 
         with self.get_shared_connection() as conn:
             rows = conn.execute(
@@ -10045,9 +10171,9 @@ class DatabaseService:
         params: list = [] if include_all else [domain]
         where_clause = "" if include_all else "WHERE LOWER(ms.domain) = LOWER(?)"
         if search:
-            like = f"%{search}%"
-            where_clause += (" WHERE " if not where_clause else " AND ") + "(LOWER(ms.software_id) LIKE LOWER(?) OR LOWER(ms.name) LIKE LOWER(?) OR LOWER(COALESCE(ms.software_type, '')) LIKE LOWER(?) OR LOWER(COALESCE(ms.platforms, '')) LIKE LOWER(?) OR LOWER(COALESCE(ms.description, '')) LIKE LOWER(?))"
-            params.extend([like, like, like, like, like])
+            cond, search_params = SearchQuery(search).sql("ms.software_id", "ms.name", "ms.software_type", "ms.platforms", "ms.description")
+            where_clause += (" WHERE " if not where_clause else " AND ") + cond
+            params.extend(search_params)
 
         with self.get_connection() as conn:
             rows = conn.execute(
@@ -10216,9 +10342,9 @@ class DatabaseService:
         params: list = [] if include_all else [domain]
         where_clause = "" if include_all else "WHERE LOWER(mc.domain) = LOWER(?)"
         if search:
-            like = f"%{search}%"
-            where_clause += (" WHERE " if not where_clause else " AND ") + "(LOWER(mc.campaign_id) LIKE LOWER(?) OR LOWER(mc.name) LIKE LOWER(?) OR LOWER(COALESCE(mc.description, '')) LIKE LOWER(?))"
-            params.extend([like, like, like])
+            cond, search_params = SearchQuery(search).sql("mc.campaign_id", "mc.name", "mc.description")
+            where_clause += (" WHERE " if not where_clause else " AND ") + cond
+            params.extend(search_params)
 
         with self.get_connection() as conn:
             rows = conn.execute(
@@ -10401,9 +10527,9 @@ class DatabaseService:
         params: list = [] if include_all else [domain]
         where_clause = "" if include_all else "WHERE LOWER(mm.domain) = LOWER(?)"
         if search:
-            like = f"%{search}%"
-            where_clause += (" WHERE " if not where_clause else " AND ") + "(LOWER(mm.mitigation_id) LIKE LOWER(?) OR LOWER(mm.name) LIKE LOWER(?) OR LOWER(COALESCE(mm.description, '')) LIKE LOWER(?))"
-            params.extend([like, like, like])
+            cond, search_params = SearchQuery(search).sql("mm.mitigation_id", "mm.name", "mm.description")
+            where_clause += (" WHERE " if not where_clause else " AND ") + cond
+            params.extend(search_params)
 
         with self.get_connection() as conn:
             rows = conn.execute(
@@ -10549,16 +10675,10 @@ class DatabaseService:
                 params.extend(scope_params)
             
             if search:
-                # Apply same search logic as grid - match name, author, rule_id, OR mitre_ids
-                # This ensures sidebar shows rules from the same result set as the grid
-                search_term = f"%{search}%"
-                base_conditions += """ AND (
-                    LOWER(name) LIKE LOWER(?) 
-                    OR LOWER(author) LIKE LOWER(?) 
-                    OR LOWER(rule_id) LIKE LOWER(?)
-                    OR LOWER(array_to_string(mitre_ids, ',')) LIKE LOWER(?)
-                )"""
-                params.extend([search_term, search_term, search_term, search_term])
+                # The grid's search, so the side panel shows rules from the grid's result set.
+                cond, search_params = SearchQuery(search).sql(*RULE_SEARCH_COLUMNS)
+                base_conditions += f" AND {cond}"
+                params.extend(search_params)
             
             query = f"""
                 SELECT * FROM detection_rules 
@@ -10854,9 +10974,10 @@ class DatabaseService:
                 df[col] = None
         
         df_final = df[target_cols].copy()
-        df_final['kibana_rule_id'] = [k for k, _, _ in _keys]
-        df_final['rule_language'] = [lang for _, lang, _ in _keys]
-        df_final['rule_type'] = [kind for _, _, kind in _keys]
+        df_final['kibana_rule_id'] = [k for k, _, _, _ in _keys]
+        df_final['rule_language'] = [lang for _, lang, _, _ in _keys]
+        df_final['rule_type'] = [kind for _, _, kind, _ in _keys]
+        df_final['rule_updated_at'] = pd.Series([at for _, _, _, at in _keys], index=df_final.index, dtype="datetime64[us]")
         # Not a detection_rules column: carried along so the score snapshot records the scoring model.
         df_final['scoring_version'] = df['scoring_version'] if 'scoring_version' in df.columns else None
 
@@ -11138,7 +11259,7 @@ class DatabaseService:
                 # and source_rule_id (the sync never sets them) and is no longer deprecated.
                 self._ensure_rule_key_columns(conn)
                 conn.register('rules_source', df_final)
-                col_list = ', '.join(target_cols + ['kibana_rule_id', 'rule_language', 'rule_type'])
+                col_list = ', '.join(target_cols + ['kibana_rule_id', 'rule_language', 'rule_type', 'rule_updated_at'])
                 conn.execute("""
                     CREATE OR REPLACE TEMP TABLE sync_rules AS
                     SELECT s.* REPLACE (
@@ -11600,7 +11721,7 @@ class DatabaseService:
                 "rule_validation_high_amber_weeks, rule_validation_high_expired_weeks, "
                 "rule_validation_critical_amber_weeks, rule_validation_critical_expired_weeks, "
                 "delete_source_after_promotion, data_window_hours, noisy_per_day, noisy_share_pct, silent_enabled_days, silent_days, "
-                "upstream_pending_days, validation_stale, exceptions_many, elastic_blocks, "
+                "upstream_pending_days, validation_stale, exceptions_many, elastic_blocks, alerts_unreviewed, outcome_days, outcome_min, fp_share_pct, bad_data_share_pct, expected_share_pct, duplicate_share_pct, outcome_mapping, "
                 "created_at, updated_at "
                 "FROM clients WHERE id = ?", [client_id]
             ).fetchone()
@@ -11616,7 +11737,8 @@ class DatabaseService:
                  "rule_validation_critical_amber_weeks", "rule_validation_critical_expired_weeks",
                  "delete_source_after_promotion", "data_window_hours", "noisy_per_day", "noisy_share_pct",
                  "silent_enabled_days", "silent_days",
-                 "upstream_pending_days", "validation_stale", "exceptions_many", "elastic_blocks",
+                 "upstream_pending_days", "validation_stale", "exceptions_many", "elastic_blocks", "alerts_unreviewed", "outcome_days", "outcome_min", "fp_share_pct",
+                 "bad_data_share_pct", "expected_share_pct", "duplicate_share_pct", "outcome_mapping",
                  "created_at", "updated_at"], row
             ))
 
@@ -11672,7 +11794,9 @@ class DatabaseService:
             "rule_validation_mode",
             "delete_source_after_promotion",
             "data_window_hours", "noisy_per_day", "noisy_share_pct", "silent_enabled_days", "silent_days",
-            "upstream_pending_days", "validation_stale", "exceptions_many", "elastic_blocks",
+            "upstream_pending_days", "validation_stale", "exceptions_many", "elastic_blocks", "alerts_unreviewed",
+            "outcome_days", "outcome_min", "fp_share_pct", "bad_data_share_pct", "expected_share_pct", "duplicate_share_pct",
+            "outcome_mapping",
             "rule_validation_amber_weeks",
             "rule_validation_expired_weeks",
             "rule_validation_low_amber_weeks",
@@ -12209,6 +12333,57 @@ class DatabaseService:
                 "DELETE FROM client_siem_configs WHERE id = ? AND client_id = ?",
                 [siem_id, client_id],
             )
+
+    def unlink_destination(self, client_id: str, siem_id: str, space: Optional[str] = None,
+                           actor: Optional[str] = None) -> int:
+        """Unlink a client's destination (one space, or every space of the SIEM when ``space`` is None)
+        and remove its rules from the client's TIDE, each recorded in its history. Returns how many
+        rules went.
+
+        Ghost-rule prevention (4.1.16): sync only visits linked (siem_id, space) pairs, so an unlinked
+        pair's detection_rules rows would stay on Rule Health for good. The pairs are captured before
+        the link goes, and only they are purged: the same SIEM may still be linked under another space
+        as a different destination, whose rules stay. Used by the client's Integrations (Remove) and
+        by a simulation's end (#118)."""
+        pairs: list = []
+        try:
+            with self.get_shared_connection() as conn:
+                sql = ("SELECT DISTINCT siem_id, LOWER(COALESCE(NULLIF(TRIM(space), ''), 'default')) "
+                       "FROM client_siem_map WHERE client_id = ? AND siem_id = ?")
+                params: list = [client_id, siem_id]
+                if space:
+                    sql += " AND LOWER(COALESCE(NULLIF(TRIM(space), ''), 'default')) = LOWER(?)"
+                    params.append(space)
+                pairs = [(sid, sp) for sid, sp in conn.execute(sql, params).fetchall() if sid and sp]
+        except Exception as exc:
+            logger.warning(f"could not enumerate (siem_id, space) pairs prior to unlink: {exc}")
+
+        self.unlink_client_siem(client_id, siem_id, space=space)
+        logger.info(f"SIEM {siem_id} ({space or 'all spaces'}) unlinked from client {client_id} by {actor}")
+
+        purged = 0
+        if pairs:
+            try:
+                from app.services.tenant_manager import tenant_context_for
+                with tenant_context_for(client_id), self.get_connection() as conn:
+                    for sid, sp in pairs:
+                        try:
+                            self.record_rule_removals(conn, "siem_id = ? AND LOWER(space) = ?", [sid, sp],
+                                                      RULE_REMOVED_UNLINKED, client_id=client_id, actor=actor)
+                            row = conn.execute("DELETE FROM detection_rules WHERE siem_id = ? AND LOWER(space) = ?",
+                                               [sid, sp]).fetchone()
+                            purged += int(row[0]) if row and row[0] is not None else 0
+                        except Exception as exc:
+                            # Most likely no detection_rules table on a never-synced client: nothing to purge.
+                            logger.debug(f"detection_rules purge skipped for client={client_id} "
+                                         f"siem={sid} space={sp}: {exc}")
+                            break
+                logger.info(f"ghost-rule purge: removed {purged} detection_rules rows "
+                            f"for client={client_id} pairs={pairs}")
+            except Exception as exc:
+                logger.warning(f"ghost-rule purge after SIEM unlink failed for client={client_id} "
+                               f"siem={siem_id} space={space or 'all'}: {exc}")
+        return purged
 
     def rename_client_siem(self, client_id: str, siem_id: str, space: str, name: str) -> Optional[str]:
         """Rename a linked SIEM+space destination in place. Returns an error message, or None on success.

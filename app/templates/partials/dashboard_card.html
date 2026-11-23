@@ -99,6 +99,12 @@
                         <input type="date" class="form-input" data-dash-filter="validated_to" value="{{ f.validated_to or '' }}" aria-label="Validated to">
                     </span>
                 </div>
+                <div class="dash-field" role="group" aria-label="Last updated between" title="When the rule was last changed in Kibana">Last updated
+                    <span class="dash-field__pair">
+                        <input type="date" class="form-input" data-dash-filter="updated_from" value="{{ f.updated_from or '' }}" aria-label="Last updated from">
+                        <input type="date" class="form-input" data-dash-filter="updated_to" value="{{ f.updated_to or '' }}" aria-label="Last updated to">
+                    </span>
+                </div>
                 <label class="dash-field">Search
                     <input type="text" class="form-input" data-dash-filter="search" maxlength="{{ search_limit }}" value="{{ f.search or '' }}" placeholder="Rule name, MITRE ID, author…">
                 </label>
@@ -121,6 +127,11 @@
                         <option value="all"{% if f.rules == 'all' %} selected{% endif %}>Include disabled</option>
                     </select>
                 </label>
+                <div class="dash-field" role="group" aria-label="Kind" title="Health: whether rules work. Tuning: whether they are worth their alerts">Kind
+                    <div class="dash-settings__checks">
+                        {% for value, label in filter_options.kinds %}<label><input type="checkbox" data-dash-filter="kind" value="{{ value }}"{% if value in (f.kind or []) %} checked{% endif %}> {{ label }}</label>{% endfor %}
+                    </div>
+                </div>
                 <div class="dash-field" role="group" aria-label="Severity">Severity
                     <div class="dash-settings__checks">
                         {% for value, label in filter_options.severities %}<label><input type="checkbox" data-dash-filter="severity" value="{{ value }}"{% if value in (f.severity or []) %} checked{% endif %}> {{ label }}</label>{% endfor %}

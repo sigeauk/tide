@@ -1,0 +1,161 @@
+{
+  "about": "Written by scenario.py: what each log file holds. Edit scenario.toml, not this.",
+  "built_from": "BOTS v1, from download_botes.py's data",
+  "span": [
+    "2016-08-24T16:10:00.000Z",
+    "2016-08-24T17:50:00.000Z"
+  ],
+  "events": {
+    "logs": 350467,
+    "noise": 180119
+  },
+  "in_window": {
+    "logs": 196343,
+    "noise": 99433
+  },
+  "files": [
+    {
+      "file": "logs/fgt_utm.ndjson.gz",
+      "source": "fgt_utm",
+      "format": "splunk-export",
+      "events": 10583,
+      "in_window": 9988,
+      "first": "2016-08-24T16:10:03.000Z",
+      "last": "2016-08-24T17:49:59.000Z",
+      "bytes": 495486,
+      "clock_offset_seconds": 0.0
+    },
+    {
+      "file": "logs/iis.ndjson.gz",
+      "source": "iis",
+      "format": "splunk-export",
+      "events": 214,
+      "in_window": 0,
+      "first": "2016-08-24T16:33:47.000Z",
+      "last": "2016-08-24T16:37:13.000Z",
+      "bytes": 6777,
+      "clock_offset_seconds": 0.0
+    },
+    {
+      "file": "logs/security.ndjson.gz",
+      "source": "security",
+      "format": "splunk-export",
+      "events": 53043,
+      "in_window": 26424,
+      "first": "2016-08-24T16:10:00.000Z",
+      "last": "2016-08-24T17:49:59.000Z",
+      "bytes": 10311620,
+      "clock_offset_seconds": 0.0
+    },
+    {
+      "file": "logs/stream-dns.ndjson.gz",
+      "source": "stream-dns",
+      "format": "splunk-export",
+      "events": 9143,
+      "in_window": 6552,
+      "first": "2016-08-24T16:10:00.115Z",
+      "last": "2016-08-24T17:49:57.211Z",
+      "bytes": 1199501,
+      "clock_offset_seconds": 0.0
+    },
+    {
+      "file": "logs/stream-http.ndjson.gz",
+      "source": "stream-http",
+      "format": "splunk-export",
+      "events": 892,
+      "in_window": 38,
+      "first": "2016-08-24T16:11:11.312Z",
+      "last": "2016-08-24T17:46:36.398Z",
+      "bytes": 276365,
+      "clock_offset_seconds": 0.0
+    },
+    {
+      "file": "logs/stream-smb.ndjson.gz",
+      "source": "stream-smb",
+      "format": "splunk-export",
+      "events": 151934,
+      "in_window": 55056,
+      "first": "2016-08-24T16:10:05.978Z",
+      "last": "2016-08-24T17:49:51.653Z",
+      "bytes": 10258724,
+      "clock_offset_seconds": 0.0
+    },
+    {
+      "file": "logs/suricata.ndjson.gz",
+      "source": "suricata",
+      "format": "splunk-export",
+      "events": 14955,
+      "in_window": 9041,
+      "first": "2016-08-24T16:10:00.116Z",
+      "last": "2016-08-24T17:49:59.355Z",
+      "bytes": 1569596,
+      "clock_offset_seconds": 0.0
+    },
+    {
+      "file": "logs/sysmon.ndjson.gz",
+      "source": "sysmon",
+      "format": "splunk-export",
+      "events": 59338,
+      "in_window": 54303,
+      "first": "2016-08-24T16:10:00.000Z",
+      "last": "2016-08-24T17:49:57.000Z",
+      "bytes": 3386951,
+      "clock_offset_seconds": 0.0
+    },
+    {
+      "file": "logs/system.ndjson.gz",
+      "source": "system",
+      "format": "splunk-export",
+      "events": 113,
+      "in_window": 40,
+      "first": "2016-08-24T16:12:51.000Z",
+      "last": "2016-08-24T17:42:54.000Z",
+      "bytes": 14256,
+      "clock_offset_seconds": 0.0
+    },
+    {
+      "file": "logs/winregistry.ndjson.gz",
+      "source": "winregistry",
+      "format": "splunk-export",
+      "events": 50252,
+      "in_window": 34901,
+      "first": "2016-08-24T16:22:22.000Z",
+      "last": "2016-08-24T17:49:57.000Z",
+      "bytes": 2025298,
+      "clock_offset_seconds": 0.0
+    },
+    {
+      "file": "noise/security.ndjson.gz",
+      "source": "security",
+      "format": "splunk-export",
+      "events": 25266,
+      "in_window": 9771,
+      "first": "2016-08-24T16:10:00.000Z",
+      "last": "2016-08-24T17:49:59.000Z",
+      "bytes": 4664204,
+      "clock_offset_seconds": 0.0
+    },
+    {
+      "file": "noise/suricata.ndjson.gz",
+      "source": "suricata",
+      "format": "splunk-export",
+      "events": 82364,
+      "in_window": 56683,
+      "first": "2016-08-24T16:10:00.000Z",
+      "last": "2016-08-24T17:49:59.000Z",
+      "bytes": 8697315,
+      "clock_offset_seconds": 0.0
+    },
+    {
+      "file": "noise/sysmon.ndjson.gz",
+      "source": "sysmon",
+      "format": "splunk-export",
+      "events": 72489,
+      "in_window": 32979,
+      "first": "2016-08-24T16:10:00.000Z",
+      "last": "2016-08-24T17:49:59.000Z",
+      "bytes": 14042844,
+      "clock_offset_seconds": 0.0
+    }
+  ]
+}

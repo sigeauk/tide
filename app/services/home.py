@@ -1,10 +1,12 @@
-"""Home: what needs the person signed in, on the active client, as four lists.
+"""Home: what needs the person signed in, on the active client, as five lists.
 
 Each list comes from the code its own page uses, so Home and that page always agree:
 
 - **Rule Monitoring:** the open problems by kind, errors first (``rule_issues.view`` grouped by issue,
   leaving out what is muted), how many rules need action by their worst problem, and how many began
   and stopped needing it in the last ``DAYS`` days (``rule_issues.flows``, as the Dashboard compares).
+- **Rules to tune:** Rule Tuning's first rows, costliest first: alerts a day not needing action
+  (``rule_tuning.page``).
 - **Known gaps to review:** every known gap and Not applicable mark on a system's baseline technique
   whose Review by date has passed or comes within ``REVIEW_AHEAD`` days, soonest first.
 - **Validations lapsing:** enabled rules whose validation has expired or is due soon, expired first
@@ -72,6 +74,29 @@ def monitoring(db, client_id: str, now: datetime) -> Dict[str, Any]:
         data = rule_issues.view(conn, destinations, filters, now=now, client_id=client_id)
         moved = rule_issues.flows(conn, destinations, filters, past_figures.day_end(DAYS, now.date()), now=now)
     return {**monitoring_list(data, moved, now), "linked": bool(destinations)}
+
+
+# ── Rules to tune ────────────────────────────────────────────────────────────────────────────
+
+def tuning_list(rows: List[Dict[str, Any]], now: datetime) -> Dict[str, Any]:
+    """Rule Tuning's first rows (``rule_tuning.page``, costliest first), each with its alerts a day, the
+    share not needing action, its reasons, and new when its first reason began in the last ``DAYS``."""
+    items = [{"name": r["name"], "destination": r["destination"], "per_day": r["per_day"], "share": r["share"],
+              "reasons": [x["title"] + (f": {x['cause']}" if x["issue"] == "marked_for_tuning" and x["cause"] else "")
+                          for x in r["reasons"]],
+              "new": bool(r["since"] and r["since"] >= now - timedelta(days=DAYS)), "url": _rule_url(*r["key"])}
+             for r in rows[:SHOWN]]
+    return {"count": len(rows), "rows": items, "more": max(0, len(rows) - SHOWN), "url": "/rule-tuning"}
+
+
+def tuning(db, client_id: str, now: datetime) -> Dict[str, Any]:
+    from starlette.datastructures import QueryParams
+    from app.services import rule_alerts, rule_tuning
+    destinations = db.get_client_siems(client_id) or []
+    with db.get_connection() as conn:
+        data = rule_tuning.page(conn, destinations, rule_tuning.page_filters(QueryParams("")), client_id=client_id, now=now,
+                                limits=rule_alerts.thresholds(db, client_id))
+    return {**tuning_list(data["rows"], now), "linked": bool(destinations)}
 
 
 # ── Known gaps to review ─────────────────────────────────────────────────────────────────────
@@ -172,6 +197,7 @@ def issues(db, client_id: str, now: datetime) -> Dict[str, Any]:
 # (key, the page whose permission shows it, what works it out), in the page's order.
 LISTS: Tuple[Tuple[str, str, Callable], ...] = (
     ("monitoring", "page:rules", monitoring),
+    ("tuning", "page:rule_tuning", tuning),
     ("reviews", "page:systems", reviews),
     ("validations", "page:rules", validations),
     ("issues", "page:rules", issues),

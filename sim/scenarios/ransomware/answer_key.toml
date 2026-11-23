@@ -1,0 +1,106 @@
+# The answer key for questions.md: points, the answers each question accepts, and hints.
+# The question text and each answer's write-up stay in questions.md and answers.md.
+#
+# An answer is compared lower-case, with quotes, backticks and extra spaces taken out. It is right if:
+#   accept        it is one of these exactly
+#   contains      it holds every one of these (for answers in several parts)
+#   contains_any  it holds one of these
+#   numbers       its first number is one of these (commas ignored), within tolerance
+# Each hint costs a quarter of the question's points when taken, solved or not.
+
+[[question]]
+n = 1
+points = 100
+accept = ["192.168.250.100"]
+hints = ["Sysmon's network connections (event.code : 3) on we8105desk carry its address as source.ip."]
+
+[[question]]
+n = 2
+points = 100
+accept = ["miranda_pri"]
+hints = ["Windows records a USB drive's name in the registry value FriendlyName."]
+
+[[question]]
+n = 3
+points = 200
+contains = ["miranda_tate_unveiled.dotm", "cmd"]
+hints = [
+  "WINWORD.EXE's command line names the document it opened.",
+  "Then: which processes have process.parent.name : \"WINWORD.EXE\"? Give the document and the program.",
+]
+
+[[question]]
+n = 4
+points = 300
+numbers = [4426, 4490]
+hints = [
+  "The field is process.command_line of the cmd.exe that WINWORD.EXE started.",
+  "ES|QL has LENGTH(): EVAL length = LENGTH(process.command_line).",
+]
+
+[[question]]
+n = 5
+points = 200
+numbers = [3968]
+hints = ["Sysmon process starts on we8105desk whose parent is wscript.exe: look at process.parent.pid."]
+
+[[question]]
+n = 6
+points = 100
+accept = ["solidaritedeproximite.org"]
+hints = [
+  "The DNS log from 192.168.250.100 on 24 August (original_timestamp), first lookup first.",
+  "Leave out the internal names, reverse lookups (*.arpa), Microsoft's, and names with no dot.",
+]
+
+[[question]]
+n = 7
+points = 100
+accept = ["mhtr.jpg"]
+hints = ["What did we8105desk fetch over HTTP from question 6's domain?"]
+
+[[question]]
+n = 8
+points = 200
+contains_any = ["stegan", "stego", "t1027.003"]
+data_check = false     # reasoning: the searches show the evidence, not the word (check_answers.py)
+hints = ["Compare the file's name with the type the server said it was: http.response.mime_type."]
+
+[[question]]
+n = 9
+points = 200
+contains = ["vssadmin", "wmic", "bcdedit", "osk"]
+hints = [
+  "Sysmon process starts on we8105desk at about 16:49.",
+  "Give the three programs and the process that started them (process.parent.name).",
+]
+
+[[question]]
+n = 10
+points = 100
+accept = ["192.168.250.20"]
+hints = ["Where does we8105desk's SMB traffic (event.dataset : \"network_traffic.smb\") go?"]
+
+[[question]]
+n = 11
+points = 200
+numbers = [257]
+hints = ["Windows Security event 5145 records each file checked on a share: count distinct file.path, with file.extension : pdf."]
+
+[[question]]
+n = 12
+points = 200
+numbers = [406]
+hints = ["Sysmon event 2 (a file's creation time changed) fires as each file is encrypted. Look under C:\\Users\\bob.smith.WAYNECORPINC."]
+
+[[question]]
+n = 13
+points = 100
+accept = ["cerberhhyed5frqa.xmfir0.win"]
+hints = ["The DNS log from we8105desk at the very end of the attack, about 17:15."]
+
+[[question]]
+n = 14
+points = 200
+numbers = [2816763]
+hints = ["Suricata alerts whose rule.name mentions Cerber: count them by rule.id."]

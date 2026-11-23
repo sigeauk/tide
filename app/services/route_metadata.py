@@ -31,31 +31,35 @@ from typing import List, Optional, Sequence, Tuple
 Crumb = Tuple[str, Optional[str]]
 
 
-# Static path → crumb-trail registry. Keep alphabetical inside each
+# Static path → crumb-trail registry. No trail starts at Home: a top-level page's trail is its
+# name alone, which isn't drawn (the title says it) but keeps the sidebar and breadcrumb names
+# checked against each other (test/cicd_consistency.py). Keep alphabetical inside each
 # section so adding new pages stays low-conflict.
-_HOME: Crumb = ("Home", "/")
 
 _REGISTRY: dict = {
     "/":               [("Home", None)],
-    "/dashboard":      [_HOME, ("Dashboard", None)],
-    "/heatmap":        [_HOME, ("Heatmap", None)],
-    "/threats":        [_HOME, ("Threat Landscape", None)],
-    "/rules":          [_HOME, ("Rule Health", None)],
-    "/rule-monitoring": [_HOME, ("Rule Monitoring", None)],
-    "/sigma":          [_HOME, ("Sigma Rules", None)],
-    "/elastic":        [_HOME, ("Elastic Rules", None)],
-    "/hunting":        [_HOME, ("Hunting", None)],
-    "/attack-tree":    [_HOME, ("Attack Tree", None)],
-    "/backlog":        [_HOME, ("Detection Backlog", None)],
-    "/baselines":      [_HOME, ("Baselines", None)],
-    "/systems":        [_HOME, ("Systems", None)],
-    "/cve-overview":   [_HOME, ("CVE Overview", None)],
-    "/settings/profile":     [_HOME, ("Settings", "/settings"), ("Profile & Preferences", None)],
-    "/settings/diagnostics": [_HOME, ("Settings", "/settings"), ("Diagnostics", None)],
-    "/settings/changelog":   [_HOME, ("Settings", "/settings"), ("Changelog", None)],
-    "/settings/docs":        [_HOME, ("Settings", "/settings"), ("Documentation", None)],
-    "/settings/management":  [_HOME, ("Settings", "/settings"), ("Management", None)],
-    "/presentation":   [_HOME, ("Presentation", None)],
+    "/dashboard":      [("Dashboard", None)],
+    "/heatmap":        [("Heatmap", None)],
+    "/threats":        [("Threat Landscape", None)],
+    "/rules":          [("Rule Health", None)],
+    "/rule-monitoring": [("Rule Monitoring", None)],
+    "/rule-tuning":    [("Rule Tuning", None)],
+    "/simulations":    [("Simulations", None)],
+    "/simulation":     [("Simulation", None)],
+    "/sigma":          [("Sigma Rules", None)],
+    "/elastic":        [("Elastic Rules", None)],
+    "/hunting":        [("Hunting", None)],
+    "/attack-tree":    [("Attack Tree", None)],
+    "/backlog":        [("Detection Backlog", None)],
+    "/baselines":      [("Baselines", None)],
+    "/systems":        [("Systems", None)],
+    "/cve-overview":   [("CVE Overview", None)],
+    "/settings/profile":     [("Settings", "/settings"), ("Profile & Preferences", None)],
+    "/settings/diagnostics": [("Settings", "/settings"), ("Diagnostics", None)],
+    "/settings/changelog":   [("Settings", "/settings"), ("Changelog", None)],
+    "/settings/docs":        [("Settings", "/settings"), ("Documentation", None)],
+    "/settings/management":  [("Settings", "/settings"), ("Management", None)],
+    "/presentation":   [("Presentation", None)],
 }
 
 # Path-prefix fallbacks for parametric routes are intentionally NOT
@@ -76,7 +80,6 @@ def set_crumbs(request, crumbs: Sequence[Crumb]) -> None:
     this when they need to interpolate a dynamic label, e.g.::
 
         set_crumbs(request, [
-            ("Home", "/"),
             ("Baselines", "/baselines"),
             (baseline.name, None),
         ])

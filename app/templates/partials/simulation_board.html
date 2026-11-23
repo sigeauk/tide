@@ -1,0 +1,21 @@
+{# A simulation's board (simulation.board): each player's score, best first; me, the player looking, in bold. #}
+{% if board %}
+<div class="sys-table-wrap">
+<table class="rules-table sim-board">
+    <thead><tr><th>#</th><th>Player</th><th>Score</th><th>Solved</th><th>Hints</th></tr></thead>
+    <tbody>
+    {% for b in board %}
+        <tr{% if me and b.user_id == me %} class="sim-board__me"{% endif %}>
+            <td>{{ b.rank }}</td>
+            <td>{{ b.name }}</td>
+            <td>{{ b.score }}</td>
+            <td>{{ b.solved }}</td>
+            <td>{{ '-' ~ b.hint_cost if b.hint_cost else 0 }}</td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+{% else %}
+<p class="rm-empty">No players.</p>
+{% endif %}

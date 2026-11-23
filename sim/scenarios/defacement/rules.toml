@@ -1,0 +1,67 @@
+# The detection rules a simulation of this scenario runs in its own Kibana space, created when it
+# starts and deleted with the space when it ends. Each rule's index patterns are narrowed to the
+# simulation's own data streams (logs-*-<its namespace>), so none of them searches anything else.
+#
+# source = "elastic": one of Elastic's prebuilt rules, by its rule_id.
+# source = "sigma":   a Sigma rule, by its id, converted with a pipeline from sim/sigma/ (ecs.yml).
+# source = "custom":  the rule in full, here.
+# rule_id is kept, so a rule's results can be compared from one simulation to the next. covers names
+# the step of the attack it is there to catch.
+
+[[rule]]
+source = "elastic"
+rule_id = "eb079c62-4481-4d6e-9643-3ca499df7aaa"
+name = "External Alerts"
+covers = "Vulnerability scan of the website"
+
+[[rule]]
+source = "elastic"
+rule_id = "7f7a0ee1-7b6f-466a-85b4-110fb105f5e2"
+name = "Web Server Potential SQL Injection Request"
+covers = "SQL injection probing of the website"
+
+[[rule]]
+source = "custom"
+rule_id = "d86cf180-9c72-4b49-af54-34dc358a838b"
+name = "Joomla administrator login brute force"
+covers = "Brute force of the Joomla administrator login"
+description = "Many logins posted to the Joomla administrator page from one address within minutes: password guessing against the site's admin account."
+type = "threshold"
+language = "kuery"
+query = 'event.dataset : "iis.access" and http.request.method : "POST" and url.path : "/joomla/administrator/index.php"'
+index = ["logs-iis.access-*"]
+threshold_field = ["source.ip"]
+threshold_value = 25
+severity = "high"
+risk_score = 73
+techniques = ["T1110.001"]
+tactic = "Credential Access"
+tags = ["Domain: Web"]
+
+[[rule]]
+source = "sigma"
+rule_id = "8202070f-edeb-4d31-a010-a26c72ac5600"
+name = "Suspicious Process By Web Server Process"
+covers = "Web shell on the web server"
+
+[[rule]]
+source = "custom"
+rule_id = "54c0a75f-fec6-416b-a110-39782f9403a8"
+name = "Executable started from the web root"
+covers = "Attacker tool uploaded and run"
+description = "A program started from under the IIS web root: an uploaded attacker tool run on the web server."
+type = "eql"
+language = "eql"
+query = 'process where host.os.type == "windows" and event.type == "start" and process.executable : "*inetpub*.exe"'
+index = ["logs-windows.sysmon_operational-*", "logs-system.security-*"]
+severity = "high"
+risk_score = 73
+techniques = ["T1105", "T1505.003"]
+tactic = "Command and Control"
+tags = ["Domain: Endpoint"]
+
+[[rule]]
+source = "sigma"
+rule_id = "502b42de-4306-40b4-9596-6f590c81f073"
+name = "Local Accounts Discovery"
+covers = "Account and network discovery"

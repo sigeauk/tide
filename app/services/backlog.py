@@ -27,6 +27,8 @@ import logging
 from collections import Counter
 from typing import Any, Dict, Iterable, List, Set, Tuple
 
+from app.services.search_query import SearchQuery
+
 logger = logging.getLogger(__name__)
 
 # The system page's Coverage choices that need work, with its labels: Known gap includes Partial
@@ -115,12 +117,11 @@ def sorted_rows(rows: List[Dict[str, Any]], sort: str = "rank") -> List[Dict[str
 
 
 def searched(rows: List[Dict[str, Any]], search: str) -> List[Dict[str, Any]]:
-    """The rows whose ATT&CK id or name, or one of whose baseline techniques or systems, has ``search``."""
-    q = (search or "").strip().lower()
+    """The rows whose ATT&CK id and name, baseline techniques and systems match ``search``."""
+    q = SearchQuery(search)
     if not q:
         return rows
-    return [r for r in rows if q in r["tid"].lower() or q in r["name"].lower()
-            or any(q in (e.get("title") or "").lower() or q in (e.get("system_name") or "").lower() for e in r["entries"])]
+    return [r for r in rows if q.matches(r["tid"], r["name"], [(e.get("title"), e.get("system_name")) for e in r["entries"]])]
 
 
 def totals(entries: List[Dict[str, Any]], rows: List[Dict[str, Any]]) -> Dict[str, int]:

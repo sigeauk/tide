@@ -1,7 +1,9 @@
 {#
   Add baseline, from a system page's Baselines ⋮: apply a template (again if need be: the copy is
-  named "<name> (copy)"), or start an empty one of the system's own. Applying gives the system its own
-  copy with no link back. Either reloads the page, showing the new baseline (inventory._system_page_reload).
+  named "<name> (copy)"), start an empty one of the system's own, or import a baseline's TIDE JSON as
+  one of its own (api_system_baseline_import; a file it can't take says why in #sys-bl-import-result).
+  Applying gives the system its own copy with no link back. Each reloads the page, showing the new
+  baseline (inventory._system_page_reload).
   Each baseline's own ⋮ edits or removes it. Context: system_id, available (every template).
 #}
 {% from "macros/icons.html" import icon, icon_text %}
@@ -39,6 +41,18 @@
             <div class="modal-actions">
                 <button name="Close" type="button" class="btn btn-secondary" data-rm-close>Close</button>
                 <button name="Create Baseline" type="submit" class="btn btn-primary">{{ icon_text('plus', 'Create baseline', '13') }}</button>
+            </div>
+        </form>
+
+        <form class="sys-dialog__form" hx-post="/api/systems/{{ system_id }}/baselines/import" hx-encoding="multipart/form-data"
+              hx-target="#sys-bl-import-result" hx-swap="innerHTML" hx-include="unset" hx-disabled-elt="find button[type='submit']">
+            <div class="form-label">Or import one</div>
+            <p class="text-muted sys-dialog__hint mt-0">A baseline's <strong>Export</strong> as TIDE JSON, from this system, another system or the Baselines page, here or on another TIDE. It becomes a baseline of this system's own, with its techniques' priority and category and its rule mappings.</p>
+            <label class="form-label" for="sys-bl-file">File</label>
+            <input id="sys-bl-file" type="file" name="file" class="form-input" required accept=".json,application/json">
+            <div id="sys-bl-import-result"></div>
+            <div class="modal-actions">
+                <button name="Import Baseline" type="submit" class="btn btn-primary">{{ icon_text('upload', 'Import', '13') }}</button>
             </div>
         </form>
     </div>

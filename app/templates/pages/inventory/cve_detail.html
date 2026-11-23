@@ -10,7 +10,7 @@
 {% from "macros/menu.html" import more_button %}
 
 {% block content %}
-    {{ breadcrumb(items=[('Home', '/'), ('CVE Catalogue', '/cve-overview'), (cve.cve_id, none)]) }}
+    {{ breadcrumb(items=[('CVE Catalogue', '/cve-overview'), (cve.cve_id, none)]) }}
 
     {# The header as every page has it (Rule Health's, the System page's): the title with its pill and
        ?, the vulnerability as the description, what it affects under it, and the ⋮ level with the title. #}

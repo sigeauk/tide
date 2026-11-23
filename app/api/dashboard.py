@@ -149,6 +149,7 @@ def _filter_options(db, client_id: str) -> dict:
         "systems": [(s.id, s.name) for s in list_systems(client_id=client_id)],
         # Rule Monitoring's choices, as its filter bar offers them.
         "severities": list(rule_issues.SEVERITIES),
+        "kinds": list(rule_issues.KINDS),
         "fixers": list(rule_issues.FIXERS.items()),
         "issues": sorted(((i.id, i.title) for i in rule_issues.KNOWN.values()), key=lambda i: i[1]),
     }

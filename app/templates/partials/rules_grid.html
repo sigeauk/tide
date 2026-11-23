@@ -5,7 +5,7 @@
 {% from "components/ui/loading_state.html" import loading_state %}
 {% set state = state | default([]) %}
 {% set view = view | default('cards') %}
-{% set pagination_qs = "search=" ~ (search | urlencode) ~ "&space=" ~ (space | urlencode) ~ "&enabled=" ~ (enabled | urlencode) ~ "&sort_by=" ~ (sort_by | urlencode) ~ "&sort_score=" ~ (sort_score | urlencode) ~ "&sort_validated=" ~ (sort_validated | urlencode) ~ "&sort_name=" ~ (sort_name | urlencode) ~ "&min_score=" ~ (min_score | string | urlencode) ~ "&max_score=" ~ (max_score | string | urlencode) ~ "&validated_from=" ~ (validated_from | urlencode) ~ "&validated_to=" ~ (validated_to | urlencode) ~ "&view=" ~ view ~ "&sort_col=" ~ (sort_col | default("") | urlencode) ~ "&sort_dir=" ~ (sort_dir | default("") | urlencode) %}
+{% set pagination_qs = "search=" ~ (search | urlencode) ~ "&space=" ~ (space | urlencode) ~ "&enabled=" ~ (enabled | urlencode) ~ "&sort_by=" ~ (sort_by | urlencode) ~ "&sort_score=" ~ (sort_score | urlencode) ~ "&sort_validated=" ~ (sort_validated | urlencode) ~ "&sort_name=" ~ (sort_name | urlencode) ~ "&min_score=" ~ (min_score | string | urlencode) ~ "&max_score=" ~ (max_score | string | urlencode) ~ "&validated_from=" ~ (validated_from | urlencode) ~ "&validated_to=" ~ (validated_to | urlencode) ~ "&updated_from=" ~ (updated_from | default('') | urlencode) ~ "&updated_to=" ~ (updated_to | default('') | urlencode) ~ "&sort_updated=" ~ (sort_updated | default('') | urlencode) ~ "&view=" ~ view ~ "&sort_col=" ~ (sort_col | default("") | urlencode) ~ "&sort_dir=" ~ (sort_dir | default("") | urlencode) %}
 {#- A {% set %} inside a for loop does not outlive the loop in Jinja, so build the state part in one expression. -#}
 {% if state %}{% set pagination_qs = pagination_qs ~ "&state=" ~ (state | map('urlencode') | join('&state=')) %}{% endif %}
 {% if linked_to %}{% set pagination_qs = pagination_qs ~ "&linked_to=" ~ (linked_to | urlencode) %}{% endif %}
@@ -44,12 +44,14 @@
                 <th data-col="state" class="rt-th--sortable" data-sort-col="state" data-sort-default="asc" title="Sort by state (production, migrated, staging, deprecated)">State {{ sort_arrow(sort_dir if sort_col == 'state' else '') }}</th>
                 <th data-col="severity" class="rt-th--sortable" data-sort-col="severity" data-sort-default="desc" title="Sort by severity">Severity {{ sort_arrow(sort_dir if sort_col == 'severity' else '') }}</th>
                 <th data-col="validated" class="rt-th--sortable" data-sort-select="rh-sort-validated" data-sort-default="desc" title="Sort by validation date">Validated {{ sort_arrow(sort_validated if not sort_col else '') }}</th>
+                <th data-col="updated" class="rt-th--sortable" data-sort-select="rh-sort-updated" data-sort-default="desc" title="Sort by when the rule was last changed in Kibana">Last updated {{ sort_arrow(sort_updated | default('') if not sort_col else '') }}</th>
                 <th data-col="upstream" title="The Elastic or Sigma rule it came from, and whether there is a newer version">Upstream</th>
                 <th data-col="author" class="rt-th--sortable" data-sort-col="author" data-sort-default="asc" title="Sort by author">Author {{ sort_arrow(sort_dir if sort_col == 'author' else '') }}</th>
                 <th data-col="mitre">MITRE</th>
                 <th data-col="type" class="rt-th--sortable" data-sort-col="type" data-sort-default="asc" title="Sort by rule type">Type {{ sort_arrow(sort_dir if sort_col == 'type' else '') }}</th>
                 <th data-col="lang" class="rt-th--sortable" data-sort-col="language" data-sort-default="asc" title="Sort by query language">Lang {{ sort_arrow(sort_dir if sort_col == 'language' else '') }}</th>
                 <th data-col="alerts" class="rt-th--sortable" data-sort-col="alerts" data-sort-default="desc" title="Sort by how many alerts it raised in the last 7 days, as of the last sync">Alerts (7 days) {{ sort_arrow(sort_dir if sort_col == 'alerts' else '') }}</th>
+                <th data-col="actionable" class="rt-th--sortable" data-sort-col="actionable" data-sort-default="desc" title="Sort by the share of its judged alerts in the last 30 days that needed no action, from the outcomes recorded">Not actionable {{ sort_arrow(sort_dir if sort_col == 'actionable' else '') }}</th>
                 <th class="rt-cols" data-col="cols"><button type="button" id="rt-cols-btn" class="rt-cols__btn" aria-haspopup="dialog" aria-expanded="false" title="Choose and arrange columns"><span aria-hidden="true">&hellip;</span><span class="sr-only">Choose columns</span></button></th>
             </tr>
         </thead>

@@ -6,6 +6,7 @@ import json, logging, os, re, shutil, xml.etree.ElementTree as ET  # nosec B405 
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple
 from app.config import get_settings
+from app.services.search_query import SearchQuery
 from app.models.inventory import (
     AffectedHost, AppliedDetection, Baseline, BaselineCreate, BaselineTactic, BlindSpot, Classification, CveMatch,
     CveOverviewStats, Host, HostCreate, HostSummary, HostUpdate, InventoryStats, MitreTechnique, SoftwareCreate,
@@ -2210,14 +2211,12 @@ def build_cve_report_data(cve_id: str, search_filter: str = "", client_id: str =
     all_hosts_by_sys = _list_all_hosts_by_system(client_id=client_id)
     all_software = _list_all_software_by_host(client_id=client_id)
     systems_map: Dict[str, Dict] = {}
+    host_search = SearchQuery(search_filter)
 
     for system in list_systems(client_id=client_id):
         for host in all_hosts_by_sys.get(system.id, []):
-            # Apply search filter
-            if search_filter:
-                q = search_filter.lower()
-                if q not in host.name.lower() and q not in (host.ip_address or "").lower():
-                    continue
+            if not host_search.matches(host.name, host.ip_address):
+                continue
             software = all_software.get(host.id, [])
             if not software and host.id not in wz:
                 continue
@@ -2849,19 +2848,25 @@ def _copy_playbook(src, tgt, playbook_id: str, *, name: str, client_id: str,
 def add_playbook_step(playbook_id: str, step_number: int, title: str,
                       technique_id: str = "", required_rule: str = "",
                       description: str = "", tactic: str = "", client_id: str = None,
-                      source_library: str = "", source_rule_id: str = "") -> PlaybookStep:
+                      source_library: str = "", source_rule_id: str = "",
+                      priority: str = "", category: str = "") -> PlaybookStep:
+    """Add a technique to a baseline. ``priority`` and ``category`` (an import's) are kept when they are
+    ones TIDE knows (STEP_PRIORITIES, STEP_CATEGORIES), else left unset."""
     normalized_technique_id = normalize_technique_id(technique_id)
+    priority = priority if priority in dict(STEP_PRIORITIES) else ""
+    category = category if category in dict(STEP_CATEGORIES) else ""
     with _get_conn() as conn:
         r = conn.execute(
             "INSERT INTO playbook_steps (playbook_id, step_number, title, technique_id, required_rule, description, tactic, "
-            "source_library, source_rule_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "source_library, source_rule_id, priority, category) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "RETURNING id, playbook_id, step_number, title, technique_id, required_rule, description, tactic",
             [playbook_id, step_number, title, normalized_technique_id, required_rule, description, tactic,
-             source_library, source_rule_id],
+             source_library, source_rule_id, priority, category],
         ).fetchone()
     step = PlaybookStep(id=r[0], playbook_id=r[1], step_number=r[2], title=r[3],
                         technique_id=r[4] or "", required_rule=r[5] or "", description=r[6] or "",
-                        tactic=r[7] or "", source_library=source_library, source_rule_id=source_rule_id)
+                        tactic=r[7] or "", source_library=source_library, source_rule_id=source_rule_id,
+                        priority=priority, category=category)
     # Auto-populate junction tables from legacy single fields
     if normalized_technique_id:
         add_step_technique(step.id, normalized_technique_id)
@@ -4013,14 +4018,9 @@ def filter_steps(steps: List[Dict], search: str = "", tactic=None, baseline_id: 
     """The technique grid's search, tactic and baseline filters and its sorts, shared by a system's
     techniques and the templates'. Tactic first (kill-chain order by default -- an attack tree
     reads in sequence), then name if asked, else the baseline's own order."""
-    q = (search or "").strip().lower()
+    q = SearchQuery(search)
     if q:
-        steps = [
-            s for s in steps
-            if q in (s.get("title") or "").lower()
-            or q in (s.get("description") or "").lower()
-            or any(q in (t or "").lower() for t in (s.get("display_technique_ids") or []))
-        ]
+        steps = [s for s in steps if q.matches(s.get("title"), s.get("description"), s.get("display_technique_ids") or [])]
     wanted = {tactic} if isinstance(tactic, str) else set(tactic or [])
     wanted.discard("")
     if wanted:

@@ -1,8 +1,9 @@
 /*
  * Documentation (pages/admin/docs.html): the sidebar's search over every section of the guide.
  * The index (/settings/docs/search.json: page, section, its words) is fetched the first time the
- * box is used. Every word typed must appear in a section's page, heading or text; a heading match
- * ranks first. The results take the groups' place in the sidebar until the box is cleared. Arrow
+ * box is used. The words typed are read as every search in TIDE reads them (TIDE.searchMatcher: every
+ * word, NOT, OR, "a phrase") against a section's page, heading and text; a heading match ranks first.
+ * The results take the groups' place in the sidebar until the box is cleared. Arrow
  * keys move through them, Enter opens one, Escape clears.
  */
 (function () {
@@ -39,13 +40,11 @@
         return (start ? '…' : '') + text.slice(start, start + 120) + (start + 120 < text.length ? '…' : '');
     }
 
-    function search(q) {
-        var terms = q.toLowerCase().split(/\s+/).filter(Boolean);
-        if (!terms.length) return [];
+    function search(matches) {
         return index
-            .filter(function (r) { return terms.every(function (t) { return r.hay.indexOf(t) !== -1; }); })
+            .filter(function (r) { return matches(r.hay); })
             .map(function (r) {
-                var score = terms.reduce(function (n, t) { return n + (r.head.indexOf(t) !== -1 ? 3 : 1); }, 0);
+                var score = matches.words.reduce(function (n, t) { return n + (r.head.indexOf(t) !== -1 ? 3 : 1); }, 0);
                 return { r: r, score: score };
             })
             .sort(function (a, b) { return b.score - a.score; })
@@ -59,11 +58,11 @@
     }
 
     function show(box, input) {
-        var list = box.querySelector('[data-docs-search-results]'), q = input.value.trim();
-        if (!q) { list.hidden = true; list.innerHTML = ''; searching(box, false); return; }
+        var list = box.querySelector('[data-docs-search-results]'), q = input.value.trim(), matches = TIDE.searchMatcher(q);
+        if (!matches) { list.hidden = true; list.innerHTML = ''; searching(box, false); return; }
         load().then(function () {
             if (input.value.trim() !== q) return;          // typed on since
-            var hits = search(q), first = q.toLowerCase().split(/\s+/)[0];
+            var hits = search(matches), first = matches.words[0] || '';
             list.innerHTML = hits.length ? hits.map(function (r, i) {
                 var href = '/settings/docs/' + r.slug + (r.id ? '#' + r.id : '');
                 return '<a class="docs-search__hit" role="option" href="' + href + '"' + (i === 0 ? ' aria-selected="true"' : '') + '>' +

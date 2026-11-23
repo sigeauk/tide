@@ -51,6 +51,9 @@
     <td class="rt-validated text-{{ val_class }}" data-col="validated" title="Validation status: {{ val_status }}">
         {% if rule.validation_date %}{{ rule.validation_date.strftime('%Y-%m-%d') }}{% if rule.validated_by %}<span class="rt-sub"> · {{ rule.validated_by }}</span>{% endif %}{% else %}Never{% endif %}
     </td>
+    <td class="rt-updated" data-col="updated"{% if rule.rule_updated_at %} title="Last changed in Kibana {{ rule.rule_updated_at.strftime('%Y-%m-%d %H:%M') }} UTC"{% endif %}>
+        {% if rule.rule_updated_at %}{{ rule.rule_updated_at.strftime('%Y-%m-%d') }}{% else %}<span class="text-muted" title="Kibana gives no date for this rule">—</span>{% endif %}
+    </td>
     <td class="rt-upstream" data-col="upstream">{% set _up = upstream_states.get(lifecycle_key) if upstream_states is defined else none %}{% if _up %}{{ upstream_badge(_up, words=true) }}{% else %}<span class="text-muted" title="Your own rule: it did not come from Elastic's rules or the Sigma rules">—</span>{% endif %}</td>
     <td class="rt-author" data-col="author" title="{{ rule.author | default('-') }}">{{ rule.author | default('-') }}</td>
     <td class="rt-mitre" data-col="mitre">{{ mitre_pills_row(rule.mitre_ids, clickable=true, size='sm', neutral=true, search_filter=(search | default('')), max_visible=3) }}</td>
@@ -58,5 +61,7 @@
     <td class="rt-lang" data-col="lang">{% if rule.query_language %}{{ rule.query_language | rule_language_name }}{% else %}<span class="text-muted" title="A machine learning rule has no query language">—</span>{% endif %}</td>
     {% set _alerts = (rule_alerts_7d.get(lifecycle_key) if rule_alerts_7d is defined else none) or 0 %}
     <td class="rt-alerts" data-col="alerts">{% if _alerts %}{{ '{:,}'.format(_alerts) }}{% else %}<span class="text-muted" title="No alerts in the last 7 days, as of the last sync">—</span>{% endif %}</td>
+    {% set _na = rule_not_actionable.get(lifecycle_key) if rule_not_actionable is defined else none %}
+    <td class="rt-alerts" data-col="actionable">{% if _na and _na.share is not none %}<span title="Of {{ _na.judged }} judged alerts in the last 30 days">{{ '{:.0%}'.format(_na.share) }}</span>{% else %}<span class="text-muted" title="{{ _na.judged ~ ' judged alerts in the last 30 days: a share shows from 10' if _na else 'No outcomes recorded in the last 30 days' }}">—</span>{% endif %}</td>
     <td class="rt-cols" data-col="cols"></td>
 </tr>

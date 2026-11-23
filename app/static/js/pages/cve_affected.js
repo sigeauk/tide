@@ -18,10 +18,10 @@
 
     TIDE.actions('affected', {
         search: function () {
-            var q = ($('affected-search').value || '').toLowerCase();
+            var q = TIDE.searchMatcher($('affected-search').value);
             var cards = document.querySelectorAll('#cve-affected-section .host-card[data-aff-name]'), visible = 0;
             cards.forEach(function (card) {
-                var show = !q || ((card.dataset.affName || '') + ' ' + (card.dataset.affIp || '')).indexOf(q) !== -1;
+                var show = !q || q([card.dataset.affName, card.dataset.affIp]);
                 card.style.display = show ? '' : 'none';
                 if (show) visible++;
             });

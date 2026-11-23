@@ -1,0 +1,27 @@
+{#
+  The client's simulations, newest first (api.simulations: page_context, simulations_list). A row opens
+  the simulation below the list (#sim-detail).
+#}
+{% if sims %}
+<div class="sys-table-wrap">
+<table class="rules-table sim-table">
+    <thead>
+        <tr><th>Scenarios</th><th>Noise</th><th>State</th><th>Started</th><th>By</th></tr>
+    </thead>
+    <tbody>
+    {% for s in sims %}
+        <tr name="Open Simulation" class="sim-table__row" hx-get="/api/simulations/{{ s.id }}" hx-target="#sim-detail" hx-swap="innerHTML"
+            title="Open this simulation">
+            <td>{% for sid in s.scenarios %}{{ names.get(sid, sid) }}{% if not loop.last %}, {% endif %}{% endfor %}</td>
+            <td>{{ s.noise | capitalize }}</td>
+            <td>{% include "partials/simulation_state.html" %}</td>
+            <td>{{ s.created_at.strftime('%Y-%m-%d %H:%M') if s.created_at else '' }}</td>
+            <td>{{ s.created_by }}</td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+{% else %}
+<p class="rm-empty">No simulations yet.</p>
+{% endif %}

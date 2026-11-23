@@ -288,6 +288,98 @@ console.debug('TIDE app.js loading...');
         }).then(function () { return CodeMirror; });
     };
 
+    // Search boxes: what the words typed mean, read as the server reads them (app/services/search_query.py):
+    // every word, "a phrase", NOT word or !word, AND, OR and (brackets); operators only in capitals.
+    // TIDE.searchMatcher(text) gives a test taking a string or a list of them (each word may be in any
+    // of them), or null when there is nothing to search for; its .words are the words searched for.
+    function searchTokens(text) {
+        var out = [], i = 0, n = text.length, depth = 0, ch, j, end, word;
+        while (i < n) {
+            ch = text[i];
+            if (/\s/.test(ch)) {
+                i++;
+            } else if (ch === '"') {
+                end = text.indexOf('"', i + 1);
+                if (end < 0) end = n;
+                if (text.slice(i + 1, end).trim()) out.push({ kind: 'word', value: text.slice(i + 1, end).toLowerCase() });
+                i = end + 1;
+            } else if (ch === '!') {
+                out.push({ kind: 'op', value: 'NOT' }); i++;
+            } else if (ch === '(') {
+                out.push({ kind: '(' }); depth++; i++;
+            } else if (ch === ')' && depth) {
+                out.push({ kind: ')' }); depth--; i++;
+            } else {
+                for (j = i; j < n && !/\s/.test(text[j]) && text[j] !== '"' && !(text[j] === ')' && depth); j++) {}
+                word = text.slice(i, j);
+                out.push(word === 'AND' || word === 'OR' || word === 'NOT' ? { kind: 'op', value: word }
+                    : { kind: 'word', value: word.toLowerCase() });
+                i = j;
+            }
+        }
+        return out;
+    }
+    TIDE.searchMatcher = function (text) {
+        var tokens = searchTokens(String(text || '').trim()), at = 0;
+        function peek() { return tokens[at]; }
+        function isOp(tok, value) { return !!tok && tok.kind === 'op' && tok.value === value; }
+        function joined(kind, parts) {
+            parts = parts.filter(Boolean);
+            return !parts.length ? null : parts.length === 1 ? parts[0] : { kind: kind, parts: parts };
+        }
+        function anyOf() {
+            var parts = [allOf()];
+            while (isOp(peek(), 'OR')) { at++; parts.push(allOf()); }
+            return joined('or', parts);
+        }
+        function allOf() {
+            var parts = [], tok;
+            while ((tok = peek()) && tok.kind !== ')' && !isOp(tok, 'OR')) {
+                if (isOp(tok, 'AND')) at++; else parts.push(one());
+            }
+            return joined('and', parts);
+        }
+        function one() {
+            var tok = tokens[at++], next, inner;
+            if (tok.kind === 'op') {   // NOT: AND and OR never get here
+                next = peek();
+                if (!next || next.kind === ')' || isOp(next, 'AND') || isOp(next, 'OR')) return null;
+                inner = one();
+                return inner ? { kind: 'not', node: inner } : null;
+            }
+            if (tok.kind === '(') {
+                inner = anyOf();
+                if (peek() && peek().kind === ')') at++;
+                return inner;
+            }
+            return { kind: 'word', value: tok.value };
+        }
+        var parts = [];
+        while (peek()) {
+            parts.push(anyOf());
+            if (peek()) at++;   // a ")" with no group open: skip it
+        }
+        var tree = joined('and', parts);
+        if (!tree) return null;
+        function test(node, hay) {
+            if (node.kind === 'word') return hay.indexOf(node.value) !== -1;
+            if (node.kind === 'not') return !test(node.node, hay);
+            return node.kind === 'and' ? node.parts.every(function (p) { return test(p, hay); })
+                : node.parts.some(function (p) { return test(p, hay); });
+        }
+        function words(node) {
+            if (node.kind === 'word') return [node.value];
+            if (node.kind === 'not') return [];
+            return node.parts.reduce(function (all, p) { return all.concat(words(p)); }, []);
+        }
+        var matches = function (fields) {
+            var list = Array.isArray(fields) ? fields : [fields];
+            return test(tree, list.filter(function (f) { return f != null; }).join('\n').toLowerCase());
+        };
+        matches.words = words(tree);
+        return matches;
+    };
+
     // The inline loading state (loading_state(label, inline=true) in components/ui/loading_state.html).
     TIDE.loadingHtml = function (label) {
         var svg = TIDE.icon('loader', 14);
@@ -419,8 +511,8 @@ console.debug('TIDE app.js loading...');
         return dd.querySelector('select[data-filter-choice]') || dd.parentElement.querySelector(':scope > select[data-filter-choice]');
     }
 
-    // The button names what is chosen: the chosen option(s), or a multi's ticked rows (its
-    // data-all-text when none is). A panel with no data-filter-kind is named by its page.
+    // The button names what is chosen: the chosen option(s), a multi's ticked rows, or a range's two
+    // ends (its data-all-text when none is). A panel with no data-filter-kind is named by its page.
     function filterLabel(dd) {
         var kind = dd && dd.getAttribute('data-filter-kind'), label = dd && document.getElementById(dd.id.replace(/-dropdown$/, '-label'));
         if (!label || !kind) return;
@@ -430,6 +522,9 @@ console.debug('TIDE app.js loading...');
             if (!select) return;
             texts = Array.prototype.map.call(select.selectedOptions, function (o) { return o.textContent.trim(); }).filter(Boolean);
             if (!texts.length && !select.multiple) texts = ['—'];
+        } else if (kind === 'range') {
+            var ends = dd.querySelectorAll('.tide-filter-range input'), from = ends[0] ? ends[0].value : '', to = ends[1] ? ends[1].value : '';
+            texts = from || to ? [(from || '…') + ' – ' + (to || '…')] : [];
         } else {
             texts = Array.prototype.map.call(dd.querySelectorAll('input[type=checkbox]:checked'), function (i) {
                 return i.nextElementSibling ? i.nextElementSibling.textContent.trim() : i.value;
@@ -492,7 +587,7 @@ console.debug('TIDE app.js loading...');
         var groups = Array.prototype.slice.call(root.querySelectorAll('[data-filter-choices]'));
         if (root.matches && root.matches('[data-filter-choices]')) groups.unshift(root);
         groups.forEach(syncGroup);
-        root.querySelectorAll('.tide-filter-dropdown[data-filter-kind="multi"]').forEach(filterLabel);
+        root.querySelectorAll('.tide-filter-dropdown[data-filter-kind="multi"], .tide-filter-dropdown[data-filter-kind="range"]').forEach(filterLabel);
     };
     function syncSoon(group) {
         if (!group || group.__tideSyncQueued) return;
@@ -517,7 +612,8 @@ console.debug('TIDE app.js loading...');
             // input too: a rule library's browser refreshes on input
             select.dispatchEvent(new Event('input', { bubbles: true }));
             select.dispatchEvent(new Event('change', { bubbles: true }));
-        } else if (t.matches && t.matches('.tide-filter-dropdown[data-filter-kind="multi"] input[type=checkbox]')) {
+        } else if (t.matches && t.matches('.tide-filter-dropdown[data-filter-kind="multi"] input[type=checkbox], '
+                                          + '.tide-filter-dropdown[data-filter-kind="range"] input')) {
             filterLabel(t.closest('.tide-filter-dropdown'));
         }
     }, true);
@@ -1488,9 +1584,9 @@ console.debug('TIDE app.js loading...');
         dashIconFor = null;
     }
     function dashIconFilter(text) {
-        text = text.trim().toLowerCase();
+        var matches = TIDE.searchMatcher(text);
         dashIconPicker().querySelectorAll('.dash-iconpicker__opt').forEach(function(b) {
-            b.hidden = text !== '' && b.getAttribute('data-dash-icon-pick').indexOf(text) === -1;
+            b.hidden = !!matches && !matches(b.getAttribute('data-dash-icon-pick'));
         });
     }
     document.addEventListener('click', function(e) {

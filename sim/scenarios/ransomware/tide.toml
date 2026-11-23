@@ -1,0 +1,82 @@
+# What a simulation of this scenario sets up in its client's TIDE when it starts, and removes when it
+# ends: the attack as a baseline, the system it hit (with the baseline applied, counting the
+# simulation's space as its coverage), and the steps known to be uncovered. The rules in rules.toml are
+# mapped to the baseline's techniques by their `covers`, which is a technique's title here.
+#
+# priority: critical, high, medium or low. category: identity, endpoint, network (and TIDE's others).
+
+[baseline]
+name = "Cerber ransomware"
+description = "How Cerber ransomware reached Bob Smith's desktop on a USB drive and encrypted the Wayne Enterprises file share on 24 August 2016, as recorded in Splunk's Boss of the SOC v1."
+
+[[baseline.technique]]
+tactic = "Initial Access"
+techniques = ["T1091"]
+title = "Infected USB drive"
+priority = "medium"
+category = "endpoint"
+description = "A USB drive labelled MIRANDA_PRI is plugged into we8105desk and a document on it is opened."
+
+[[baseline.technique]]
+tactic = "Execution"
+techniques = ["T1204.002"]
+title = "Malicious Word document opened"
+priority = "high"
+category = "endpoint"
+description = "Word opens Miranda_Tate_unveiled.dotm, and its macro starts cmd.exe."
+
+[[baseline.technique]]
+tactic = "Execution"
+techniques = ["T1059.005", "T1059.003"]
+title = "Script dropper runs a command shell"
+priority = "high"
+category = "endpoint"
+description = "An obfuscated command writes a VBScript; wscript.exe runs it and it starts cmd.exe to fetch and run the payload."
+
+[[baseline.technique]]
+tactic = "Command and Control"
+techniques = ["T1105"]
+title = "Payload downloaded from a compromised site"
+priority = "high"
+category = "network"
+description = "The script downloads mhtr.jpg, the encrypted Cerber payload, from solidaritedeproximite.org."
+
+[[baseline.technique]]
+tactic = "Defense Evasion"
+techniques = ["T1070.004", "T1036.005"]
+title = "Ransomware hides and deletes itself"
+priority = "medium"
+category = "endpoint"
+description = "121214.tmp copies itself to osk.exe in AppData, then removes the original with taskkill and del."
+
+[[baseline.technique]]
+tactic = "Impact"
+techniques = ["T1490"]
+title = "Shadow copies deleted and recovery disabled"
+priority = "critical"
+category = "endpoint"
+description = "osk.exe runs vssadmin, wmic and bcdedit to delete shadow copies and turn off Windows recovery."
+
+[[baseline.technique]]
+tactic = "Discovery"
+techniques = ["T1135"]
+title = "Network share enumeration"
+priority = "medium"
+category = "network"
+description = "we8105desk walks the file share on we9041srv, folder by folder."
+
+[[baseline.technique]]
+tactic = "Impact"
+techniques = ["T1486"]
+title = "Files on the file share encrypted"
+priority = "critical"
+category = "endpoint"
+description = "Thousands of files on the we9041srv share are read and rewritten from we8105desk over SMB."
+
+[[system]]
+name = "Wayne Enterprises office"
+description = "Staff desktops and the file server they share."
+hosts = [
+  { name = "we8105desk", ip = "192.168.250.100", os = "Windows 10" },
+  { name = "we9041srv", ip = "192.168.250.20", os = "Windows Server 2012 R2" },
+]

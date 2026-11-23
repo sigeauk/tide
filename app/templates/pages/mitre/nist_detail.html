@@ -8,7 +8,7 @@
 {% block title %}{{ nist_capability.title }} | NIST 800-53 | TIDE{% endblock %}
 
 {% block content %}
-{{ breadcrumb(items=[('Home', '/'), ('MITRE', '/mitre'), ('NIST 800-53', '/mitre/nist'), (nist_capability.group_code, nist_capability.group_url), (nist_capability.title, none)]) }}
+{{ breadcrumb(items=[('MITRE', '/mitre'), ('NIST 800-53', '/mitre/nist'), (nist_capability.group_code, nist_capability.group_url), (nist_capability.title, none)]) }}
 
 {# As Rule Health (rule-browser-page): the header and figures stay put; the rest scrolls. #}
 <div class="rule-browser-page">

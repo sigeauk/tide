@@ -312,4 +312,5 @@ def run_diagnostics(request: Request, db: DbDep, user: RequireUser, client_id: A
     return request.app.state.templates.TemplateResponse(request, "partials/diagnostics_checks.html", {
         "checks": scope.checks, "outcomes": diagnostics.by_check(results), **_fix_context(db, scope),
         "single": allowed[check] if check != "all" else None,
+        "active_client": client_id,   # a rule of this client opens straight away; another's switches first
     })

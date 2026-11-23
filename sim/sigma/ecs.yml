@@ -1,0 +1,856 @@
+# Simulation ECS: the Sigma pipeline for converting Sigma rules to the fields of a simulation's
+# replayed events (sim/README.md), used by the Sigma rules in a scenario's rules.toml.
+#
+# Windows: pySigma's ECS Windows pipeline (TIDE's built-in "ECS Windows"), item by item, from
+# pySigma-backend-elasticsearch 2.1.1 (pySigma 1.5.1): a Windows rule converts to the same query with
+# either. Then the sources ECS Windows doesn't cover:
+#   webserver  IIS and Splunk Stream http (logs-iis.access-*, logs-network_traffic.http-*)
+#   proxy      Splunk Stream http (url.full is the whole address)
+#   dns        Splunk Stream dns and Suricata dns
+#   firewall   FortiGate (logs-fortinet_fortigate.log-*)
+# Index patterns come from the simulation (its own data streams), not from this file.
+
+name: Simulation ECS
+priority: 20
+allowed_backends:
+- elasticsearch
+- eql
+- lucene
+- opensearch
+transformations:
+- id: windows_logsource_security
+  type: add_condition
+  conditions:
+    winlog.channel: Security
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: security
+- id: windows_logsource_application
+  type: add_condition
+  conditions:
+    winlog.channel: Application
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: application
+- id: windows_logsource_system
+  type: add_condition
+  conditions:
+    winlog.channel: System
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: system
+- id: windows_logsource_sysmon
+  type: add_condition
+  conditions:
+    winlog.channel: Microsoft-Windows-Sysmon/Operational
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: sysmon
+- id: windows_logsource_powershell
+  type: add_condition
+  conditions:
+    winlog.channel:
+    - Microsoft-Windows-PowerShell/Operational
+    - PowerShellCore/Operational
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: powershell
+- id: windows_logsource_powershell-classic
+  type: add_condition
+  conditions:
+    winlog.channel: Windows PowerShell
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: powershell-classic
+- id: windows_logsource_taskscheduler
+  type: add_condition
+  conditions:
+    winlog.channel: Microsoft-Windows-TaskScheduler/Operational
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: taskscheduler
+- id: windows_logsource_wmi
+  type: add_condition
+  conditions:
+    winlog.channel: Microsoft-Windows-WMI-Activity/Operational
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: wmi
+- id: windows_logsource_dns-server
+  type: add_condition
+  conditions:
+    winlog.channel: DNS Server
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: dns-server
+- id: windows_logsource_dns-server-audit
+  type: add_condition
+  conditions:
+    winlog.channel: Microsoft-Windows-DNS-Server/Audit
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: dns-server-audit
+- id: windows_logsource_dns-server-analytic
+  type: add_condition
+  conditions:
+    winlog.channel: Microsoft-Windows-DNS-Server/Analytical
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: dns-server-analytic
+- id: windows_logsource_driver-framework
+  type: add_condition
+  conditions:
+    winlog.channel: Microsoft-Windows-DriverFrameworks-UserMode/Operational
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: driver-framework
+- id: windows_logsource_ntlm
+  type: add_condition
+  conditions:
+    winlog.channel: Microsoft-Windows-NTLM/Operational
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: ntlm
+- id: windows_logsource_dhcp
+  type: add_condition
+  conditions:
+    winlog.channel: Microsoft-Windows-DHCP-Server/Operational
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: dhcp
+- id: windows_logsource_msexchange-management
+  type: add_condition
+  conditions:
+    winlog.channel: MSExchange Management
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: msexchange-management
+- id: windows_logsource_applocker
+  type: add_condition
+  conditions:
+    winlog.channel:
+    - Microsoft-Windows-AppLocker/MSI and Script
+    - Microsoft-Windows-AppLocker/EXE and DLL
+    - Microsoft-Windows-AppLocker/Packaged app-Deployment
+    - Microsoft-Windows-AppLocker/Packaged app-Execution
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: applocker
+- id: windows_logsource_printservice-admin
+  type: add_condition
+  conditions:
+    winlog.channel: Microsoft-Windows-PrintService/Admin
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: printservice-admin
+- id: windows_logsource_printservice-operational
+  type: add_condition
+  conditions:
+    winlog.channel: Microsoft-Windows-PrintService/Operational
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: printservice-operational
+- id: windows_logsource_codeintegrity-operational
+  type: add_condition
+  conditions:
+    winlog.channel: Microsoft-Windows-CodeIntegrity/Operational
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: codeintegrity-operational
+- id: windows_logsource_smbclient-security
+  type: add_condition
+  conditions:
+    winlog.channel: Microsoft-Windows-SmbClient/Security
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: smbclient-security
+- id: windows_logsource_firewall-as
+  type: add_condition
+  conditions:
+    winlog.channel: Microsoft-Windows-Windows Firewall With Advanced Security/Firewall
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: firewall-as
+- id: windows_logsource_bits-client
+  type: add_condition
+  conditions:
+    winlog.channel: Microsoft-Windows-Bits-Client/Operational
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: bits-client
+- id: windows_logsource_windefend
+  type: add_condition
+  conditions:
+    winlog.channel: Microsoft-Windows-Windows Defender/Operational
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: windefend
+- id: windows_logsource_terminalservices-localsessionmanager
+  type: add_condition
+  conditions:
+    winlog.channel: Microsoft-Windows-TerminalServices-LocalSessionManager/Operational
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: terminalservices-localsessionmanager
+- id: windows_logsource_microsoft-servicebus-client
+  type: add_condition
+  conditions:
+    winlog.channel: Microsoft-ServiceBus-Client
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: microsoft-servicebus-client
+- id: windows_logsource_ldap_debug
+  type: add_condition
+  conditions:
+    winlog.channel: Microsoft-Windows-LDAP-Client/Debug
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: ldap_debug
+- id: windows_logsource_security-mitigations
+  type: add_condition
+  conditions:
+    winlog.channel:
+    - Microsoft-Windows-Security-Mitigations/Kernel Mode
+    - Microsoft-Windows-Security-Mitigations/User Mode
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: security-mitigations
+- id: windows_logsource_diagnosis-scripted
+  type: add_condition
+  conditions:
+    winlog.channel: Microsoft-Windows-Diagnosis-Scripted/Operational
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: diagnosis-scripted
+- id: windows_logsource_shell-core
+  type: add_condition
+  conditions:
+    winlog.channel: Microsoft-Windows-Shell-Core/Operational
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: shell-core
+- id: windows_logsource_openssh
+  type: add_condition
+  conditions:
+    winlog.channel: OpenSSH/Operational
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: openssh
+- id: windows_logsource_bitlocker
+  type: add_condition
+  conditions:
+    winlog.channel: Microsoft-Windows-BitLocker/BitLocker Management
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: bitlocker
+- id: windows_logsource_vhdmp
+  type: add_condition
+  conditions:
+    winlog.channel: Microsoft-Windows-VHDMP/Operational
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: vhdmp
+- id: windows_logsource_appxdeployment-server
+  type: add_condition
+  conditions:
+    winlog.channel: Microsoft-Windows-AppXDeploymentServer/Operational
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: appxdeployment-server
+- id: windows_logsource_lsa-server
+  type: add_condition
+  conditions:
+    winlog.channel: Microsoft-Windows-LSA/Operational
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: lsa-server
+- id: windows_logsource_appxpackaging-om
+  type: add_condition
+  conditions:
+    winlog.channel: Microsoft-Windows-AppxPackaging/Operational
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: appxpackaging-om
+- id: windows_logsource_dns-client
+  type: add_condition
+  conditions:
+    winlog.channel: Microsoft-Windows-DNS Client Events/Operational
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: dns-client
+- id: windows_logsource_appmodel-runtime
+  type: add_condition
+  conditions:
+    winlog.channel: Microsoft-Windows-AppModel-Runtime/Admin
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: appmodel-runtime
+- id: windows_logsource_capi2
+  type: add_condition
+  conditions:
+    winlog.channel: Microsoft-Windows-CAPI2/Operational
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: capi2
+- id: windows_logsource_certificateservicesclient-lifecycle-system
+  type: add_condition
+  conditions:
+    winlog.channel: Microsoft-Windows-CertificateServicesClient-Lifecycle-System/Operational
+  template: false
+  negated: false
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: certificateservicesclient-lifecycle-system
+- id: elasticsearch_windows-FileVersion-category-process_creation
+  type: field_name_mapping
+  mapping:
+    FileVersion: process.pe.file_version
+  rule_conditions:
+  - type: logsource
+    category: process_creation
+    product: windows
+- id: elasticsearch_windows-FileVersion-category-image_load
+  type: field_name_mapping
+  mapping:
+    FileVersion: file.pe.file_version
+  rule_conditions:
+  - type: logsource
+    category: image_load
+    product: windows
+- id: elasticsearch_windows-Description-category-process_creation
+  type: field_name_mapping
+  mapping:
+    Description: process.pe.description
+  rule_conditions:
+  - type: logsource
+    category: process_creation
+    product: windows
+- id: elasticsearch_windows-Description-category-image_load
+  type: field_name_mapping
+  mapping:
+    Description: file.pe.description
+  rule_conditions:
+  - type: logsource
+    category: image_load
+    product: windows
+- id: elasticsearch_windows-Description-category-sysmon_error
+  type: field_name_mapping
+  mapping:
+    Description: winlog.event_data.Description
+  rule_conditions:
+  - type: logsource
+    category: sysmon_error
+    product: windows
+- id: elasticsearch_windows-Product-category-process_creation
+  type: field_name_mapping
+  mapping:
+    Product: process.pe.product
+  rule_conditions:
+  - type: logsource
+    category: process_creation
+    product: windows
+- id: elasticsearch_windows-Product-category-image_load
+  type: field_name_mapping
+  mapping:
+    Product: file.pe.product
+  rule_conditions:
+  - type: logsource
+    category: image_load
+    product: windows
+- id: elasticsearch_windows-Company-category-process_creation
+  type: field_name_mapping
+  mapping:
+    Company: process.pe.company
+  rule_conditions:
+  - type: logsource
+    category: process_creation
+    product: windows
+- id: elasticsearch_windows-Company-category-image_load
+  type: field_name_mapping
+  mapping:
+    Company: file.pe.company
+  rule_conditions:
+  - type: logsource
+    category: image_load
+    product: windows
+- id: elasticsearch_windows-OriginalFileName-category-process_creation
+  type: field_name_mapping
+  mapping:
+    OriginalFileName: process.pe.original_file_name
+  rule_conditions:
+  - type: logsource
+    category: process_creation
+    product: windows
+- id: elasticsearch_windows-OriginalFileName-category-image_load
+  type: field_name_mapping
+  mapping:
+    OriginalFileName: file.pe.original_file_name
+  rule_conditions:
+  - type: logsource
+    category: image_load
+    product: windows
+- id: elasticsearch_windows-CommandLine-category-process_creation
+  type: field_name_mapping
+  mapping:
+    CommandLine: process.command_line
+  rule_conditions:
+  - type: logsource
+    category: process_creation
+    product: windows
+- id: elasticsearch_windows-CommandLine-service-security
+  type: field_name_mapping
+  mapping:
+    CommandLine: process.command_line
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: security
+- id: elasticsearch_windows-CommandLine-service-powershell-classic
+  type: field_name_mapping
+  mapping:
+    CommandLine: powershell.command.value
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: powershell-classic
+- id: elasticsearch_windows-Protocol-category-network_connection
+  type: field_name_mapping
+  mapping:
+    Protocol: network.transport
+  rule_conditions:
+  - type: logsource
+    category: network_connection
+    product: windows
+- id: elasticsearch_windows-Initiated-category-network_connection
+  type: field_name_mapping
+  mapping:
+    Initiated: network.direction
+  rule_conditions:
+  - type: logsource
+    category: network_connection
+    product: windows
+- id: elasticsearch_windows-Signature-category-driver_loaded
+  type: field_name_mapping
+  mapping:
+    Signature: file.code_signature.subject_name
+  rule_conditions:
+  - type: logsource
+    category: driver_loaded
+    product: windows
+- id: elasticsearch_windows-Signature-category-image_loaded
+  type: field_name_mapping
+  mapping:
+    Signature: file.code_signature.subject_name
+  rule_conditions:
+  - type: logsource
+    category: image_loaded
+    product: windows
+- id: elasticsearch_windows-EngineVersion-service-powershell-classic
+  type: field_name_mapping
+  mapping:
+    EngineVersion: powershell.engine.version
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: powershell-classic
+- id: elasticsearch_windows-HostVersion-service-powershell-classic
+  type: field_name_mapping
+  mapping:
+    HostVersion: powershell.process.executable_version
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: powershell-classic
+- id: elasticsearch_windows-SubjectLogonId-service-security
+  type: field_name_mapping
+  mapping:
+    SubjectLogonId: winlog.logon.id
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: security
+- id: elasticsearch_windows-ServiceName-service-security
+  type: field_name_mapping
+  mapping:
+    ServiceName: service.name
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: security
+- id: elasticsearch_windows-SubjectDomainName-service-security
+  type: field_name_mapping
+  mapping:
+    SubjectDomainName: user.domain
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: security
+- id: elasticsearch_windows-SubjectUserName-service-security
+  type: field_name_mapping
+  mapping:
+    SubjectUserName: user.name
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: security
+- id: elasticsearch_windows-SubjectUserSid-service-security
+  type: field_name_mapping
+  mapping:
+    SubjectUserSid: user.id
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: security
+- id: elasticsearch_windows-TargetLogonId-service-security
+  type: field_name_mapping
+  mapping:
+    TargetLogonId: winlog.logon.id
+  rule_conditions:
+  - type: logsource
+    product: windows
+    service: security
+- id: ecs_windows_field_mapping
+  type: field_name_mapping
+  mapping:
+    EventID: event.code
+    Channel: winlog.channel
+    Provider_Name: winlog.provider_name
+    ComputerName: winlog.computer_name
+    FileName: file.path
+    ProcessGuid: process.entity_id
+    ProcessId: process.pid
+    Image: process.executable.caseless
+    CurrentDirectory: process.working_directory
+    ParentProcessGuid: process.parent.entity_id
+    ParentProcessId: process.parent.pid
+    ParentImage: process.parent.executable.caseless
+    ParentCommandLine: process.parent.command_line
+    TargetFilename: file.path
+    SourceIp: source.ip
+    SourceHostname: source.domain
+    SourcePort: source.port
+    DestinationIp: destination.ip
+    DestinationHostname: destination.domain
+    DestinationPort: destination.port
+    DestinationPortName: network.protocol
+    ImageLoaded: file.path
+    Signed: file.code_signature.signed
+    SignatureStatus: file.code_signature.status
+    Imphash: file.pe.imphash
+    SourceProcessGuid: process.entity_id
+    SourceProcessId: process.pid
+    SourceImage: process.executable.caseless
+    Device: file.path
+    SourceThreadId: process.thread.id
+    TargetObject: registry.path
+    PipeName: file.name
+    Destination: process.executable.caseless
+    QueryName: dns.question.name
+    QueryStatus: sysmon.dns.status
+    IsExecutable: sysmon.file.is_executable
+    Archived: sysmon.file.archived
+    CommandName: powershell.command.name
+    CommandPath: powershell.command.path
+    CommandType: powershell.command.type
+    HostApplication: process.command_line
+    HostId: process.entity_id
+    HostName: process.title
+    NewEngineState: powershell.engine.new_state
+    PipelineId: powershell.pipeline_id
+    PreviousEngineState: powershell.engine.previous_state
+    RunspaceId: powershell.runspace_id
+    ScriptName: file.path
+    SequenceNumber: event.sequence
+    NewProviderState: powershell.provider.new_state
+    ProviderName: powershell.provider.name
+    MessageNumber: powershell.sequence
+    MessageTotal: powershell.total
+    ScriptBlockText: powershell.file.script_block_text
+    ScriptBlockId: powershell.file.script_block_id
+    AccountDomain: user.domain
+    AccountName: user.name
+    Application: process.executable.caseless
+    ClientAddress: source.ip
+    ClientName: source.domain
+    DestAddress: destination.ip
+    DestPort: destination.port
+    IpAddress: source.ip
+    IpPort: source.port
+    NewProcessId: process.pid
+    NewProcessName: process.executable.caseless
+    ParentProcessName: process.parent.name.caseless
+    ProcessName: process.executable.caseless
+    SourceAddress: source.ip
+    TargetDomainName: user.domain
+    User: user.name
+    WorkstationName: source.domain
+    Payload: powershell.file.script_block_text
+  rule_conditions:
+  - type: logsource
+    product: windows
+- id: ecs_windows_winlog_eventdata_prefix
+  type: field_name_prefix
+  prefix: winlog.event_data.
+  rule_conditions:
+  - type: logsource
+    product: windows
+  field_name_conditions:
+  - type: processing_item_applied
+    processing_item_id: ecs_windows_field_mapping
+  - type: include_fields
+    fields:
+    - \w+\.
+    mode: re
+  field_name_cond_op: or
+  field_name_cond_not: true
+- id: network_direction_egress
+  type: set_value
+  value: egress
+  field_name_conditions:
+  - type: include_fields
+    fields:
+    - network.direction
+    mode: plain
+  detection_item_conditions:
+  - type: match_value
+    cond: all
+    value: true
+- id: network_direction_ingress
+  type: set_value
+  value: ingress
+  field_name_conditions:
+  - type: include_fields
+    fields:
+    - network.direction
+    mode: plain
+  detection_item_conditions:
+  - type: match_value
+    cond: all
+    value: false
+- id: values_to_str
+  type: convert_type
+  target_type: str
+  rule_conditions:
+  - type: logsource
+    product: windows
+  field_name_conditions:
+  - type: include_fields
+    fields:
+    - destination.port
+    - source.port
+    - process.parent.pid
+    - process.pid
+    - destination.ip
+    - source.ip
+    mode: plain
+  field_name_cond_not: true
+  detection_item_conditions:
+  - type: is_null
+    cond: any
+  detection_item_cond_not: true
+- id: sim_webserver_events
+  type: add_condition
+  conditions:
+    event.category: web
+  rule_conditions: &id001
+  - type: logsource
+    category: webserver
+- id: sim_webserver_fields
+  type: field_name_mapping
+  mapping:
+    c-ip: source.ip
+    src_ip: source.ip
+    src_port: source.port
+    s-ip: destination.ip
+    dst_ip: destination.ip
+    s-port: destination.port
+    dst_port: destination.port
+    cs-method: http.request.method
+    cs-uri-stem: url.path
+    cs-uri-query: url.query
+    c-uri: url.original
+    cs-uri: url.original
+    cs-host: url.domain
+    cs-referer: http.request.referrer
+    c-useragent: user_agent.original
+    cs-user-agent: user_agent.original
+    cs-username: user.name
+    sc-status: http.response.status_code
+    cs-version: http.version
+    cs-cookie: http.request.cookie
+    sc-bytes: http.response.body.bytes
+  rule_conditions: *id001
+- id: sim_proxy_events
+  type: add_condition
+  conditions:
+    event.category: web
+  rule_conditions: &id002
+  - type: logsource
+    category: proxy
+- id: sim_proxy_fields
+  type: field_name_mapping
+  mapping:
+    c-uri: url.full
+    c-uri-stem: url.path
+    c-uri-query: url.query
+    cs-host: url.domain
+    r-dns: url.domain
+    c-useragent: user_agent.original
+    cs-method: http.request.method
+    cs-referrer: http.request.referrer
+    cs-cookie: http.request.cookie
+    cs-version: http.version
+    sc-status: http.response.status_code
+    sc-bytes: http.response.body.bytes
+    src_ip: source.ip
+    dst_ip: destination.ip
+  rule_conditions: *id002
+- id: sim_dns_events
+  type: add_condition
+  conditions:
+    network.protocol: dns
+  rule_conditions: &id003
+  - type: logsource
+    category: dns
+- id: sim_dns_fields
+  type: field_name_mapping
+  mapping:
+    query: dns.question.name
+    QueryName: dns.question.name
+    record_type: dns.question.type
+    answer: dns.answers.data
+    src_ip: source.ip
+    dst_ip: destination.ip
+  rule_conditions: *id003
+- id: sim_firewall_events
+  type: add_condition
+  conditions:
+    observer.type: firewall
+  rule_conditions: &id004
+  - type: logsource
+    category: firewall
+- id: sim_firewall_fields
+  type: field_name_mapping
+  mapping:
+    src_ip: source.ip
+    src_port: source.port
+    dst_ip: destination.ip
+    dst_port: destination.port
+    action: event.action
+    username: user.name
+  rule_conditions: *id004

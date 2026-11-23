@@ -1,0 +1,13 @@
+# A shared noise pack: routine traffic laid over a scenario at noise busy (see botes_packs.py).
+# scenario.py pack-noise writes logs/ and manifest.json beside it, from download_botes.py's data.
+
+title = "Wayne Enterprises, 24 August 2016, morning"
+environment = "wayne-enterprises"          # it fits only scenarios from the same network
+source = "Splunk Boss of the SOC v1"
+licence = "CC0-1.0"
+download = "bots-v1"
+
+# What it holds, in original time (UTC): 08:20-10:00 local (MDT), before the ransomware, as long as the
+# ransomware's span (its window with 30 minutes either side, 16:10-17:50), so it lies over all of it.
+# python scenario.py check-noise ransomware checks none of the attacker is in it.
+window = ["2016-08-24T14:20:00Z", "2016-08-24T16:00:00Z"]

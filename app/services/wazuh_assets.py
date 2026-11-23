@@ -675,14 +675,15 @@ def offered_checks(conn, system_id: str, technique_ids: Iterable[str], q: str = 
         "bool_or(list_has_any(c.technique_ids, ?::VARCHAR[])) FROM host_sca_checks c JOIN hosts h ON h.id = c.host_id "
         "JOIN host_sca_policies p ON p.host_id = c.host_id AND p.policy_id = c.policy_id "
         "WHERE h.system_id = ? GROUP BY 1, 2", [ids, system_id]).fetchall()
-    words = q.strip().lower()
+    from app.services.search_query import SearchQuery
+    words = SearchQuery(q)
     suggested, others = [], []
     for pid, chk, title, cis, policy, hit in rows:
         item = {"policy_id": pid, "check_id": chk, "title": title or chk, "cis_ids": list(cis or []), "policy": policy or pid}
-        text = f"{title or ''} {' '.join(cis or [])} {chk}".lower()
-        if hit and (not words or words in text):
+        found = words.matches(title, list(cis or []), chk)
+        if hit and found:
             suggested.append(item)
-        elif words and words in text:
+        elif words and found:
             others.append(item)
     suggested.sort(key=_cis_key)
     others.sort(key=_cis_key)

@@ -28,7 +28,7 @@
 {% block title %}{{ system.name }} | Systems | TIDE{% endblock %}
 
 {% block content %}
-{{ breadcrumb(items=[('Home', '/'), ('Systems', '/systems'), (system.name, none)]) }}
+{{ breadcrumb(items=[('Systems', '/systems'), (system.name, none)]) }}
 
 {% set host_count = host_summaries | length %}
 {% set bl_count = baselines | length if baselines else 0 %}
@@ -95,7 +95,7 @@
             {{ more_button('Baseline actions', title='Add a baseline or a technique, choose SIEM coverage', attrs='name="Baseline Actions"') }}
             <div class="rh-more__menu" role="menu" hidden>
                 <button name="Add Baseline" type="button" role="menuitem" class="rh-more__item"
-                        title="Apply a template to this system, or start an empty baseline"
+                        title="Apply a template to this system, start an empty baseline, or import one exported as TIDE JSON"
                         hx-get="/api/systems/{{ system.id }}/baselines-dialog" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
                     {{ icon('layers', '15') }}<span>Add baseline</span>
                 </button>

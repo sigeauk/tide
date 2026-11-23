@@ -17,7 +17,7 @@
 {% from "macros/icons.html" import icon %}
 
 {# The button and its panel; the caller gives the panel's contents. ``kind`` tells app.js how to
-   name the choice on the button: "choice", "multi" or "" (the page does it). #}
+   name the choice on the button: "choice", "multi", "range" (its two date inputs) or "" (the page does it). #}
 {% macro filter_dropdown(id, label, text, kind='', wrap='filter-group', all_text='', tip='') -%}
 <div class="{{ wrap }} relative" data-filter>
     <label class="form-label" for="{{ id }}-btn"{% if tip %} title="{{ tip }}"{% endif %}>{{ label }}</label>
@@ -82,6 +82,18 @@
 {% for value, text in options %}{% if value in selected %}{% set _ = picked.append(text) %}{% endif %}{% endfor %}
 {% call filter_dropdown(id, label, picked | join(', ') or all_text, 'multi', wrap, all_text) %}
 {{ check_rows(name, options, selected, counts, input_attrs, titles) }}
+{% endcall %}
+{%- endmacro %}
+
+{# A date range: two date inputs, <name>_from and <name>_to; the button names its two ends, or Any. #}
+{% macro filter_dates(id, name, label, from_value='', to_value='', input_attrs='', wrap='filter-group', tip='') -%}
+{% call filter_dropdown(id, label, ((from_value or '…') ~ ' – ' ~ (to_value or '…')) if (from_value or to_value) else 'Any',
+                        'range', wrap, 'Any', tip) %}
+<div class="tide-filter-section-label">Date range</div>
+<div class="tide-filter-range">
+    <input type="date" name="{{ name }}_from" value="{{ from_value }}" class="form-input" aria-label="{{ label }} from" {{ input_attrs | safe }}>
+    <input type="date" name="{{ name }}_to" value="{{ to_value }}" class="form-input" aria-label="{{ label }} to" {{ input_attrs | safe }}>
+</div>
 {% endcall %}
 {%- endmacro %}
 

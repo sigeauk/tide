@@ -10,11 +10,11 @@
 
     // ── Host list ──
     function filterHosts() {
-        var q = $('host-search').value.toLowerCase(), cveFilter = $('host-cve-filter').value;
+        var q = TIDE.searchMatcher($('host-search').value), cveFilter = $('host-cve-filter').value;
         var cards = document.querySelectorAll('#host-card-grid .host-cve-card'), visible = 0;
         cards.forEach(function (card) {
-            var text = (card.dataset.name || '') + ' ' + (card.dataset.ip || '') + ' ' + (card.dataset.os || '') + ' ' + (card.dataset.software || '');
-            var show = (!q || text.indexOf(q) !== -1) && (cveFilter === 'all' || card.dataset.cve === cveFilter);
+            var show = (!q || q([card.dataset.name, card.dataset.ip, card.dataset.os, card.dataset.software]))
+                && (cveFilter === 'all' || card.dataset.cve === cveFilter);
             card.style.display = show ? '' : 'none';
             if (show) visible++;
         });
@@ -33,12 +33,12 @@
 
     // ── A host's packages and CVEs ──
     function filterPackages() {
-        var q = ($('pkg-search').value || '').toLowerCase();
+        var q = TIDE.searchMatcher($('pkg-search').value);
         document.querySelectorAll('#software-section .sw-card').forEach(function (card) {
             var text = ['.sw-card__name', '.sw-card__meta', '.sw-card__cpe'].map(function (s) {
                 return (card.querySelector(s) || {}).textContent || '';
-            }).join(' ').toLowerCase();
-            card.style.display = (!q || text.indexOf(q) !== -1) ? '' : 'none';
+            });
+            card.style.display = (!q || q(text)) ? '' : 'none';
         });
         filterCves();
     }
@@ -49,7 +49,7 @@
     function filterCves() {
         var selected = document.querySelector('#software-section .sw-card--selected');
         var cveCards = document.querySelectorAll('#cve-matches-card .cve-mini-card'), status = $('cve-filter-status');
-        var q = (($('pkg-search') || {}).value || '').toLowerCase();
+        var q = TIDE.searchMatcher(($('pkg-search') || {}).value);
         if (!selected && !q) {
             cveCards.forEach(function (c) { c.style.display = ''; });
             if (status) status.style.display = 'none';

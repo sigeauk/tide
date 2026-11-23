@@ -8,7 +8,7 @@
 #}
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon %}
-{% from "macros/filters.html" import filter_choice, filter_multi, more_filters %}
+{% from "macros/filters.html" import filter_choice, filter_dates, filter_multi, more_filters %}
 {% from "macros/modal.html" import empty_state %}
 {% from "macros/menu.html" import more_button %}
 {% from "macros/help.html" import help_button with context %}
@@ -71,7 +71,8 @@
                     <label class="form-label" for="elastic-technique">MITRE technique</label>
                     <input type="text" id="elastic-technique" class="form-input" name="technique" placeholder="e.g., T1059" value="{{ technique_filter }}">
                 </div>
-                {% set active = picked.values() | select | list | length %}
+                {# Last updated's two dates are one filter #}
+                {% set active = (picked.values() | select | list | length) - (1 if picked.updated_from and picked.updated_to else 0) %}
                 {% call more_filters('browser-filters', active) %}
                     {% set fc = filter_counts %}
                     {% set plat_opts = [] %}{% for p in facets.platforms %}{% set _ = plat_opts.append((p, p | replace('_', ' '))) %}{% endfor %}
@@ -90,6 +91,8 @@
                                     titles={'none': 'Rules Elastic gives no Profile tag'}) }}
                     {{ filter_multi('elastic-noise', 'noise', 'Noise', facets.noise, picked.noise, 'Any', fc.noise or {}, wrap='browser-filter',
                                     titles={'none': 'Rules Elastic gives no Noise tag'}) }}
+                    {{ filter_dates('elastic-updated', 'updated', 'Last updated', (picked.updated_from or [''])[0], (picked.updated_to or [''])[0],
+                                    wrap='browser-filter', tip='When Elastic last changed the rule') }}
                 {% endcall %}
                 <input type="hidden" name="selected" value="{{ selected_id }}">
             </form>

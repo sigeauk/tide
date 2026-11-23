@@ -48,11 +48,12 @@ SOURCES: Dict[str, Source] = {
     "rule_health": Source("Rule Health", "shield-check", (
         ("total", "Total rules"), ("enabled", "Enabled"), ("validated", "Validated"),
         ("quality", "Avg quality"), ("severity", "Severity"), ("last_synced", "Last synced"),
-    ), ("space", "enabled", "state", "min_score", "max_score", "validated_from", "validated_to", "search"), "/rules"),
+    ), ("space", "enabled", "state", "min_score", "max_score", "validated_from", "validated_to", "updated_from",
+        "updated_to", "search"), "/rules"),
     "rule_monitoring": Source("Rule Monitoring", "triangle-alert", (
         ("rules", "Rules needing action"), ("errors", "Errors"), ("warnings", "Warnings"), ("info", "Info"),
         ("causes", "Things to fix"), ("resolved", "Resolved"), ("last_synced", "Last synced"),
-    ), ("scope", "severity", "fixer", "issue", "rules", "search"), "/rule-monitoring"),
+    ), ("scope", "kind", "severity", "fixer", "issue", "rules", "search"), "/rule-monitoring"),
     "system": Source("System", "server", (
         ("covered", "Covered"), ("effective", "Effective"), ("techniques", "Techniques"), ("no_coverage", "No coverage"),
         ("known_gaps", "Known gaps"), ("unmapped", "Unmapped"), ("not_counted", "Not counted"),
@@ -163,11 +164,12 @@ def _clean_filters(source: str, raw) -> dict:
                 out[key] = max(0, min(100, int(value)))
             except (TypeError, ValueError):
                 raise ValueError("A score must be a number from 0 to 100.")
-        elif key in ("validated_from", "validated_to"):
+        elif key in ("validated_from", "validated_to", "updated_from", "updated_to"):
             try:
                 out[key] = date.fromisoformat(str(value)).isoformat()
             except ValueError:
-                raise ValueError("A validation date must be a date (YYYY-MM-DD).")
+                what = "A validation date" if key.startswith("validated") else "A last updated date"
+                raise ValueError(f"{what} must be a date (YYYY-MM-DD).")
         elif key == "search":
             text = _one_line(value, SEARCH_LIMIT, "A search")
             if text:
@@ -176,10 +178,10 @@ def _clean_filters(source: str, raw) -> dict:
             if not isinstance(value, str) or len(value) > 300:
                 raise ValueError("A destination or system is not recognised.")
             out[key] = value
-        elif key in ("severity", "fixer", "issue"):        # Rule Monitoring's choices
+        elif key in ("severity", "fixer", "issue", "kind"):        # Rule Monitoring's choices
             from app.services import rule_issues
             allowed_values = {"severity": {s for s, _ in rule_issues.SEVERITIES}, "fixer": set(rule_issues.FIXERS),
-                              "issue": set(rule_issues.KNOWN)}[key]
+                              "issue": set(rule_issues.KNOWN), "kind": {k for k, _ in rule_issues.KINDS}}[key]
             values = [value] if isinstance(value, str) else value if isinstance(value, list) else []
             if key == "fixer":                              # a role from before 6.3.2 as the one it is now
                 values = rule_issues.fixer_values(values)

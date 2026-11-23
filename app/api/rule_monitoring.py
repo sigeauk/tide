@@ -13,7 +13,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
 from app.api.deps import ActiveClient, DbDep, RequireUser
-from app.services import gitlab_issues, rule_issues
+from app.services import gitlab_issues, rule_alerts, rule_issues
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +39,7 @@ def filters_from(params) -> Dict[str, Any]:
         "severity": many("severity", {s for s, _ in rule_issues.SEVERITIES}),
         "fixer": rule_issues.fixer_values(params.getlist("fixer")),
         "issue": many("issue", set(rule_issues.KNOWN)),
+        "kind": many("kind", {k for k, _ in rule_issues.KINDS}),
         "rules": one("rules", rule_issues.RULES, DEFAULTS["rules"]),
         "show": one("show", rule_issues.SHOW, DEFAULTS["show"]),
         "group": one("group", rule_issues.GROUPS, DEFAULTS["group"]),
@@ -78,6 +79,7 @@ def page_context(db, client_id: str, params, user=None) -> Dict[str, Any]:
         "scope_options": [("", "Any")] + [(f"{d['id']}|{d.get('space') or 'default'}", d.get("name") or d.get("space"))
                                                 for d in destinations],
         "severity_options": list(rule_issues.SEVERITIES),
+        "kind_options": list(rule_issues.KINDS),
         "fixer_options": list(rule_issues.FIXERS.items()),
         "issue_options": [(i.id, i.title) for i in issues],
         "issue_titles": {i.id: i.meaning for i in issues},
@@ -89,7 +91,7 @@ def page_context(db, client_id: str, params, user=None) -> Dict[str, Any]:
         # What every request from the page sends along: the filter bar's fields only (a dialog's
         # fields can share their names: the Mute dialog's issue, cause).
         "filter_include": ", ".join(f"#rmon-filters [name='{n}']" for n in
-                                    ("search", "scope", "severity", "fixer", "issue", "rules", "show", "group")),
+                                    ("search", "scope", "kind", "severity", "fixer", "issue", "rules", "show", "group")),
     }
 
 
@@ -307,9 +309,16 @@ def _selection(db, client_id: str, params, user) -> Dict[str, Any]:
                        if rule_key else params, user)
     every = not rule_key and params.get("all") == "1"
     issue, rule = None, None
+    tuning = ""
     if rule_key:
         rule = db.get_rule_by_id(rule_key[0], rule_key[2], siem_id=rule_key[1], client_id=client_id)
-        nodes = rule_issues.for_rule(_causes(ctx["groups"], with_muted=False), rule_key) if rule else []
+        # Its mark for tuning is told in full, with each entry and the outcomes recorded (rule_tuning).
+        nodes = [n for n in rule_issues.for_rule(_causes(ctx["groups"], with_muted=False), rule_key)
+                 if n["issue"] != "marked_for_tuning"] if rule else []
+        if rule:
+            from app.services import rule_tuning
+            with db.get_connection() as conn:
+                tuning = rule_tuning.markdown(conn, rule_key, limits=rule_alerts.thresholds(db, client_id))
     elif every:
         nodes = _causes(ctx["groups"], with_muted=False)
     elif params.get("node"):
@@ -337,7 +346,7 @@ def _selection(db, client_id: str, params, user) -> Dict[str, Any]:
         where = next((d.get("name") or d.get("space") for d in ctx["client_siems"]
                       if d["id"] == rule_key[1] and str(d.get("space") or "default") == rule_key[2]), rule_key[2])
         text = (rule_issues.rule_markdown(rule.name, rule.rule_id, where, _kibana_rule_url(db, rule, client_id),
-                                          bool(rule.enabled)) + ("\n" + text if text else ""))
+                                          bool(rule.enabled)) + ("\n" + text if text else "") + ("\n" + tuning if tuning else ""))
     return {"ctx": ctx, "nodes": nodes, "text": text, "every": every, "issue": issue["label"] if issue else "",
             "causes": len(nodes), "issues": len({n["issue"] for n in nodes}),
             "audiences": [(a, rule_issues.FIXERS[a]) for a in audiences], "audience": audience,

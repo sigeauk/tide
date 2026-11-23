@@ -207,12 +207,9 @@ def search_actors(
     actors = db.get_threat_actors(client_id=client_id)
     
     if actor_search:
-        search_lower = actor_search.lower()
-        actors = [
-            a for a in actors
-            if search_lower in a.name.lower() or 
-               (a.aliases and search_lower in a.aliases.lower())
-        ]
+        from app.services.search_query import SearchQuery
+        query = SearchQuery(actor_search)
+        actors = [a for a in actors if query.matches(a.name, a.aliases)]
     
     # Build options HTML
     options_html = ""

@@ -429,6 +429,8 @@ def load_all_rules(force_reload: bool = False) -> List[Dict]:
 # category, service), its ATT&CK tactics, level and status. Each takes any number of values and a
 # rule matches when it has any of them.
 FILTERS = ("product", "category", "service", "tactic", "level", "status")
+# Last updated: when the rule was last changed (rule_modified), from and to. Not counted.
+DATE_FILTERS = ("updated_from", "updated_to")
 
 
 def _filter_values(rule: Dict) -> Dict[str, List[str]]:
@@ -446,17 +448,30 @@ def _filter_values(rule: Dict) -> Dict[str, List[str]]:
 
 def picked_filters(filters: Optional[Dict] = None) -> Dict[str, List[str]]:
     """``filters`` as the browser's filters take them: each of FILTERS with its values (one value or
-    several), blanks left out, lower case but for tactics."""
+    several), blanks left out, lower case but for tactics; and each end of Last updated
+    (DATE_FILTERS) as ``[YYYY-MM-DD]``, or ``[]`` when not a date."""
+    from app.services.elastic_rules import picked_date
     out: Dict[str, List[str]] = {}
     for name in FILTERS:
         value = (filters or {}).get(name) or []
         values = [str(v).strip() for v in ([value] if isinstance(value, str) else value) if str(v).strip()]
         out[name] = values if name == "tactic" else [v.lower() for v in values]
+    for name in DATE_FILTERS:
+        out[name] = picked_date((filters or {}).get(name))
     return out
 
 
 def _passes(values: Dict[str, List[str]], wanted: Dict[str, List[str]]) -> Dict[str, bool]:
     return {name: not wanted[name] or bool(set(values[name]) & set(wanted[name])) for name in FILTERS}
+
+
+def _in_dates(rule: Dict, wanted: Dict[str, List[str]]) -> bool:
+    """Whether the rule's last update is within Last updated (a rule with no date is not, once either end is set)."""
+    start, end = (wanted.get("updated_from") or [""])[0], (wanted.get("updated_to") or [""])[0]
+    if not (start or end):
+        return True
+    when = rule_modified(rule)
+    return bool(when) and (not start or when >= start) and (not end or when <= end)
 
 
 def filter_counts(query: str = "", technique_filter: str = "", filters: Optional[Dict] = None) -> Dict[str, Dict[str, int]]:
@@ -465,6 +480,8 @@ def filter_counts(query: str = "", technique_filter: str = "", filters: Optional
     wanted = picked_filters(filters)
     counts: Dict[str, Dict[str, int]] = {name: {} for name in FILTERS}
     for rule in _searched(load_all_rules(), query, technique_filter):
+        if not _in_dates(rule, wanted):   # Last updated narrows every count
+            continue
         values = _filter_values(rule)
         passes = _passes(values, wanted)
         for name in FILTERS:
@@ -512,7 +529,7 @@ def search_rules(
 
     wanted = picked_filters(filters)
     results = [rule for rule in _searched(load_all_rules(), query, technique_filter)
-               if all(_passes(_filter_values(rule), wanted).values())]
+               if all(_passes(_filter_values(rule), wanted).values()) and _in_dates(rule, wanted)]
     results.sort(key=_status_sort_key)
     if limit > 0:
         return results[:limit]
@@ -521,7 +538,8 @@ def search_rules(
 
 def _searched(rules: List[Dict], query: str = "", technique_filter: str = ""):
     """The rules matching the search (title, description, id, tags) and the MITRE technique."""
-    query_lower = query.lower().strip()
+    from app.services.search_query import SearchQuery
+    search = SearchQuery(query)
     # Normalize technique filter - remove T prefix if present for flexible matching
     technique_filter = technique_filter.upper().strip()
     if technique_filter.startswith('T'):
@@ -530,18 +548,11 @@ def _searched(rules: List[Dict], query: str = "", technique_filter: str = ""):
         technique_filter_num = technique_filter
 
     for rule in rules:
-        # Filter by search query (title, description, name)
-        if query_lower:
-            title = str(rule.get('title', '')).lower()
-            description = str(rule.get('description', '')).lower()
-            name = str(rule.get('name', '')).lower()
-            rule_id = str(rule.get('id', '')).lower()
-            # Also search in tags
-            tags_str = ' '.join(str(t) for t in (rule.get('tags', []) or [])).lower()
-            
-            if not any(query_lower in field for field in [title, description, name, rule_id, tags_str]):
-                continue
-        
+        # Filter by search query (title, description, name, id, tags)
+        if search and not search.matches(rule.get('title'), rule.get('description'), rule.get('name'),
+                                          rule.get('id'), ' '.join(str(t) for t in (rule.get('tags', []) or []))):
+            continue
+
         # Filter by MITRE technique
         if technique_filter:
             techniques = rule.get('_techniques', [])
@@ -1276,16 +1287,19 @@ def build_detection_rule_dict(
 
 
 def deploy_payload(yaml_content: str, enabled: bool = False, index_pattern: Optional[str] = None,
-                   pipeline_file: str = '', template_file: str = '', username: str = '') -> Tuple[Optional[Dict], str]:
+                   pipeline_file: str = '', template_file: str = '', username: str = '',
+                   custom_pipeline_yaml: str = '') -> Tuple[Optional[Dict], str]:
     """The Kibana rule a Sigma deploy sends: ``(payload, '')``, or ``(None, why)`` when it cannot be
     converted. Converted by the same path as the UI preview (``kibana_ndjson``), so preview and
-    deploy always agree."""
+    deploy always agree. ``custom_pipeline_yaml`` is a pipeline given as YAML rather than saved (a
+    simulation's own, from sim/sigma/)."""
     ok, json_str = convert_sigma_rule(
         yaml_content=yaml_content,
         backend='elasticsearch',
         pipeline='none',
         output_format='kibana_ndjson',
         index_pattern=index_pattern or '',
+        custom_pipeline_yaml=custom_pipeline_yaml,
         pipeline_file=pipeline_file,
         template_file=template_file,
     )

@@ -22,7 +22,7 @@ from app.api.deps import (DbDep, ClientAdmin, RequireAdmin, RequireSuperadmin, A
                           can_manage_user, require_client_member, require_manageable_user)
 from app.services import siem_kinds, tls, wazuh
 from app.services.log_context import audit_admin
-from app.services.database import RULE_REMOVED_UNLINKED, SUPPORT_ROLE
+from app.services.database import SUPPORT_ROLE
 
 logger = logging.getLogger(__name__)
 
@@ -1091,7 +1091,7 @@ def _siem_test_response(db, siem_id: str, result: dict) -> str:
     badge_text = "Connected" if result["ok"] else "Failed"
     # Pull the first failing check's detail into the inline badge so the
     # operator sees the headline without scrolling to the panel.
-    first_fail = next((c for c in result["checks"] if not c["ok"]), None)
+    first_fail = next((c for c in result["checks"] if not c["ok"] and not c.get("optional")), None)
     headline = first_fail["detail"] if first_fail else result["checks"][0]["detail"]
     return (f'<span class="badge {badge_cls}">{badge_text} — {_esc(headline)[:120]}</span>'
             + _format_test_result_panel(result))
@@ -1619,96 +1619,9 @@ async def edit_client_siem_destination(
 @router.delete("/clients/{client_id}/siems/{siem_id}", response_class=HTMLResponse)
 def unlink_siem_from_client(request: Request, client_id: str, siem_id: str,
                             db: DbDep, user: ClientAdmin):
-    """Unlink a SIEM from a client.
-
-    Ghost-rule prevention (4.1.16): after the ``client_siem_map`` row(s) are
-    deleted, the tenant's ``detection_rules`` rows for the unlinked
-    ``(siem_id, space)`` pairs are purged INSIDE ``tenant_context_for(client_id)``.
-    Without this, the rows lingered indefinitely — sync only iterates
-    currently-mapped pairs (CLAUDE.md §8.2 g2), so an unlinked pair is never
-    revisited and the now-orphan rules stayed visible on the Rule Health page.
-    The previous "redistributor" call here was a no-op stub since 4.1.13 and
-    has been removed.
-
-    Partial-unlink contract: when ``space`` is supplied, we MUST only purge that specific
-    ``(siem_id, space)`` pair removed — the same ``siem_id`` may still be mapped under a
-    different space as a different destination, and a blanket ``DELETE WHERE siem_id = ?``
-    would destroy rules belonging to that still-valid mapping. Pairs are captured BEFORE the
-    map delete so the purge is exact.
-    """
-    space_param = request.query_params.get("space")
-
-    # 1. Capture the (siem_id, space) pairs about to be removed, BEFORE the
-    #    map delete (otherwise the rows are gone and we can't know what to
-    #    purge). Space is lowercased + 'default'-normalised to match the
-    #    same shape ``get_client_siem_scopes`` uses, so the DELETE predicate
-    #    against detection_rules below is symmetric with the rest of the
-    #    tenant-isolation surface.
-    pairs_to_purge: list = []
-    try:
-        with db.get_shared_connection() as _sconn:
-            _q = (
-                "SELECT DISTINCT siem_id, "
-                "LOWER(COALESCE(NULLIF(TRIM(space), ''), 'default')) "
-                "FROM client_siem_map "
-                "WHERE client_id = ? AND siem_id = ?"
-            )
-            _params: list = [client_id, siem_id]
-            if space_param:
-                _q += " AND LOWER(COALESCE(NULLIF(TRIM(space), ''), 'default')) = LOWER(?)"
-                _params.append(space_param)
-            pairs_to_purge = [(sid, sp) for sid, sp in _sconn.execute(_q, _params).fetchall() if sid and sp]
-    except Exception as exc:
-        logger.warning(f"could not enumerate (siem_id, space) pairs prior to unlink: {exc}")
-
-    # 2. Delete the client_siem_map row(s).
-    db.unlink_client_siem(client_id, siem_id, space=space_param)
-    logger.info(f"SIEM {siem_id} ({space_param or 'all spaces'}) unlinked from client {client_id} by {user.username}")
-
-    # 3. Purge the orphaned detection_rules rows from the tenant DB. Wrapped
-    #    so a missing/empty detection_rules table on a never-synced tenant
-    #    cannot break the unlink response.
-    if pairs_to_purge:
-        try:
-            from app.services.tenant_manager import tenant_context_for
-            with tenant_context_for(client_id):
-                with db.get_connection() as _tconn:
-                    purged_total = 0
-                    for _sid, _space in pairs_to_purge:
-                        try:
-                            db.record_rule_removals(_tconn, "siem_id = ? AND LOWER(space) = ?", [_sid, _space],
-                                                    RULE_REMOVED_UNLINKED, client_id=client_id, actor=user.username)
-                            _res = _tconn.execute(
-                                "DELETE FROM detection_rules "
-                                "WHERE siem_id = ? AND LOWER(space) = ?",
-                                [_sid, _space],
-                            )
-                            # DuckDB returns affected-row count via .fetchall() on the result
-                            try:
-                                _affected = _res.fetchone()
-                                _n = int(_affected[0]) if _affected and _affected[0] is not None else 0
-                            except Exception:
-                                _n = 0
-                            purged_total += _n
-                        except Exception as _row_exc:
-                            # Likely "table does not exist" on a never-synced tenant
-                            # — non-fatal, the rules can't be ghosts if the table
-                            # itself isn't there.
-                            logger.debug(
-                                f"detection_rules purge skipped for client={client_id} "
-                                f"siem={_sid} space={_space}: {_row_exc}"
-                            )
-                            break  # table absent → no point retrying other pairs
-                    logger.info(
-                        f"ghost-rule purge: removed {purged_total} detection_rules rows "
-                        f"for client={client_id} pairs={pairs_to_purge}"
-                    )
-        except Exception as exc:
-            logger.warning(
-                f"ghost-rule purge after SIEM unlink failed for client={client_id} "
-                f"siem={siem_id} space={space_param or 'all'}: {exc}"
-            )
-
+    """Unlink a SIEM from a client: one destination when ``?space=`` is given, else every space of
+    the SIEM, with its rules removed from the client's TIDE (``db.unlink_destination``)."""
+    db.unlink_destination(client_id, siem_id, space=request.query_params.get("space"), actor=user.username)
     return _render_client_siems_partial(client_id, db, toast="SIEM unlinked.")
 
 
@@ -2190,9 +2103,17 @@ _MONITORING_SETTINGS = {
     "silent_enabled_days": ("Once enabled for", 1, 3660),
     "upstream_pending_days": ("Upstream update pending after", 1, 3660),
     "exceptions_many": ("Many exceptions over", 1, 10000),
+    # What rules' alerts turned out to be (rule tuning): the window, the judged alerts a share needs, the shares.
+    "outcome_days": ("Outcomes over", 1, 90),
+    "outcome_min": ("Judged alerts needed", 1, 100_000),
+    "fp_share_pct": ("False positives share", 1, 100),
+    "bad_data_share_pct": ("Bad data share", 1, 100),
+    "expected_share_pct": ("Expected activity share", 1, 100),
+    "duplicate_share_pct": ("Duplicates share", 1, 100),
 }
 # Rule Monitoring checks the client turns on or off (a ticked box saves 1, else 0).
-_MONITORING_SWITCHES = {"validation_stale": "List expired or changed validations"}
+_MONITORING_SWITCHES = {"validation_stale": "List expired or changed validations",
+                        "alerts_unreviewed": "List rules whose alerts are left open"}
 # Switches saved with them that change how rules are written, not what Rule Monitoring finds (#7).
 _WRITE_SWITCHES = {"elastic_blocks": "Stop saves Elastic's validator refuses"}
 
@@ -2284,6 +2205,78 @@ async def save_client_scoring(request: Request, client_id: str, db: DbDep, user:
     result = await run_in_threadpool(_rescore_client, db, client_id, weights)
     logger.info("Client %s scoring weights saved by %s: %s; %s", client_id, user.username, weights, result)
     return _render_client_scoring(request, db, client_id, message=_rescore_message(result, "Saved."))
+
+
+def _render_client_outcomes(request: Request, db, client_id: str, message: str = "", error: str = "") -> HTMLResponse:
+    """The client's Outcomes from Kibana section: the values its last syncs found in alert tags, case fields
+    and closing reasons, each with the outcome it maps to (rule_outcomes)."""
+    from app.services import rule_outcomes, rule_tuning
+    from app.services.tenant_manager import tenant_context_for
+    chosen = rule_outcomes.mapping(db, client_id)
+    scopes = {(d["id"], str(d.get("space") or "default")) for d in db.get_client_siems(client_id) or []}
+    try:
+        with tenant_context_for(client_id):
+            with db.get_connection() as conn:
+                found = rule_outcomes.found(conn, scopes)
+    except Exception:                       # noqa: BLE001 - the mappings show without the values found
+        logger.warning("Could not read the outcome values found for client %s", client_id, exc_info=True)
+        found = {"tags": {}, "cases": {}, "reasons": {}, "fields": {}, "read": False, "cases_read": False}
+    field = chosen["case_field"]
+
+    def rows(values: dict, part: str):
+        """Each value found, most first, then any mapped but not found; with its choice and default."""
+        listed = dict(sorted(values.items(), key=lambda kv: (-kv[1], kv[0].lower())))
+        seen = {rule_outcomes.norm(v) for v in listed}
+        listed.update({v: 0 for v in chosen[part] if rule_outcomes.norm(v) not in seen})
+        picked = rule_outcomes.choices(chosen[part])
+        out = []
+        for value, n in listed.items():
+            default = rule_outcomes.ALIASES.get(rule_outcomes.norm(value)) or rule_outcomes.IGNORE
+            out.append({"value": value, "count": n, "default": default,
+                        "choice": picked.get(rule_outcomes.norm(value)) or default})
+        return out
+
+    fields = [("", "Off")] + list(rule_outcomes.CASE_FIELDS) + [
+        (f"field:{k}", f"Custom field: {label}") for k, label in sorted(found["fields"].items(), key=lambda kv: kv[1].lower())]
+    if field and field not in dict(fields):
+        fields.append((field, f"Custom field: {field[6:]}"))
+    groups = [{"title": "Alert tags", "name": "tags", "rows": rows(found["tags"], "tags"),
+               "hint": "The tag an analyst applied to an alert (Apply alert tags in Kibana); an alert's own tag wins over its case's outcome.",
+               "empty": "No closed alert carries a tag."},
+              {"title": "Case values", "name": "case", "rows": rows(found["cases"].get(field, {}), "case") if field else [],
+               "hint": "The value the case tool left where Case outcome says, counted only for a case holding one rule's alerts.",
+               "empty": "Choose where the case tool leaves the outcome, under Case outcome, to map its values."
+               if not field else "No closed case holds a value there."}]
+    if found["reasons"] or chosen["reasons"]:
+        groups.append({"title": "Closing reasons", "name": "reasons", "rows": rows(found["reasons"], "reasons"),
+                       "hint": "The reason given as an alert was closed (from Elastic 9.6), which wins over its tags.",
+                       "empty": ""})
+    options = [(k, o.label) for k, o in rule_tuning.OUTCOMES.items() if o.counts != "missed"] + [(rule_outcomes.IGNORE, "Ignore")]
+    return request.app.state.templates.TemplateResponse(request, "partials/client_outcomes.html", {
+        "client": db.get_client(client_id), "case_field": field, "field_options": fields, "groups": groups,
+        "outcome_options": options, "read": found["read"], "cases_read": found["cases_read"],
+        "message": message, "error": error})
+
+
+@router.get("/clients/{client_id}/outcomes", response_class=HTMLResponse)
+def client_outcomes_section(request: Request, client_id: str, db: DbDep, user: ClientAdmin):
+    return _render_client_outcomes(request, db, client_id)
+
+
+@router.post("/clients/{client_id}/outcomes", response_class=HTMLResponse)
+async def save_client_outcomes(request: Request, client_id: str, db: DbDep, user: ClientAdmin):
+    """Save how the client's Kibana values map onto outcomes. They apply from the next sync."""
+    from app.services import rule_outcomes
+    form = await request.form()
+    data = {"case_field": str(form.get("case_field") or "")}
+    if data["case_field"] and not (data["case_field"] in dict(rule_outcomes.CASE_FIELDS)
+                                   or data["case_field"].startswith("field:")):
+        return _render_client_outcomes(request, db, client_id, error="Choose where the case tool leaves the outcome.")
+    for part in ("tags", "case", "reasons"):
+        data[part] = dict(zip(form.getlist(f"{part}_value"), form.getlist(f"{part}_outcome")))
+    rule_outcomes.save_mapping(db, client_id, data)
+    logger.info("Client %s outcome mappings saved by %s: %s", client_id, user.username, rule_outcomes.parse(data))
+    return _render_client_outcomes(request, db, client_id, message="Saved. They apply from the next sync.")
 
 
 @router.post("/clients/{client_id}/scoring/reset", response_class=HTMLResponse)
@@ -3070,7 +3063,7 @@ def _render_permissions_tab(db, client_id: Optional[str] = None) -> str:
             html += '</tr>'
         return html
 
-    role_headers = "".join(f'<th class="text-center">{r["name"]}</th>' for r in roles)
+    role_headers = "".join(f'<th class="text-center">{r["name"].replace("_", " ")}</th>' for r in roles)
 
     blurb = (
         "Control which roles can <strong>Read</strong> (view) or <strong>Write</strong> (modify) "

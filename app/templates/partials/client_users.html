@@ -12,10 +12,10 @@
 {% set may_support = who is defined and who and who.is_superadmin %}
 {% macro role_boxes(checked_roles, may_support) %}
 {% for r in all_roles %}
-{% set locked = r.name == 'SUPPORT' and not may_support %}
+{% set locked = r.name in ('SUPPORT', 'SIM_ADMIN') and not may_support %}
 <label class="role-checkbox client-role-box"
-       title="{{ 'Only a super admin can grant or remove Support' if locked else (r.description or r.name) }}">
-    <input type="checkbox" name="roles" value="{{ r.name }}"{% if r.name in checked_roles %} checked{% endif %}{% if locked %} disabled{% endif %}> {{ r.name | capitalize }}
+       title="{{ ('Only a super admin can grant or remove ' ~ (r.name | replace('_', ' ') | title)) if locked else (r.description or r.name) }}">
+    <input type="checkbox" name="roles" value="{{ r.name }}"{% if r.name in checked_roles %} checked{% endif %}{% if locked %} disabled{% endif %}> {{ r.name | replace('_', ' ') | title }}
 </label>
 {% endfor %}
 {% endmacro %}
@@ -34,7 +34,7 @@
             <th>User</th>
             <th>Name</th>
             <th>Email</th>
-            {% for r in roles %}<th class="client-users-table__role" title="{{ r.description or r.name }}">{{ r.name | capitalize }}</th>{% endfor %}
+            {% for r in roles %}<th class="client-users-table__role" title="{{ r.description or r.name }}">{{ r.name | replace('_', ' ') | title }}</th>{% endfor %}
             <th class="client-users-table__more"><span class="sr-only">Actions</span></th>
         </tr>
     </thead>
@@ -46,10 +46,10 @@
             <td class="rt-sub" title="{{ u.full_name or '' }}">{{ u.full_name or '—' }}</td>
             <td class="rt-sub" title="{{ u.email or '' }}">{{ u.email or '—' }}</td>
             {% for r in roles %}
-            {% set locked = r.name == 'SUPPORT' and not may_support %}
+            {% set locked = r.name in ('SUPPORT', 'SIM_ADMIN') and not may_support %}
             <td class="client-users-table__role">
                 <input type="checkbox" name="roles" value="{{ r.name }}"{% if r.name in (u._roles or []) %} checked{% endif %}{% if locked %} disabled{% endif %}
-                       aria-label="{{ r.name | capitalize }}" title="{{ 'Only a super admin can grant or remove Support' if locked else (r.name | capitalize) ~ ' on ' ~ client.name }}">
+                       aria-label="{{ r.name | replace('_', ' ') | title }}" title="{{ ('Only a super admin can grant or remove ' ~ (r.name | replace('_', ' ') | title)) if locked else (r.name | replace('_', ' ') | title) ~ ' on ' ~ client.name }}">
             </td>
             {% endfor %}
             <td class="client-users-table__more">

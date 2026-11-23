@@ -49,13 +49,16 @@ _COLUMN_SORTS = {
     "severity": lambda r, c: _SEVERITY_RANK.get(str(getattr(getattr(r, "severity", None), "value", getattr(r, "severity", "")) or "").lower(), 0),
     "author": lambda r, c: str(getattr(r, "author", "") or "").lower(),
     "alerts": lambda r, c: (c.get("alerts") or {}).get((r.rule_id, r.siem_id, r.space), 0),
+    # The share of its judged alerts needing no action (rule_tuning); rules too few were judged on sort lowest.
+    "actionable": lambda r, c: (c.get("actionable") or {}).get((r.rule_id, r.siem_id, r.space), -1.0),
     "language": lambda r, c: rule_language_name(r.query_language).lower(),
     "type": lambda r, c: rule_type_name(r.rule_type).lower(),
 }
 
 
 def _resort_rules(rules: list, sort_score: str, sort_validated: str, sort_name: str, sort_by: str,
-                  sort_col: str = "", sort_dir: str = "", sort_ctx: Optional[dict] = None) -> list:
+                  sort_col: str = "", sort_dir: str = "", sort_ctx: Optional[dict] = None,
+                  sort_updated: str = "") -> list:
     """Re-apply the active sort after any post-fetch substitution.
 
     ``list_rules`` swaps some rows for their migrated "master" counterpart
@@ -81,16 +84,20 @@ def _resort_rules(rules: list, sort_score: str, sort_validated: str, sort_name: 
         field, direction = "score", sort_score
     elif sort_name in ("asc", "desc"):
         field, direction = "name", sort_name
+    elif sort_updated in ("asc", "desc"):
+        field, direction = "updated", sort_updated
     else:
         field, direction = legacy_map.get(sort_by, ("score", "desc"))
 
     reverse = direction == "desc"
-    if field == "validated":
-        # Never-validated rules have no date: keep them after every dated rule in both directions.
+    if field in ("validated", "updated"):
+        # A rule never validated (or with no Last updated date) has none: keep them after every dated
+        # rule in both directions.
+        attr = "validation_date" if field == "validated" else "rule_updated_at"
         rules.sort(key=lambda r: str(getattr(r, "name", "") or "").lower())
-        rules.sort(key=lambda r: getattr(r, "validation_date", None) or datetime.min, reverse=reverse)
-        dated = [r for r in rules if getattr(r, "validation_date", None)]
-        rules[:] = dated + [r for r in rules if not getattr(r, "validation_date", None)]
+        rules.sort(key=lambda r: getattr(r, attr, None) or datetime.min, reverse=reverse)
+        dated = [r for r in rules if getattr(r, attr, None)]
+        rules[:] = dated + [r for r in rules if not getattr(r, attr, None)]
     elif field == "score":
         rules.sort(key=lambda r: int(getattr(r, "score", 0) or 0), reverse=reverse)
     elif field == "name":
@@ -675,6 +682,12 @@ def changes_against(shown: dict, rule_type: str, form, technique_lookup: dict, u
                 changes["mitre_ids"], changes["threat"] = value, after["threat"]
         elif value != before.get(key):
             changes[key] = value
+    # Both sides lose the spaces round the name, so taking them off a name Kibana holds with them
+    # (#113) looks like no change. It is one when the name posted isn't the one shown and, trimmed,
+    # isn't the name Kibana holds: an untouched field, or a space typed onto a clean name, is none.
+    held, posted = str(shown.get("name") or ""), str(form.get("name") or "")
+    if posted != held and after["name"] != held:
+        changes["name"] = after["name"]
     removed = tuple(k for k in _CLEARABLE if k in before and k not in after)
 
     if shown.get("uses_data_view"):
@@ -827,6 +840,15 @@ def _summarize_rule_changes(old_payload: dict, new_payload: dict) -> tuple[str, 
                                       "after": mapping_text(new_payload.get(key))})
             continue
 
+        if key == "name":
+            # A name's spaces are part of it (#113): taking them off is a change, shown in quotes to be seen.
+            before_name, after_name = str(old_payload.get(key) or ""), str(new_payload.get(key) or "")
+            if before_name != after_name:
+                shown = lambda v: f'"{v}"' if v != v.strip() else (v or "-")  # noqa: E731
+                changed.append(label)
+                changed_diffs.append({"field": label, "before": shown(before_name), "after": shown(after_name)})
+            continue
+
         if key in ("mitre_ids", "investigation_fields"):
             # Compared as id lists: order-free, and highlighted fields' {"field_names": []} is none.
             names = lambda v: v.get("field_names") if isinstance(v, dict) else v
@@ -883,12 +905,15 @@ def _build_rule_history_entries(history: list[dict], score_history: list[dict]) 
             return normalized
         return aliases.get(normalized, raw_name)
 
+    from app.services.rule_tuning import HISTORY_ACTIONS as tuning_actions
     entries: list[dict] = []
 
     for event in history:
         action = str(event.get("action") or "").strip().lower()
-        category = "validation" if action == "validated" else "edits"
-        if action == "validated":
+        category = "validation" if action == "validated" else "tuning" if action in tuning_actions else "edits"
+        if action in tuning_actions:
+            badge = tuning_actions[action]
+        elif action == "validated":
             badge = "Validated"
         elif action == "edited":
             badge = "Edit"
@@ -941,7 +966,7 @@ def _build_rule_history_entries(history: list[dict], score_history: list[dict]) 
                 "elastic_timestamp": detail.get("elastic_timestamp") or "",
                 "changed_fields": changed_fields,
                 "field_diffs": field_diffs,
-                "expandable": category == "edits",
+                "expandable": category == "edits" or (category == "tuning" and bool(detail.get("message"))),
             }
         )
 
@@ -1166,12 +1191,16 @@ def list_rules(
     min_score: Optional[str] = Query(None),
     max_score: Optional[str] = Query(None),
     validation: list[str] = Query([]),
+    tuning: list[str] = Query([]),
     validated_from: Optional[str] = Query(None),
     validated_to: Optional[str] = Query(None),
+    updated_from: Optional[str] = Query(None),
+    updated_to: Optional[str] = Query(None),
     sort_by: str = Query("score_desc"),
     sort_score: str = Query("desc"),
     sort_validated: str = Query(""),
     sort_name: str = Query(""),
+    sort_updated: str = Query(""),
     page: int = Query(1, ge=1),
     page_size: int = Query(24, ge=1, le=100),
     append: bool = Query(False),
@@ -1183,6 +1212,8 @@ def list_rules(
     try:
         validated_from_dt = _parse_date_bound(validated_from, end_of_day=False)
         validated_to_dt = _parse_date_bound(validated_to, end_of_day=True)
+        updated_from_dt = _parse_date_bound(updated_from, end_of_day=False)
+        updated_to_dt = _parse_date_bound(updated_to, end_of_day=True)
         min_score_int = int(min_score) if min_score and min_score.strip().lstrip('-').isdigit() else None
         max_score_int = int(max_score) if max_score and max_score.strip().lstrip('-').isdigit() else None
         # Tenant isolation is handled by the ActiveClient dep, which pins
@@ -1200,16 +1231,20 @@ def list_rules(
             min_score=min_score_int,
             max_score=max_score_int,
             validation=[v for v in validation if v],
+            tuning=[t for t in tuning if t],
             validated_from=validated_from_dt,
             validated_to=validated_to_dt,
+            updated_from=updated_from_dt,
+            updated_to=updated_to_dt,
             sort_by=sort_by,
             sort_score=sort_score,
             sort_validated=sort_validated,
             sort_name=sort_name,
+            sort_updated=sort_updated,
             page=page,
             page_size=page_size,
         )
-        
+
         # Rule Health is a master-rule view: a tracked staging/production
         # pair renders once using the production copy (falling back to
         # staging if production was deleted). Dedup must happen on the
@@ -1230,16 +1265,26 @@ def list_rules(
                 from app.services import rule_alerts
                 with db.get_connection() as _conn:
                     sort_ctx["alerts"] = rule_alerts.per_rule(_conn, [(r.rule_id, r.siem_id, r.space) for r in all_rules])
-        all_rules = _resort_rules(all_rules, sort_score, sort_validated, sort_name, sort_by, sort_col, sort_dir, sort_ctx)
+            if sort_col == "actionable":   # each rule's share of judged alerts needing no action (rule_tuning)
+                from app.services import rule_alerts, rule_tuning
+                with db.get_connection() as _conn:
+                    shares = rule_tuning.not_actionable(_conn, [(r.rule_id, r.siem_id, r.space) for r in all_rules],
+                                                        limits=rule_alerts.thresholds(db, client_id))
+                sort_ctx["actionable"] = {k: v["share"] for k, v in shares.items() if v["share"] is not None}
+        all_rules = _resort_rules(all_rules, sort_score, sort_validated, sort_name, sort_by, sort_col, sort_dir, sort_ctx,
+                                  sort_updated)
         if search and search.strip():
             # Search also matches author, rule id and MITRE ids, so a short term (e.g. "111") can hit
-            # dozens of rule-id substrings. Show name matches first (exact, then contains); the chosen
-            # sort still orders rules within each group (sorted() is stable).
-            _q = search.strip().lower()
-            all_rules = sorted(
-                all_rules,
-                key=lambda r: 0 if (r.name or "").lower() == _q else 1 if _q in (r.name or "").lower() else 2,
-            )
+            # dozens of rule-id substrings. Show name matches first (exact, then holding the search as
+            # typed, then the name alone matching it); the chosen sort still orders rules within each
+            # group (sorted() is stable).
+            from app.services.search_query import SearchQuery
+            _q, _search = search.strip().lower(), SearchQuery(search)
+
+            def _rank(r):
+                name = (r.name or "").lower()
+                return 0 if name == _q else 1 if _q in name else 2 if _search.matches(r.name) else 3
+            all_rules = sorted(all_rules, key=_rank)
         total = len(all_rules)
         total_pages = max(1, (total + page_size - 1) // page_size)
         offset = (page - 1) * page_size
@@ -1267,12 +1312,16 @@ def list_rules(
             "min_score": min_score if min_score is not None else "",
             "max_score": max_score if max_score is not None else "",
             "validation": [v for v in validation if v],
+            "tuning": [t for t in tuning if t],
             "validated_from": validated_from or "",
             "validated_to": validated_to or "",
+            "updated_from": updated_from or "",
+            "updated_to": updated_to or "",
             "sort_by": sort_by,
             "sort_score": sort_score,
             "sort_validated": sort_validated,
             "sort_name": sort_name,
+            "sort_updated": sort_updated,
             **card_ctx,
             "append": append,
             "view": view if view in ("cards", "table") else "cards",
@@ -1310,8 +1359,11 @@ def get_metrics(
     min_score: Optional[str] = Query(None),
     max_score: Optional[str] = Query(None),
     validation: list[str] = Query([]),
+    tuning: list[str] = Query([]),
     validated_from: Optional[str] = Query(None),
     validated_to: Optional[str] = Query(None),
+    updated_from: Optional[str] = Query(None),
+    updated_to: Optional[str] = Query(None),
 ):
     """Get rule health metrics, scoped to the same filters as the rules grid. The number beside each
     filter choice follows the filters too: they come along as the ``filterCounts`` event, by filter
@@ -1319,14 +1371,15 @@ def get_metrics(
     params = {
         "search": search, "space": space, "enabled": enabled, "state": state, "linked_to": linked_to,
         "upstream": upstream, "rule_type": rule_type, "language": language, "min_score": min_score,
-        "max_score": max_score, "validation": validation, "validated_from": validated_from, "validated_to": validated_to,
+        "max_score": max_score, "validation": validation, "tuning": tuning, "validated_from": validated_from,
+        "validated_to": validated_to, "updated_from": updated_from, "updated_to": updated_to,
     }
     ctx = filtered_rule_metrics(db, client_id, params)
     response = request.app.state.templates.TemplateResponse(request, "partials/metrics_row.html", ctx)
     counts = db.rule_filter_counts(rule_filters_from(params), client_id=client_id)
     response.headers["HX-Trigger"] = json.dumps({"filterCounts": {
         "space": counts["scope"], **{k: counts[k] for k in ("enabled", "state", "linked_to", "upstream", "validation",
-                                                             "rule_type", "language")}}})
+                                                             "rule_type", "language", "tuning")}}})
     return response
 
 
@@ -1349,8 +1402,11 @@ def rule_filters_from(params: dict) -> RuleFilters:
         min_score=_int(params.get("min_score")),
         max_score=_int(params.get("max_score")),
         validation=[v for v in (params.get("validation") or []) if v],
+        tuning=[t for t in (params.get("tuning") or []) if t],
         validated_from=_parse_date_bound(params.get("validated_from"), end_of_day=False),
         validated_to=_parse_date_bound(params.get("validated_to"), end_of_day=True),
+        updated_from=_parse_date_bound(params.get("updated_from"), end_of_day=False),
+        updated_to=_parse_date_bound(params.get("updated_to"), end_of_day=True),
     )
 
 
@@ -2405,14 +2461,16 @@ def build_rule_card_context(db, client_id: str, rules) -> dict:
     # What Rule Monitoring found on each, as its card flags it (rule_issues.card_problems), its
     # alerts in the last 7 days, for the table's Alerts column (#68), and the open GitLab issues about
     # it, raised for it or for a cause it has (#106; its window lists those closed lately too).
-    problems, alerts_7d, raised = {}, {}, {}
+    problems, alerts_7d, raised, not_actionable = {}, {}, {}, {}
     try:
-        from app.services import gitlab_issues, rule_alerts, rule_issues
+        from app.services import gitlab_issues, rule_alerts, rule_issues, rule_tuning
         keys = [(r.rule_id, r.siem_id, r.space) for r in rules if r.siem_id]
         with db.get_connection() as conn:
             found = rule_issues.rule_findings(conn, keys)
             alerts = rule_alerts.per_rule(conn, keys)
             about = gitlab_issues.about_rules(conn, rule_issues.cause_keys(found, keys), open_only=True)
+            judged = rule_tuning.not_actionable(conn, keys, limits=rule_alerts.thresholds(db, client_id))   # Not actionable
+        not_actionable = {f"{k[0]}|{k[1] or ''}|{k[2] or ''}": v for k, v in judged.items()}
         for r in rules:
             lifecycle_key = f"{r.rule_id}|{r.siem_id or ''}|{r.space or ''}"
             flagged = rule_issues.card_problems(found.get((r.rule_id, r.siem_id, r.space), []), bool(r.enabled))
@@ -2435,6 +2493,7 @@ def build_rule_card_context(db, client_id: str, rules) -> dict:
         "rule_problems": problems,
         "rule_alerts_7d": alerts_7d,
         "rule_gitlab_issues": raised,
+        "rule_not_actionable": not_actionable,
     }
 
 
@@ -2604,7 +2663,7 @@ def _build_rule_modal_context(
     chart_events = [
         {"ts": e["created_at"], "kind": "validation" if e.get("kind") == "validation" else "edit",
          "actor": e.get("actor"), "label": e.get("badge") or ("Validated" if e.get("kind") == "validation" else "Edited")}
-        for e in entries if e.get("created_at")
+        for e in entries if e.get("created_at") and e.get("kind") in ("validation", "edits")
     ]
     # Mark where the scoring model changed, so a step in the line reads as "the model changed",
     # not "the rule got worse".
@@ -2664,10 +2723,17 @@ def _build_rule_modal_context(
         unlinked_from = rule_origins.unlinked_name(conn, origin)
         # What Rule Monitoring found on this rule, for its section of that name, its alerts (#68), and
         # the GitLab issues about it: raised for it, or for a cause it has (#106).
-        from app.services import gitlab_issues, rule_alerts, rule_issues
+        from app.services import gitlab_issues, rule_alerts, rule_issues, rule_tuning
         monitoring = rule_issues.rule_findings(conn, [key]).get(key, [])
         alerts = rule_alerts.for_rule(conn, actual_siem, space, str((rule.raw_data or {}).get("id") or ""))
         about_issues = gitlab_issues.about_rules(conn, rule_issues.cause_keys({key: monitoring}, [key])).get(key, [])
+        # Its Tuning section (rule_tuning): the open mark, what people recorded, its past tunings and their
+        # effect, and Rule Monitoring's findings about whether it is worth its alerts.
+        tuning = {"mark": rule_tuning.open_marks(conn, [key]).get(key),
+                  "summary": rule_tuning.summary(conn, key, limits=rule_alerts.thresholds(db, client_id),
+                                                 kibana_url=_resolve_kibana_url(db, rule, client_id)),
+                  "past": rule_tuning.past(conn, key), "dismissed": rule_tuning.dismissed(conn, key),
+                  "findings": [f for f in monitoring if f.get("kind") == "tuning"]}
     # Custom rules Kibana held beside this one under the same rule id at the last sync (TIDE holds one).
     shared_copies = [c for c in db.shared_rule_id_copies(actual_siem, space, rule.rule_id)
                      if not c.get("prebuilt") and not any(e.get("copy_id") == c.get("id") for e in own_pending)]
@@ -2687,9 +2753,11 @@ def _build_rule_modal_context(
         "upstream_guess": re.sub(r"(\s*\[Duplicate\])+\s*$", "", rule.name or ""),
         "shared_copies": shared_copies,
         "pending_changes": [{**e, "text": pending_actions.describe(e)} for e in pending],
-        "monitoring": monitoring,
+        "monitoring": [f for f in monitoring if f.get("kind") != "tuning"],
+        "tuning": tuning,
         "gitlab_issues": about_issues,
         "can_fix": user is None or user.can_write("page:rules"),
+        "can_tune": user is None or user.can_write("page:rule_tuning"),
         "alerts": alerts,
         "alert_chart": _build_alert_chart(alerts["per_day"]) if alerts and alerts["total"] else None,
         "search_chart": _search_chart_for(db, rule, actual_siem, space),
@@ -3082,6 +3150,38 @@ async def edit_rule(
     if status != 200:
         flash += f" Showing TIDE's copy from before the change: reloading it from Kibana failed ({sync_message})."
     return _modal_with_card_oob(request, db, client_id, refreshed, space, actual_siem_id, settings, flash=flash)
+
+
+def rename_rule(db, client_id: str, rule, name: str, user_id: Optional[str], username: str,
+                reason: str) -> Tuple[int, str]:
+    """Rename one rule in Kibana as the Edit form saves a name (only the name sent, onto the rule as
+    Kibana holds it, refused when Kibana changed it since TIDE's sync), record it in its History, and
+    refresh it from Kibana (blocking). ``(status, message)``: 200 when renamed."""
+    from app import elastic_helper
+    siem = next((s for s in (db.get_client_siems(client_id) or [])
+                 if s.get("id") == rule.siem_id and str(s.get("space") or "default") == rule.space), None)
+    if not siem:
+        return 404, "This rule's destination is no longer linked to this client."
+    cached = dict(rule.raw_data or {})
+    outcome, message, before = elastic_helper.apply_rule_changes(
+        rule_id=str(cached.get("rule_id") or rule.rule_id), changes={"name": name}, remove=(), space=rule.space,
+        kibana_url=siem.get("kibana_url"), api_key=siem.get("api_token_enc"), cached=cached,
+        on_recreated=db.kibana_recreate_hook(client_id, rule.rule_id, rule.siem_id, rule.space, username, user_id),
+    )
+    if outcome == "conflict":
+        return 409, "Someone changed this rule in Kibana since TIDE last synced it, so it wasn't renamed. Sync it and try again."
+    if outcome != "updated":
+        return (404 if outcome == "missing" else 502), message
+    before = before or cached
+    change_message, changed_fields, field_diffs = _summarize_rule_changes(before, {**before, "name": name})
+    db.record_rule_history(
+        rule_id=rule.rule_id, siem_id=rule.siem_id, space=rule.space, client_id=client_id, action="edited",
+        actor_user_id=user_id, actor_name=username,
+        detail={"message": "Saved to Kibana. " + change_message, "reason": reason,
+                "changed_fields": changed_fields, "field_diffs": field_diffs},
+    )
+    status, sync_message, _ = sync_single_rule(db, client_id, rule.rule_id, rule.siem_id, rule.space, user_id, username)
+    return 200, ("Renamed." if status == 200 else f"Renamed in Kibana; reloading it into TIDE failed ({sync_message}).")
 
 
 def sync_single_rule(db, client_id: str, rule_id: str, siem_id: Optional[str], space: str,

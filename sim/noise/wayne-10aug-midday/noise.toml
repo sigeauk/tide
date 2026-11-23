@@ -1,0 +1,13 @@
+# A shared noise pack: routine traffic laid over a scenario at noise busy (see botes_packs.py).
+# scenario.py pack-noise writes logs/ and manifest.json beside it, from download_botes.py's data.
+
+title = "Wayne Enterprises, 10 August 2016, midday"
+environment = "wayne-enterprises"          # it fits only scenarios from the same network
+source = "Splunk Boss of the SOC v1"
+licence = "CC0-1.0"
+download = "bots-v1"
+
+# What it holds, in original time (UTC): 13:00-14:50 local (MDT), before the defacement began, as long
+# as the defacement's span (its window with 30 minutes either side, 21:05-22:55), so it lies over all of
+# it. python scenario.py check-noise defacement checks none of the attacker is in it.
+window = ["2016-08-10T19:00:00Z", "2016-08-10T20:50:00Z"]

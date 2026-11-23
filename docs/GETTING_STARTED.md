@@ -21,8 +21,9 @@ The sidebar lists TIDE's pages, grouped as they are in this guide:
 | Group | Pages | What they are for |
 |---|---|---|
 | | **Home**, **Dashboard** | What needs attention on the client, and dashboards you build |
+| | **Simulations**, **Simulation** | Replaying an attack into your SIEM for your analysts to investigate, and playing one you were chosen for ([Simulations](SIMULATIONS.md)) |
 | Systems | **Systems**, **Baselines**, **Detection Backlog**, **CVE Overview** | The systems you protect and how well their techniques are covered, the baseline templates they are measured against, what to build next across them, and the known exploited vulnerabilities on their devices |
-| Rules | **Rule Health**, **Rule Monitoring** | Your detection rules, and the ones that need action |
+| Rules | **Rule Health**, **Rule Monitoring**, **Rule Tuning** | Your detection rules, the ones that need action, and the ones whose alerts need tuning |
 | Libraries | **Sigma Rules**, **Elastic Rules**, **Hunting** | The rules and hunting queries built into TIDE, to convert, deploy or run |
 | Threats | **Threat Landscape**, **Heatmap** | Threat actors, and how well you cover what they do |
 | MITRE | **Tactics**, **Techniques**, **Groups**, **Software**, **Campaigns**, **Mitigations**, **NIST 800-53** | The ATT&CK knowledge base, with your coverage of each part |
@@ -45,6 +46,18 @@ Most pages have a filter bar across the top: a **Search** box and a dropdown for
 - On Rule Health, Rule Monitoring and the rule libraries, the filters you'll use less are under **Filters**, which says how many of them are set. It stays open or closed as you left it.
 - Only one list is open at a time. Click elsewhere or press **Esc** to close it.
 - Filters apply as soon as you choose. Most pages keep your filters in the address bar, so a refresh, a bookmark or a link you share shows the same view.
+
+### Searching
+
+Every search box in TIDE reads what you type the same way. Capital letters don't matter to the words you search for.
+
+- `Suspicious PowerShell` finds what holds both words, in any order.
+- `"Suspicious PowerShell"`, in quotes, finds those words together, as written.
+- `NOT Suspicious` or `!Suspicious` finds what doesn't hold the word.
+- `PowerShell OR cmd` finds what holds either. `AND` is the same as a space.
+- Brackets group words: `Suspicious (PowerShell OR cmd) NOT test`.
+
+`NOT`, `AND` and `OR` work only in capitals, so a name with "and" or "not" in it is still found by typing it. To search for one of them as a word, put it in quotes. A word starting with a dash, such as `-EncodedCommand`, is searched for as it is.
 
 ### Cards or table
 
@@ -82,9 +95,10 @@ Actions that need more from you (creating, importing, exporting) open a **dialog
 
 ## Home
 
-**Home** opens when you sign in. It lists what needs attention on the client you are working on, as of its last sync, in four sections. Each shows its first five, with a link to the rest:
+**Home** opens when you sign in. It lists what needs attention on the client you are working on, as of its last sync, in five sections. Each shows its first five, with a link to the rest:
 
 - **Rule Monitoring:** how many rules need action, by their worst problem (errors, warnings, info), how many began and how many were fixed in the last 7 days, and the kinds of problem, errors first. Click one to open [Rule Monitoring](RULES.md#rule-monitoring) on it.
+- **Rules to tune:** the first rules [Rule Tuning](RULES.md#rule-tuning) lists, costliest first: the alerts a day that don't need action, or all of a rule's alerts a day until enough of them are judged. Each says why, and *New* when it began in the last 7 days. Click a rule to open it.
 - **Known gaps to review:** each known gap or not applicable mark on a system's technique whose review date has passed (**Review due**) or comes in the next 14 days, soonest first. Click the technique to open it on its system and review the mark ([recording a known gap](SYSTEMS.md#record-a-known-gap-or-that-it-doesnt-apply)).
 - **Validations lapsing:** enabled rules whose validation has expired or is due soon, expired first, with how many were validated and how many lapsed in the last 7 days. Click a rule to open it and [validate it](RULES.md#validate-a-rule).
 - **GitLab issues:** the open issues raised for the client's rules, newest first, with the rule each is about ([raising an issue](RULES.md#raise-an-issue-for-a-rule)). Shown when the client has a GitLab project linked or an issue open.
@@ -99,7 +113,7 @@ If you can edit the Dashboard (Admins and Analysts can, by default):
 
 1. Choose **⋮ › Edit dashboard**.
 2. Give the dashboard a **Name**, then add sections: a page's figures (Rule Health, Rule Monitoring, a system, Threat Landscape, Baselines, Asset Inventory, CVE Overview), the state of connected services and built-in data, a **Title** or a **Text block**.
-3. For each section, tick which figures it shows and set its filters. A Rule Health section is filtered like the Rule Health page: by SIEM, status, state, score, validation date and search. A Rule Monitoring section is filtered like its page: by SIEM, severity, who fixes, issue, whether disabled rules count, and search.
+3. For each section, tick which figures it shows and set its filters. A Rule Health section is filtered like the Rule Health page: by SIEM, status, state, score, validation date and search. A Rule Monitoring section is filtered like its page: by SIEM, kind, severity, who fixes, issue, whether disabled rules count, and search.
 4. To see how a section's figures have changed, choose **Compare with**: **Yesterday**, **7 days ago**, **30 days ago** or **90 days ago**. Each figure that can show a change then says how much it has gone up or down since the end of that day: green when that is better, red when worse. Hover over the figure to see what it was then. A Rule Health section shows the change in **Total rules**, **Enabled** and **Avg quality**, when it has no filter other than SIEM; a rule counts from the day it was created in Kibana. Its **Validated** instead says how many rules were validated in that time and how many lapsed, such as "26 validated · 26 lapsed in 30 days": a rule validated again while still in policy counts as validated, and one lapses when its last validation goes past the client's period for its severity, so it is due. Kept up, the two match and Validated stays as it was. A system's section shows the change in each of its cards but **Effective** (for a system with Wazuh devices, **Vulnerabilities** and **Hardening** too, from TIDE's 7.0 upgrade on), and a Baselines section in **Rules mapped**, **Uncovered** and **Fully covered**; TIDE has the history for these from its 6.0 upgrade on. A Rule Monitoring section instead shows how many began and how many were fixed in that time, on **Rules needing action**, **Errors**, **Warnings** and **Things to fix**, such as "12 new · 30 fixed in 30 days", when it has no **Search**. What TIDE found the first time it looked at a SIEM was there already, so it isn't counted as new; TIDE has the history for this from its 6.3.2 upgrade on, and the 14 days before. Avg quality shows no change from before most of its rules were scored the way TIDE scores them now.
 5. Arrange the sections: drag them, use their arrows or the arrow keys, and make them **Narrower** or **Wider** to sit side by side. Click a section's icon to choose another.
 6. Click **Save**, or **Cancel** to leave it as it was.

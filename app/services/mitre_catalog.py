@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlencode
 
+from app.services.search_query import SearchQuery
+
 logger = logging.getLogger(__name__)
 
 # ── Sources ──────────────────────────────────────────────────────────────────
@@ -334,16 +336,16 @@ def _technique_rows(db, domain: str) -> List[dict]:
     return _cached(("techniques", domain), lambda: db.list_mitre_techniques(domain=domain))
 
 
-def _matches(row: dict, needle: str) -> int:
+def _matches(row: dict, query: SearchQuery) -> int:
     """Search rank (lower is better), or -1 for no match: id, then name, then description."""
-    rid = (row["id"] or "").lower()
+    rid, needle = (row["id"] or "").lower(), query.text.lower()
     if rid == needle:
         return 0
     if rid.startswith(needle):
         return 1
-    if needle in (row["name"] or "").lower():
+    if query.matches(row["name"]):
         return 2
-    if needle in (row["description"] or "").lower():
+    if query.matches(row["id"], row["name"], row["description"]):
         return 3
     return -1
 
@@ -357,9 +359,9 @@ def _techniques_load(db, search, domain, covered, counts) -> List[dict]:
             children.setdefault(r["parent_id"].upper(), []).append(r["id"].upper())
     tactic_by_short = _tactic_index(db, domain)
 
-    if search:
-        needle = search.strip().lower()
-        picked = sorted((r for r in rows if _matches(r, needle) >= 0), key=lambda r: (_matches(r, needle), r["id"]))
+    query = SearchQuery(search)
+    if query:
+        picked = sorted((r for r in rows if _matches(r, query) >= 0), key=lambda r: (_matches(r, query), r["id"]))
         # A matching sub-technique brings its parent along, for context.
         present = {r["id"].upper() for r in picked}
         for r in list(picked):
@@ -730,10 +732,10 @@ def _mitigations_window(db, client_id, detail: dict, covered: set, counts: dict)
 def _tactics_load(db, search, domain, covered, counts) -> List[dict]:
     rows = _tactics(db, domain)
     tech_ids = _technique_ids(db, "tactic", domain)
-    needle = (search or "").strip().lower()
+    query = SearchQuery(search)
     items = []
     for order, r in enumerate(rows):
-        if needle and not any(needle in (r.get(k) or "").lower() for k in ("id", "name", "shortname", "description")):
+        if not query.matches(*(r.get(k) for k in ("id", "name", "shortname", "description"))):
             continue
         ids = tech_ids.get((r["id"] or "").upper(), set())
         subs = sum(1 for t in ids if "." in t)

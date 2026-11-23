@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{#
+  Rule Tuning: the client's rules whose alerts need tuning, costliest first: one row per rule with a tuning
+  finding of Rule Monitoring's (a mark for tuning, Too many alerts, Alerts stopped after a change…), with
+  its alerts a day and the outcomes recorded. Context: api.rule_tuning.page_context. The filter bar
+  refreshes #rtune-list (which swaps the figures out of band) on every change.
+#}
+{% from "macros/icons.html" import icon %}
+{% from "macros/filters.html" import filter_choice, filter_multi, more_filters %}
+{% from "macros/menu.html" import more_button %}
+{% from "macros/help.html" import help_button with context %}
+{% from "macros/sync_ui.html" import sync_menu_items %}
+
+{% block title %}Rule Tuning | TIDE{% endblock %}
+
+{% block content %}
+<div class="rule-browser-page">
+<div class="page-header flex items-start justify-between gap-md">
+    <div>
+        <h1 class="page-title-hero">
+            Rule Tuning
+            {{ help_button('rule-tuning') }}
+        </h1>
+        <p class="page-subtitle">Your rules whose alerts need tuning, the costliest first.</p>
+        <div id="rh-last-sync" hx-get="/api/rules/sync/last" hx-trigger="load, refreshRules from:body" hx-swap="innerHTML"></div>
+    </div>
+    <div class="flex items-center gap-ms shrink-0">
+        <div id="sync-status"></div>
+        <div class="rh-more" data-more>
+            {{ more_button('More actions', title='Sync, raise an issue', attrs='name="More Actions"') }}
+            <div class="rh-more__menu" role="menu" hidden>
+                {{ sync_menu_items(client_siems) }}
+                <div class="rh-more__sep" role="separator"></div>
+                <button name="Raise Issue for All Shown" type="button" role="menuitem" class="rh-more__item"
+                    title="Raise every tuning finding the filters show in GitLab, or copy them as Markdown for a ticket or a chat"
+                    hx-get="/api/rule-monitoring/copy?all=1&amp;kind=tuning&amp;rules=all" hx-include="{{ filter_include }}"
+                    hx-target="#modal-container" hx-swap="innerHTML">
+                    {{ icon('plus-circle', '15') }}<span>Raise issue for all shown</span>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% set rtune_hx = 'hx-get="/api/rule-tuning/list" hx-trigger="change" hx-target="#rtune-list" hx-swap="innerHTML" hx-include="' ~ filter_include ~ '"' %}
+
+<div class="rule-browser-controls">
+<div class="metrics-grid" id="rtune-metrics">
+    {% include "partials/rule_tuning_metrics.html" %}
+</div>
+
+<div class="divider"></div>
+
+{# Search and SIEM, the rest under one Filters fold (UX.md 9.5) #}
+<div class="filters-bar" id="rtune-filters" data-fold-store="tide.ruleTuningFolds">
+    <div class="filter-group grow">
+        <label class="form-label" for="rtune-search">Search</label>
+        <input type="text" id="rtune-search" name="search" value="{{ filters.search }}" class="form-input"
+               placeholder="Rule, reason, outcome…"
+               hx-get="/api/rule-tuning/list" hx-trigger="keyup changed delay:300ms" hx-target="#rtune-list"
+               hx-swap="innerHTML" hx-include="{{ filter_include }}">
+    </div>
+    {{ filter_choice('rtune-scope', 'scope', 'SIEM', scope_options, filters.scope, none, rtune_hx) }}
+    {% set d = filter_defaults %}
+    {% set active = [filters.reason, filters.fixer, filters.source, filters.show != d.show] | select | list | length %}
+    {% call more_filters('filters', active) %}
+        {{ filter_multi('rtune-reason', 'issue', 'Reason', reason_options, filters.reason, 'Any', counts.reason, rtune_hx, reason_titles) }}
+        {{ filter_multi('rtune-fixer', 'fixer', 'Who fixes', fixer_options, filters.fixer, 'Any', counts.fixer, rtune_hx) }}
+        {{ filter_multi('rtune-source', 'source', 'Source', source_options, filters.source, 'Any', counts.source, rtune_hx,
+                        {'people': 'Marked for tuning by someone, with Record outcome…', 'tide': "Found by TIDE from the rule's alerts, exceptions and updates"}) }}
+        {{ filter_choice('rtune-show', 'show', 'Show', show_options, filters.show, none, rtune_hx ~ ' data-filter-default="' ~ d.show ~ '"',
+                         {'tuned': 'Rules marked as tuned in the last 30 days, with how their alerts changed'}) }}
+        {{ filter_choice('rtune-sort', 'sort', 'Sort by', sort_options, filters.sort, none, rtune_hx ~ ' data-filter-order') }}
+    {% endcall %}
+</div>
+</div>
+
+<div class="rule-scroll-region">
+<div id="rtune-list" class="rmon-list" data-rule-list data-keep-url="/rule-tuning" hx-get="/api/rule-tuning/list"
+     hx-trigger="refreshRules from:body, rmonChanged from:body, tuningChanged from:body"
+     hx-swap="innerHTML" hx-include="{{ filter_include }}">
+    {% include "partials/rule_tuning_list.html" %}
+</div>
+</div>
+</div>
+{% endblock %}

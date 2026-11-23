@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from app.services.rule_issues import STALE_DAYS
+from app.services.search_query import SearchQuery
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +109,17 @@ def _scoped(sql_template: str, needs: Tuple[str, ...]) -> Callable:
         cur = conn.execute(sql_template.format(scopes=f"(VALUES {values}) AS d(siem_id, space, destination)"), params)
         return [d[0] for d in cur.description], cur.fetchall()
     return run
+
+
+def _rule_names_spaced(conn, ctx):
+    """Rule names with spaces round them (#113), each a rule cell (``{"text", "rule": [rule_id, siem_id,
+    space]}``) the page shows as a link to the rule's window. Rules Kibana no longer has can't be renamed."""
+    _cols, rows = _scoped(
+        "SELECT d.destination, r.name, r.rule_id, r.siem_id, r.space FROM detection_rules r JOIN {scopes} "
+        "ON d.siem_id = r.siem_id AND d.space = r.space WHERE NOT COALESCE(r.deprecated, false) "
+        "AND r.name <> trim(r.name) ORDER BY 1, 2", needs=("detection_rules",))(conn, ctx)
+    return ["destination", "name"], [(dest, {"text": f'"{name}"', "rule": [rule_id, siem_id, space]})
+                                     for dest, name, rule_id, siem_id, space in rows]
 
 
 def _shared_rule_ids(conn, ctx):
@@ -492,12 +504,11 @@ CHECKS: List[Check] = [
     ),
     Check(
         "rule_name_whitespace", "Rule names with spaces around them", "client", "info",
-        "A rule's name in the SIEM starts or ends with a space. Before 6.0.2, Add link could not link to "
-        "these rules.",
-        "Rename the rule in Kibana without the extra space, then use Sync this rule in TIDE.",
-        _scoped("SELECT d.destination, '\"' || r.name || '\"' AS name FROM detection_rules r JOIN {scopes} "
-                "ON d.siem_id = r.siem_id AND d.space = r.space WHERE r.name <> trim(r.name) ORDER BY 1, 2",
-                needs=("detection_rules",)),
+        "A rule's name in the SIEM starts or ends with a space, so anything that finds a rule by its name can "
+        "miss it. Rule Monitoring lists them too, under Rule name has spaces around it.",
+        "Click a name to open the rule, then Edit it and take the spaces off its name. To fix them all at "
+        "once, use Remove the spaces on Rule name has spaces around it in Rule Monitoring.",
+        _rule_names_spaced,
     ),
     Check(
         "duplicate_rule_names", "Rule names used more than once in a destination", "client", "info",
@@ -616,10 +627,11 @@ def _rule_lookup(conn, q: str, scopes: List[Tuple[str, str, str]]) -> List[Dict[
     def dest(siem_id, space):
         return names.get((siem_id, space)) or f"{space} (not linked)"
 
+    cond, search_params = SearchQuery(q).sql("name")
     rows = conn.execute(
         "SELECT rule_id, siem_id, space, name, enabled, deprecated, score, last_updated FROM detection_rules "
-        "WHERE name ILIKE ? OR rule_id = ? ORDER BY lower(trim(name)), siem_id, space LIMIT ?",
-        [f"%{q}%", q, LOOKUP_LIMIT + 1],
+        f"WHERE {cond} OR rule_id = ? ORDER BY lower(trim(name)), siem_id, space LIMIT ?",
+        [*search_params, q, LOOKUP_LIMIT + 1],
     ).fetchall()
     out = []
     for rule_id, siem_id, space, name, enabled, deprecated, score, last in rows[:LOOKUP_LIMIT]:
@@ -655,12 +667,14 @@ def lookup(db, kind: str, q: str, clients: List[Dict]) -> Dict[str, Any]:
     if kind not in LOOKUP_KINDS or len(q) < 2:
         return out
 
+    search = SearchQuery(q)
     if kind == "user":
         def users(conn, ctx):
+            cond, search_params = search.sql("username", "email", "full_name")
             rows = conn.execute(
                 "SELECT id, username, email, full_name, auth_provider, is_active, is_superadmin, keycloak_id IS NOT NULL, "
-                "last_login, created_at FROM users WHERE username ILIKE ? OR email ILIKE ? OR full_name ILIKE ? "
-                "ORDER BY username LIMIT ?", [f"%{q}%"] * 3 + [LOOKUP_LIMIT + 1]).fetchall()
+                f"last_login, created_at FROM users WHERE {cond} "
+                "ORDER BY username LIMIT ?", [*search_params, LOOKUP_LIMIT + 1]).fetchall()
             client_names = dict(conn.execute("SELECT id, name FROM clients").fetchall())
             found = []
             for uid, uname, email, full, provider, active, superadmin, sso_linked, last, created in rows[:LOOKUP_LIMIT]:
@@ -694,8 +708,7 @@ def lookup(db, kind: str, q: str, clients: List[Dict]) -> Dict[str, Any]:
                 if kind == "rule":
                     items = _rolled_back(conn, lambda c, ctx: _rule_lookup(c, q, scopes), {})
                 else:
-                    wanted = [s for s in siems if q.lower() in (s.get("name") or "").lower()
-                              or q.lower() in (s.get("space") or "").lower()]
+                    wanted = [s for s in siems if search.matches(s.get("name"), s.get("space"))]
 
                     def dests(c, ctx):
                         tables = _tables(c)

@@ -6,7 +6,7 @@
 
   Context: steps, groups (from group_system_steps; empty = flat), view, tactic_sort, sort_name,
            and system_id + coverage_undefined + narrowed + baseline_id (a system) or template.
-  Every baseline group has a ⋮: a system's has Edit baseline, Add technique and Remove baseline; a
+  Every baseline group has a ⋮: a system's has Edit baseline, Add technique, Export (TIDE JSON) and Remove baseline; a
   template's has Edit baseline, Add technique, Apply to a system, Import techniques, Export and
   Delete template. Grouped by baseline, an empty one still shows.
 #}
@@ -137,6 +137,11 @@
                         hx-get="/api/systems/{{ system_id }}/steps-new?baseline_id={{ g.key }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
                     {{ icon('plus', '15') }}<span>Add technique</span>
                 </button>
+                {# Its techniques as TIDE JSON, to import as a template here or on another TIDE (its coverage is in the system's Export report). #}
+                <a name="Export Baseline" role="menuitem" class="rh-more__item" href="/api/baselines/{{ g.key }}/export.json?include_rules=false"
+                   title="Download {{ g.label }} as TIDE JSON, to import as a template here or on another TIDE" download>
+                    {{ icon('download', '15') }}<span>Export</span>
+                </a>
                 <div class="rh-more__sep" role="separator"></div>
                 <button name="Remove Baseline" type="button" role="menuitem" class="rh-more__item rh-more__item--danger"
                         hx-delete="/api/baselines/{{ g.key }}/apply/{{ system_id }}" hx-swap="none" hx-include="unset"

@@ -27,8 +27,9 @@ def _coverage(db, client_id: str):
 
 
 def picked_filters(request: Request) -> dict:
-    """The rule browser's filters in the address, each with every value ticked (``?severity=high&severity=critical``)."""
-    return er.picked({name: request.query_params.getlist(name) for name in er.FILTERS})
+    """The rule browser's filters in the address, each with every value ticked (``?severity=high&severity=critical``),
+    and Last updated's two dates."""
+    return er.picked({name: request.query_params.getlist(name) for name in (*er.FILTERS, *er.DATE_FILTERS)})
 
 
 def rules_list_context(db, client_id: str, q: str = "", technique: str = "", filters: dict = None,

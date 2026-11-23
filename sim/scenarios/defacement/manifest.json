@@ -1,0 +1,150 @@
+{
+  "about": "Written by scenario.py: what each log file holds. Edit scenario.toml, not this.",
+  "built_from": "BOTS v1, from download_botes.py's data",
+  "span": [
+    "2016-08-10T21:05:00.000Z",
+    "2016-08-10T22:55:00.000Z"
+  ],
+  "events": {
+    "logs": 171749,
+    "noise": 128528
+  },
+  "in_window": {
+    "logs": 155659,
+    "noise": 104778
+  },
+  "files": [
+    {
+      "file": "logs/fgt_utm.ndjson.gz",
+      "source": "fgt_utm",
+      "format": "splunk-export",
+      "events": 16326,
+      "in_window": 16099,
+      "first": "2016-08-10T21:05:12.000Z",
+      "last": "2016-08-10T22:54:46.000Z",
+      "bytes": 1474385,
+      "clock_offset_seconds": 0.0
+    },
+    {
+      "file": "logs/iis.ndjson.gz",
+      "source": "iis",
+      "format": "splunk-export",
+      "events": 22401,
+      "in_window": 22399,
+      "first": "2016-08-10T21:16:55.000Z",
+      "last": "2016-08-10T22:22:27.000Z",
+      "bytes": 731479,
+      "clock_offset_seconds": 0.0
+    },
+    {
+      "file": "logs/security.ndjson.gz",
+      "source": "security",
+      "format": "splunk-export",
+      "events": 17360,
+      "in_window": 8805,
+      "first": "2016-08-10T21:05:00.000Z",
+      "last": "2016-08-10T22:54:59.000Z",
+      "bytes": 5623320,
+      "clock_offset_seconds": 0.0
+    },
+    {
+      "file": "logs/stream-dns.ndjson.gz",
+      "source": "stream-dns",
+      "format": "splunk-export",
+      "events": 5266,
+      "in_window": 3161,
+      "first": "2016-08-10T21:05:01.877Z",
+      "last": "2016-08-10T22:54:58.355Z",
+      "bytes": 837453,
+      "clock_offset_seconds": 0.0
+    },
+    {
+      "file": "logs/stream-http.ndjson.gz",
+      "source": "stream-http",
+      "format": "splunk-export",
+      "events": 23129,
+      "in_window": 23110,
+      "first": "2016-08-10T21:06:17.774Z",
+      "last": "2016-08-10T22:49:18.510Z",
+      "bytes": 28655254,
+      "clock_offset_seconds": 0.0
+    },
+    {
+      "file": "logs/stream-smb.ndjson.gz",
+      "source": "stream-smb",
+      "format": "splunk-export",
+      "events": 969,
+      "in_window": 528,
+      "first": "2016-08-10T21:05:06.261Z",
+      "last": "2016-08-10T22:54:52.438Z",
+      "bytes": 129923,
+      "clock_offset_seconds": 0.0
+    },
+    {
+      "file": "logs/suricata.ndjson.gz",
+      "source": "suricata",
+      "format": "splunk-export",
+      "events": 41191,
+      "in_window": 37531,
+      "first": "2016-08-10T21:05:00.093Z",
+      "last": "2016-08-10T22:54:58.135Z",
+      "bytes": 4753343,
+      "clock_offset_seconds": 0.0
+    },
+    {
+      "file": "logs/sysmon.ndjson.gz",
+      "source": "sysmon",
+      "format": "splunk-export",
+      "events": 44990,
+      "in_window": 43927,
+      "first": "2016-08-10T21:05:05.000Z",
+      "last": "2016-08-10T22:54:58.000Z",
+      "bytes": 4185134,
+      "clock_offset_seconds": 0.0
+    },
+    {
+      "file": "logs/system.ndjson.gz",
+      "source": "system",
+      "format": "splunk-export",
+      "events": 117,
+      "in_window": 99,
+      "first": "2016-08-10T21:09:13.000Z",
+      "last": "2016-08-10T22:54:21.000Z",
+      "bytes": 19421,
+      "clock_offset_seconds": 0.0
+    },
+    {
+      "file": "noise/security.ndjson.gz",
+      "source": "security",
+      "format": "splunk-export",
+      "events": 58136,
+      "in_window": 44818,
+      "first": "2016-08-10T21:05:00.000Z",
+      "last": "2016-08-10T22:54:59.000Z",
+      "bytes": 6938966,
+      "clock_offset_seconds": 0.0
+    },
+    {
+      "file": "noise/suricata.ndjson.gz",
+      "source": "suricata",
+      "format": "splunk-export",
+      "events": 11203,
+      "in_window": 7042,
+      "first": "2016-08-10T21:05:00.000Z",
+      "last": "2016-08-10T22:54:59.000Z",
+      "bytes": 2143561,
+      "clock_offset_seconds": 0.0
+    },
+    {
+      "file": "noise/sysmon.ndjson.gz",
+      "source": "sysmon",
+      "format": "splunk-export",
+      "events": 59189,
+      "in_window": 52918,
+      "first": "2016-08-10T21:10:15.000Z",
+      "last": "2016-08-10T22:28:57.000Z",
+      "bytes": 11456007,
+      "clock_offset_seconds": 0.0
+    }
+  ]
+}

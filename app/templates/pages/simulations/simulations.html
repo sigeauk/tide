@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{#
+  Simulations (#118): a Sim Admin starts a simulation on one of the client's SIEMs (its own space, logs
+  and rules, linked to the client while it runs and removed when it ends), follows it, and keeps its
+  results until they are cleared. Context: api.simulations.page_context. Three tabs, as a client's page
+  has them (ui.tab, ?tab=): Run (start one, the list, the one opened in #sim-detail; the list refreshes
+  on simulationsChanged), Dashboard (a simulation's scores, #sim-dashboard) and Answers (its questions
+  with their answers, #sim-answers), each of the last two for the simulation picked above it.
+#}
+{% from "macros/icons.html" import icon %}
+{% from "macros/modal.html" import empty_state %}
+{% from "macros/help.html" import help_button with context %}
+{% from "components/window_ui.html" import section_head %}
+{% from "components/ui/loading_state.html" import loading_state %}
+
+{% block title %}Simulations | TIDE{% endblock %}
+
+{% block content %}
+<div class="page-header flex items-start justify-between gap-md">
+    <div>
+        <h1 class="page-title-hero">
+            Simulations
+            {{ help_button('simulations') }}
+        </h1>
+        <p class="page-subtitle">Replay an attack into a space of its own on one of your SIEMs, for the people you choose to investigate it.</p>
+    </div>
+</div>
+
+{% set tabs = [('run', 'play', 'Run'), ('dashboard', 'chart-column', 'Dashboard'), ('answers', 'book-open', 'Answers')] %}
+<div class="settings-tabs settings-tabs--inline" role="tablist" aria-label="Simulations">
+    {% for key, ico, label in tabs %}
+    <button name="{{ label }}" type="button" role="tab" id="sim-tab-btn-{{ key }}" class="settings-tab{% if key == tab %} active{% endif %}"
+            aria-selected="{{ 'true' if key == tab else 'false' }}" aria-controls="sim-tab-{{ key }}"
+            data-click="ui.tab" data-tab="{{ key }}">{{ icon(ico, '16') }} {{ label }}</button>
+    {% endfor %}
+</div>
+
+{# A simulation to show in the Dashboard or Answers tab: the one running, else the latest. #}
+{% macro pick(part) -%}
+<div class="filter-group sim-pick">
+    <label class="form-label" for="sim-pick-{{ part }}">Simulation</label>
+    <select id="sim-pick-{{ part }}" class="form-input" data-change="ui.load" data-url="/api/simulations/{id}/{{ part }}"
+            data-target="#sim-{{ part }}">
+        {% for s in sims %}
+        <option value="{{ s.id }}"{% if s.id == focus %} selected{% endif %}>{% for sid in s.scenarios %}{{ names.get(sid, sid) }}{% if not loop.last %}, {% endif %}{% endfor %}, {{ s.created_at.strftime('%Y-%m-%d %H:%M') if s.created_at else '' }} ({{ states.get(s.state, s.state) | lower }})</option>
+        {% endfor %}
+    </select>
+</div>
+<div id="sim-{{ part }}" hx-get="/api/simulations/{{ focus }}/{{ part }}" hx-trigger="load" hx-swap="innerHTML">
+    {{ loading_state('Loading…') }}
+</div>
+{%- endmacro %}
+
+<div id="sim-tab-run" role="tabpanel" aria-labelledby="sim-tab-btn-run" data-fold-store="tide.simulationsFolds"{% if tab != 'run' %} hidden{% endif %}>
+{% if can_run %}
+<section class="card card-padded card-mb sys-section" data-fold="start" aria-label="Start a simulation">
+    {{ section_head('Start a simulation', 'play') }}
+    <div class="sys-section__body">
+    {% if not siems %}
+        {% call empty_state('server') %}
+        <h3>No SIEM to run it on</h3>
+        <p>A simulation runs on an Elastic SIEM in TIDE, with its Elasticsearch URL, Kibana URL and API key set. A Platform Admin adds one in Settings → Management, under Integrations.</p>
+        {% endcall %}
+    {% elif not scenarios %}
+        {% call empty_state('crosshair') %}
+        <h3>No scenarios</h3>
+        <p>This installation of TIDE has no scenarios with their logs.</p>
+        {% endcall %}
+    {% else %}
+    {# The confirm is on the form: htmx asks on the element that sends the request, not on its button. #}
+    <form name="Start Simulation" class="sim-start" hx-post="/api/simulations/start" hx-target="#sim-detail" hx-swap="innerHTML"
+          hx-confirm="Start the simulation? TIDE makes a space for it on the SIEM with its rules, links it to this client with the scenario's baselines and systems, and replays the attack into it. Everything it makes is removed when you end it.">
+        <div class="sim-start__row">
+            <div class="filter-group">
+                <label class="form-label" for="sim-siem">SIEM</label>
+                <select id="sim-siem" name="siem_id" class="form-input"
+                        title="The SIEM to make the simulation's space on. The space becomes one of this client's destinations while the simulation runs">
+                    {% if siems | length > 1 %}<option value="" selected disabled>Choose a SIEM</option>{% endif %}
+                    {% for s in siems %}<option value="{{ s.id }}">{{ s.label }}</option>{% endfor %}
+                </select>
+            </div>
+            <div class="filter-group">
+                <label class="form-label" for="sim-noise">Noise</label>
+                <select id="sim-noise" name="noise" class="form-input">
+                    <option value="quiet">Quiet: the attack window</option>
+                    <option value="normal" selected>Normal: with its routine events</option>
+                    <option value="busy">Busy: and the half hour either side, with the same network's traffic from earlier that day</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label class="form-label" for="sim-speed">Speed</label>
+                <input id="sim-speed" name="speed" type="number" class="form-input" value="10" min="0" max="1000" step="any"
+                       title="Times faster than it happened: 10 replays an hour in six minutes; 0 is as fast as the SIEM allows">
+            </div>
+        </div>
+        <fieldset class="sim-start__set">
+            <legend class="form-label">Scenarios</legend>
+            {% for sc in scenarios %}
+            <label class="role-checkbox sim-choice" title="{{ sc.questions }} questions, {{ sc.rules }} rules">
+                <input type="checkbox" name="scenarios" value="{{ sc.id }}"{% if loop.first %} checked{% endif %}>
+                <span>{{ sc.label }}
+                    <span class="text-secondary text-sm">{{ sc.questions }} questions, {{ sc.rules }} rules{% for lv, n in sc.events.items() if n %}, {{ '{:,}'.format(n) }} events {{ lv }}{% endfor %}</span>
+                </span>
+            </label>
+            {% endfor %}
+        </fieldset>
+        <fieldset class="sim-start__set">
+            <legend class="form-label">Players</legend>
+            {% for u in users %}
+            <label class="role-checkbox sim-choice">
+                <input type="checkbox" name="players" value="{{ u.id }}"> <span>{{ u.full_name or u.username }} <span class="text-secondary text-sm">{{ u.username }}</span></span>
+            </label>
+            {% else %}
+            <p class="rm-empty">This client has no users to play it.</p>
+            {% endfor %}
+        </fieldset>
+        <div class="modal-actions">
+            <button name="Start Simulation" type="submit" class="btn btn-primary">
+                {{ icon('play', '15') }} Start simulation
+            </button>
+        </div>
+    </form>
+    {% endif %}
+    </div>
+</section>
+{% endif %}
+
+<section class="card card-padded card-mb sys-section" data-fold="list" aria-label="Simulations">
+    {{ section_head('Simulations', 'crosshair', sims | length) }}
+    <div class="sys-section__body" id="sim-list" hx-get="/api/simulations/list" hx-trigger="simulationsChanged from:body" hx-swap="innerHTML">
+        {% include "partials/simulation_list.html" %}
+    </div>
+</section>
+
+<div id="sim-detail"></div>
+</div>
+
+{% for part, what in (('dashboard', 'its scores'), ('answers', 'its questions with their answers')) %}
+<div id="sim-tab-{{ part }}" role="tabpanel" aria-labelledby="sim-tab-btn-{{ part }}" data-fold-store="tide.simulationsFolds"{% if tab != part %} hidden{% endif %}>
+    {% if sims %}
+    {{ pick(part) }}
+    {% else %}
+    {% call empty_state('crosshair') %}
+    <h3>No simulations yet</h3>
+    <p>Start one under Run to see {{ what }} here.</p>
+    {% endcall %}
+    {% endif %}
+</div>
+{% endfor %}
+{% endblock %}

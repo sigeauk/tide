@@ -44,11 +44,12 @@ _TENANT_DETECTION_RULES_COLUMNS: tuple = (
     ("deprecated",         "BOOLEAN"),
     ("source_rule_id",     "VARCHAR"),
     # Values of raw_data kept as columns so lists of rules don't have to load the JSON
-    # (database.rule_json_keys): Kibana's own rule_id (the validation key), the query language and
-    # the rule type.
+    # (database.rule_json_keys): Kibana's own rule_id (the validation key), the query language,
+    # the rule type and when Kibana last changed the rule.
     ("kibana_rule_id",     "VARCHAR"),
     ("rule_language",      "VARCHAR"),
     ("rule_type",          "VARCHAR"),
+    ("rule_updated_at",    "TIMESTAMP"),
 )
 
 
@@ -693,8 +694,9 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False, only_siem_id: 
     DuckDB file (one per client) since 4.1.13 — there is no shared
     ``detection_rules`` table any more, so a sync MUST be scoped to a single
     tenant. Triggers: manual ``Sync`` button, ``promote-rule`` post-action
-    refresh, ``deploy-sigma`` post-action refresh, and the opt-in maintenance window (#82, app.services.maintenance).
-    There is no other scheduled or background sync.
+    refresh, ``deploy-sigma`` post-action refresh, the opt-in maintenance window (#82, app.services.maintenance),
+    and a simulation's start and the end of its replay, for its own destination only (#118,
+    app.services.sim.client). There is no other scheduled or background sync.
 
     Flow:
       1. Resolve ``client_siem_map`` rows for this client → ``{siem_id: {spaces}}``.
@@ -945,8 +947,28 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False, only_siem_id: 
                             for sp, result in read.items():
                                 rule_alerts.store(_conn, siem_id, sp, result)
                     except Exception as _exc:
+                        read = {}
                         logger.warning("Could not count the alerts of SIEM '%s'", siem.get('label'), exc_info=True)
                         sync_runs.step_failed("Alert counts", _exc)
+                    # What those alerts turned out to be (rule tuning): the space's closed cases, then each
+                    # alert's outcome by the client's mappings. Only where its alerts could be read; a key
+                    # without Cases read is reported on the destination, not as a failed sync.
+                    try:
+                        from app.services import rule_outcomes
+                        chosen = rule_outcomes.mapping(db, client_id)
+                        for sp in spaces:
+                            if not (read.get(sp) or {}).get("ok"):
+                                continue
+                            cases = elastic_helper.fetch_closed_cases(kurl, token, sp)
+                            found = elastic_helper.fetch_alert_outcomes(kurl, token, sp,
+                                                                        rule_outcomes.script_params(chosen, cases))
+                            with db.get_connection() as _conn:
+                                rule_outcomes.store(_conn, siem_id, sp, found, cases, chosen)
+                            if not found.get("ok"):
+                                sync_runs.step_failed("Alert outcomes", found.get("error") or "no answer")
+                    except Exception as _exc:
+                        logger.warning("Could not read the alert outcomes of SIEM '%s'", siem.get('label'), exc_info=True)
+                        sync_runs.step_failed("Alert outcomes", _exc)
                     # The exception lists the rules use (Rule Monitoring, #75): what changed since the
                     # last read goes into the history of each rule using the list.
                     # The rules just read say which lists they use: they aren't stored until later.

@@ -102,6 +102,10 @@ RUN curl -sSL -o /opt/repos/cisa/known_exploited_vulnerabilities.json \
         https://raw.githubusercontent.com/center-for-threat-informed-defense/mappings-explorer/refs/heads/main/mappings/nist_800_53/attack-16.1/nist_800_53-rev5/enterprise/nist_800_53-rev5_attack-16.1-enterprise.json || \
     echo "WARN: mappings-explorer downloads failed — mapping pages will be incomplete at runtime"
 
+# The simulations' attack scenarios and noise packs (sim/README.md): read-only data, about 150 MB, as
+# each scenario carries its logs. Before the code, as it changes far less often.
+COPY sim/ /app/sim/
+
 # Copy application code, VERSION, and the guide: README, docs/ and CHANGELOG (shown in Settings -> Documentation)
 COPY app/ /app/app/
 COPY VERSION /app/VERSION

@@ -9,7 +9,7 @@ import threading as _threading
 import uuid
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Tuple, Optional, Dict, Any
 from dotenv import load_dotenv
 try:
@@ -262,7 +262,29 @@ def test_elastic_connection_full(
         "; ".join(failed)[:200] if failed and not ok else None, elapsed_ms=ms,
     )
 
-    result["ok"] = all(c["ok"] for c in result["checks"])
+    # ── Check 4: Cases read, for rule tuning's outcomes (R35). Reported, never failing the test: a key
+    # without it still syncs, and Rule Monitoring says Cases couldn't be read on the destination.
+    def _check_cases(sp):
+        r, err, _ms = _do("GET", f"/s/{sp}/api/cases/configure?owner=securitySolution")
+        if err:
+            return sp, False, f"{sp}: {err}"
+        return sp, r.status_code == 200, sp if r.status_code == 200 else f"{sp}: HTTP {r.status_code}"
+
+    case_spaces = linked or spaces_to_check
+    started = _time.monotonic()
+    with ThreadPoolExecutor(max_workers=max(1, len(case_spaces))) as pool:
+        cases = list(pool.map(_check_cases, case_spaces))
+    readable = [t for _sp, ok, t in cases if ok]
+    refused = [t for _sp, ok, t in cases if not ok]
+    _record("cases", "/s/<space>/api/cases/configure", not refused, 200 if not refused else None,
+            ("Cases read on: " + ", ".join(readable) if readable else "")
+            + (("; " if readable else "") + "cases can't be read on: " + "; ".join(refused)
+               + ". Rule tuning can't take outcomes from cases there: give the key Cases read under Security "
+                 "(feature_securitySolutionCasesV3.read)" if refused else ""),
+            elapsed_ms=int((_time.monotonic() - started) * 1000))
+    result["checks"][-1]["optional"] = True
+
+    result["ok"] = all(c["ok"] for c in result["checks"] if not c.get("optional"))
     return result
 
 
@@ -1264,6 +1286,134 @@ def fetch_alert_counts(kibana_url, api_key, space, days=ALERT_DAYS, session=None
             return {"ok": True, "rows": rows}
         composite["after"] = agg["after_key"]
     return {"ok": True, "rows": rows, "truncated": True}
+
+
+# Each alert's one outcome key, ``kind:value|case`` (rule tuning, R28): its closing reason when that is one
+# the client maps (9.6), else its first outcome tag, else ``c:`` (its case decides); ``o:`` for an alert not
+# closed. ``case`` is the latest closed of its cases (params.closed: case id → closed, epoch ms), or empty.
+# Values are compared as rule_outcomes.norm compares them: lower case, letters and digits only.
+_OUTCOME_SCRIPT = """
+String n(def s) { StringBuilder b = new StringBuilder(); for (char ch : s.toString().toLowerCase().toCharArray()) {
+  if (Character.isLetterOrDigit(ch)) { b.append(ch); } } return b.toString(); }
+String c = ''; long best = -1L;
+if (doc.containsKey('kibana.alert.case_ids')) { for (def id : doc['kibana.alert.case_ids']) {
+  if (params.closed.containsKey(id)) { long t = ((Number) params.closed.get(id)).longValue(); if (t > best) { best = t; c = id; } } } }
+def st = doc['kibana.alert.workflow_status'];
+if (st.size() == 0 || st.value != 'closed') { emit('o:|' + c); return; }
+if (doc.containsKey('kibana.alert.workflow_reason') && doc['kibana.alert.workflow_reason'].size() > 0
+    && params.reasons.contains(n(doc['kibana.alert.workflow_reason'].value))) {
+  emit('r:' + doc['kibana.alert.workflow_reason'].value + '|' + c); return; }
+if (doc.containsKey('kibana.alert.workflow_tags')) { for (def t : doc['kibana.alert.workflow_tags']) {
+  if (params.tags.contains(n(t))) { emit('t:' + t + '|' + c); return; } } }
+emit('c:|' + c);
+"""
+OUTCOME_VALUES = 200    # tag and reason values listed for the client's mappings
+
+
+def fetch_alert_outcomes(kibana_url, api_key, space, params, days=ALERT_DAYS, session=None):
+    """What each rule's alerts in ``space`` turned out to be, per day (UTC) of the last ``days`` (rule tuning,
+    R26), through Kibana's alert search: ``{"ok": True, "rows": [(rule uuid, date, outcome key, alerts)],
+    "tags": {tag: closed alerts}, "reasons": {reason: closed alerts}}``, or ``{"ok": False, "status",
+    "error"}``. It reads closed alerts and those in a case; a script gives each alert one key
+    (``_OUTCOME_SCRIPT``, with ``params`` from ``rule_outcomes.script_params``), so an alert with several tags
+    or cases counts once. A composite aggregation read 1,000 buckets at a time, as the counts are; the
+    values found come with the first page."""
+    composite = {"size": 1000, "sources": [
+        {"uuid": {"terms": {"field": "kibana.alert.rule.uuid"}}},
+        {"day": {"date_histogram": {"field": "@timestamp", "calendar_interval": "day", "format": "yyyy-MM-dd"}}},
+        {"outcome": {"terms": {"field": "tide_outcome"}}}]}
+    closed = {"term": {"kibana.alert.workflow_status": "closed"}}
+    body = {"size": 0, "track_total_hits": False,
+            "query": {"bool": {"filter": [{"range": {"@timestamp": {"gte": f"now-{int(days)}d/d"}}}],
+                               "should": [closed, {"exists": {"field": "kibana.alert.case_ids"}}],
+                               "minimum_should_match": 1}},
+            "runtime_mappings": {"tide_outcome": {"type": "keyword", "script": {"source": _OUTCOME_SCRIPT, "params": params}}},
+            "aggs": {"outcomes": {"composite": composite},
+                     "found": {"filter": closed, "aggs": {
+                         "tags": {"terms": {"field": "kibana.alert.workflow_tags", "size": OUTCOME_VALUES}},
+                         "reasons": {"terms": {"field": "kibana.alert.workflow_reason", "size": OUTCOME_VALUES}}}}}}
+    session = session or _new_session(api_key, kibana_url)
+    url = f"{kibana_url.rstrip('/')}/s/{space}/api/detection_engine/signals/search"
+    out = {"ok": True, "rows": [], "tags": {}, "reasons": {}}
+    for page in range(ALERT_PAGES):
+        try:
+            res = session.post(url, json=body, timeout=120)
+        except Exception as exc:   # noqa: BLE001 - reported on the destination; the sync goes on
+            return {"ok": False, "status": None, "error": f"{type(exc).__name__}: {exc}"}
+        if res.status_code != 200:
+            return {"ok": False, "status": res.status_code, "error": f"HTTP {res.status_code}: {res.text[:200]}"}
+        aggs = (res.json() or {}).get("aggregations") or {}
+        if page == 0:
+            found = aggs.get("found") or {}
+            for part in ("tags", "reasons"):
+                out[part] = {str(b["key"]): int(b.get("doc_count") or 0) for b in (found.get(part) or {}).get("buckets") or []}
+            body["aggs"].pop("found", None)
+        agg = aggs.get("outcomes") or {}
+        for b in agg.get("buckets") or []:
+            k = b.get("key") or {}
+            out["rows"].append((str(k.get("uuid") or ""), str(k.get("day") or ""), str(k.get("outcome") or ""),
+                                int(b.get("doc_count") or 0)))
+        if not agg.get("after_key") or len(agg.get("buckets") or []) < composite["size"]:
+            return out
+        composite["after"] = agg["after_key"]
+    return {**out, "truncated": True}
+
+
+CASE_PAGES = 100        # pages of 100 closed cases read at most per space
+
+
+def fetch_closed_cases(kibana_url, api_key, space, days=ALERT_DAYS, session=None):
+    """The Security cases of ``space`` closed in the last ``days`` (rule tuning, R27): ``{"ok": True,
+    "cases": {id: {closed_at, tags, category, fields: {custom field key: value}}}, "fields": {key: label}}``
+    or ``{"ok": False, "status", "error"}``. Only what an outcome could be read from is kept: never a
+    title, description, comment or name (R39). Needs Cases read on the key (403 without it)."""
+    session = session or _new_session(api_key, kibana_url)
+    prefix = _space_api_prefix(kibana_url.rstrip("/"), space)
+    since = datetime.now(timezone.utc) - timedelta(days=int(days))
+    cases, page = {}, 1
+    while page <= CASE_PAGES:
+        try:
+            res = session.get(f"{prefix}/api/cases/_find", params={
+                "owner": "securitySolution", "status": "closed", "sortField": "updatedAt", "sortOrder": "desc",
+                "perPage": 100, "page": page}, timeout=60)
+        except Exception as exc:   # noqa: BLE001 - reported on the destination; the sync goes on
+            return {"ok": False, "status": None, "error": f"{type(exc).__name__}: {exc}"}
+        if res.status_code != 200:
+            try:
+                why = (res.json() or {}).get("message") or res.text[:200]
+            except ValueError:
+                why = res.text[:200]
+            return {"ok": False, "status": res.status_code, "error": f"HTTP {res.status_code}: {why}"}
+        data = res.json() or {}
+        found = data.get("cases") or []
+        older = False
+        for c in found:
+            updated = c.get("updated_at") or c.get("closed_at") or ""
+            try:
+                if updated and datetime.fromisoformat(str(updated).replace("Z", "+00:00")) < since:
+                    older = True
+                    continue
+            except ValueError:
+                pass
+            if c.get("id"):
+                cases[str(c["id"])] = {"closed_at": c.get("closed_at"), "tags": [str(t) for t in c.get("tags") or []],
+                                       "category": c.get("category") or None,
+                                       "fields": {str(f.get("key")): f.get("value") for f in c.get("customFields") or []
+                                                  if f.get("key")}}
+        if older or not found or page * 100 >= int(data.get("total") or 0):
+            break
+        page += 1
+    labels = {}
+    try:
+        conf = session.get(f"{prefix}/api/cases/configure", params={"owner": "securitySolution"}, timeout=30)
+        if conf.status_code == 200:
+            for c in conf.json() or []:
+                for f in c.get("customFields") or []:
+                    if f.get("key"):
+                        labels[str(f["key"])] = str(f.get("label") or f["key"])
+    except Exception:              # noqa: BLE001 - only the fields' labels are missing
+        _logger.debug("Could not read the case custom fields of %s", space, exc_info=True)
+    return {"ok": True, "cases": cases, "fields": labels}
 
 
 EXCEPTION_READS = 8     # exception lists read at once

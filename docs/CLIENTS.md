@@ -22,9 +22,51 @@ Who can: Platform Admins.
 3. Tick **Verify TLS certificate** if TIDE should check its certificate (see [Certificates](CONFIGURATION.md#certificates)).
 4. Click **Test connection**: it checks each Kibana space and how long each took to answer (for Wazuh, each permission TIDE needs and its agent groups). Then save.
 
-The API key needs to read and write detection rules in every space TIDE should use. To deploy rules, run hunts or save searches, it needs those rights too.
+For Elastic, create the API key as [The Elastic API key](#the-elastic-api-key) shows.
 
 **OpenCTI** (for Threat Landscape's threat actors), **GitLab** and **Keycloak** (single sign-on, see [Configuration](CONFIGURATION.md#single-sign-on-with-keycloak)) are added the same way, with **Add integration**. A GitLab needs only its address: the tokens belong to the projects each client links (see [Link GitLab projects](#link-gitlab-projects)).
+
+### The Elastic API key
+
+Create TIDE's key in Kibana while signed in as an administrator (another API key can't create a key that has permissions). In Stack Management, open API keys, create a key, turn on "Control security privileges" and paste:
+
+```json
+{
+  "tide": {
+    "indices": [
+      {
+        "names": ["*"],
+        "privileges": ["read", "view_index_metadata"]
+      }
+    ],
+    "applications": [
+      {
+        "application": "kibana-.kibana",
+        "privileges": [
+          "feature_siemV2.all",
+          "feature_securitySolutionCasesV3.read",
+          "feature_discover.all"
+        ],
+        "resources": ["*"]
+      }
+    ]
+  }
+}
+```
+
+These are the permissions' names on Elastic 8.19.
+
+- **Indices:** the key reads every index and writes to none. Kibana runs a rule with the key that last saved it, so a rule TIDE deploys, moves or changes fails on an index this key can't read. To narrow it, list your data indices with `.alerts-security.alerts-*` and `.preview.alerts-security.alerts-*`.
+- **Spaces:** `"resources": ["*"]` covers every space. To narrow it, list each space TIDE uses as `space:<space id>`.
+- **Kibana:**
+  - `feature_siemV2.all` reads and writes detection rules and their exceptions and reads alerts.
+  - `feature_securitySolutionCasesV3.read` reads cases, for [Outcomes from Kibana](#outcomes-from-kibana).
+  - `feature_discover.all` is needed only to save a hunt to Kibana.
+  - If you leave the **Elasticsearch URL** empty, add `feature_dev_tools.read`: TIDE then reaches Elasticsearch through Kibana.
+
+**Test connection** says whether the key can read cases, without failing the test: a key without Cases read still syncs, and Rule Monitoring lists **Cases couldn't be read** on the destination.
+
+Give the key no expiry date. When you replace it, don't invalidate the old key straight away: the rules TIDE last saved with it stop running once it stops working. First give them a new key in Kibana (Stack Management, Rules, select the rules, then Update API key).
 
 ## Create a client
 
@@ -36,7 +78,7 @@ A client's page shows its figures at the top, then its set-up in four tabs, each
 - **Integrations**: **Linked SIEMs**, **Linked CTI Connectors** and **GitLab Projects**.
 - **Users**: **Assigned users**, with a column for each role, and **Role Templates**.
 - **Systems & baselines**: **Systems** and **Baselines**.
-- **Rule settings**: **Validation**, **Rule Monitoring** and **Rule scoring**.
+- **Rule settings**: **Validation**, **Rule Monitoring**, **Outcomes from Kibana** and **Rule scoring**.
 
 Click a section's heading to collapse or expand it; TIDE remembers that in your browser. The **⋮** at the top of the page has **Edit client** and, for a super admin, **Delete client**.
 
@@ -86,7 +128,24 @@ The **Rule Monitoring** section below holds [Rule Monitoring](RULES.md#rule-moni
 - **Upstream update pending after (days)**: a rule whose Elastic or Sigma original was updated longer ago than this, and not reviewed, is listed under **Upstream update not reviewed** (default 30).
 - **Many exceptions over (items)**: a rule with more exception items than this, across its own list and the shared lists it uses, is listed under **Many exceptions** (default 10).
 - **List expired or changed validations**: lists, as Info, each enabled rule never validated, whose validation has expired under the validation policy above, or that was edited since it was last validated. Off by default.
+- **List rules whose alerts are left open**: lists a rule under **Alerts left open** when at least 50 of the alerts it raised 8 to 30 days ago, and 80% or more, are still open in Kibana. On by default. A case closes its alerts only when the analyst chooses that as they close it; alerts left open in a case that was closed aren't counted, once TIDE can read the space's cases.
+- **Outcomes over (days)** and **Judged alerts needed**: what rules' alerts turned out to be is counted over the first (default 30), and a share is shown, and found too high, only from the second (default 10). *Judged* alerts are true positives, benign true positives, false positives and duplicates.
+- **False positives share (%)**, **Bad data share (%)**, **Expected activity share (%)** and **Duplicates share (%)**: a rule is listed under **Mostly false positives**, **False positives from bad data**, **Mostly expected activity** or **Mostly duplicates** when at least this share of its judged alerts had that outcome (defaults 50, 25, 80 and 50).
 - **Stop saves Elastic's validator refuses**: **Create rule**, **Save** and **Deploy** don't write a rule to Kibana when Elastic's own validator can't parse its query, or finds a value that doesn't fit its field's type (see [Checked with Elastic's validator](RULES.md#checked-with-elastics-validator)). Off by default: the form names the problem and the rule is written.
+
+## Outcomes from Kibana
+
+At each sync TIDE reads what the client's closed alerts turned out to be, as Kibana holds it, for [Rule Tuning](RULES.md#rule-tuning). It never changes an alert, a case or a Kibana setting. Each closed alert gets one outcome: its alert tag when it has one that names an outcome, otherwise the outcome its case was closed with. A case's outcome counts only for a case whose alerts all come from one rule, since it can't say which of several rules' alerts it meant.
+
+Under **Rule settings**, **Outcomes from Kibana** sets how Kibana's values map onto TIDE's outcomes, one set for all the client's destinations:
+
+- **Case outcome**: where your case tool leaves the outcome as it closes a case: **Case tags**, **Case category**, or one of the space's case custom fields. **Off** (the default) takes no outcome from cases.
+- **Alert tags** and **Case values** list each value found in the last 90 days, with how many closed alerts or cases hold it, and the outcome it maps to. A value named as an outcome maps to it from the start, however it is written: *TP*, *True Positive*, *FP*, *False Positive*, *BTP*, *Benign True Positive*, *Duplicate*. Choose another outcome, or **Ignore**, for any value. Kibana's own *Further investigation required* tag is ignored.
+- **Closing reasons** shows once a SIEM on Elastic 9.6 or later gives alerts one: a closing reason wins over the alert's tags.
+
+Click **Save**: the mappings apply from the next sync. For analysts to tag an alert's outcome themselves, add *True Positive* and *Benign True Positive* to Kibana's alert tags in each space (in Kibana: Stack Management → Advanced settings → Security Solution → Alert tags), beside its *False Positive* and *Duplicate*. Keep one outcome tag per alert: an alert with two counts under the first.
+
+What people record in TIDE with **Record outcome…** counts only for a rule with no outcome from Kibana in the window, and always shows in its mark.
 
 ## Choose how rules are scored
 

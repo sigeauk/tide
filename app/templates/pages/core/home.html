@@ -8,9 +8,10 @@
 
 {#
   Home: what needs the person signed in on the active client (app/services/home.py builds ``lists``),
-  a section per list, each only for someone who can open its page: Rule Monitoring, Known gaps to
-  review, Validations lapsing and GitLab issues. Each shows its first few and links to the rest; a
+  a section per list, each only for someone who can open its page: Rule Monitoring, Rules to tune,
+  Known gaps to review, Validations lapsing and GitLab issues. Each shows its first few and links to the rest; a
   section's title folds it, remembered under tide.homeFolds. A list that can't be worked out says so.
+  The running version is in the hover tip of the title's ?.
 #}
 
 {% block title %}Home | TIDE{% endblock %}
@@ -30,7 +31,7 @@
 {% block content %}
 <div class="page-header">
     <div>
-        <h1 class="page-title-hero">Home {{ help_button('home') }}</h1>
+        <h1 class="page-title-hero">Home {{ help_button('home', 'TIDE v' ~ settings.tide_version) }}</h1>
         <p class="page-subtitle">What needs attention{% if active_client %} on {{ active_client.name }}{% endif %}, as of the last sync.</p>
     </div>
 </div>
@@ -77,6 +78,41 @@
         <p class="rm-empty">No SIEM is linked to this client yet.</p>
         {% endif %}
         {{ more_link(rm.url, 'Show all in Rule Monitoring', rm.more) }}
+    {% endif %}
+    </div>
+</section>
+{% endif %}
+
+{# ── Rules to tune: Rule Tuning's first rows, costliest first ─────────────────────────────── #}
+{% if lists.tuning %}{% set tu = lists.tuning %}
+<section name="Home Tuning" class="card card-padded sys-section" data-fold="tuning" aria-label="Rules to tune">
+    <div class="sys-section__head">{{ section_title('Rules to tune', 'sliders-horizontal', none if tu.failed else tu.count) }}</div>
+    <div class="sys-section__body">
+    {% if tu.failed %}{{ failed(tu) }}{% else %}
+        {% if tu.rows %}
+        <div class="rm-items">
+            {% for r in tu.rows %}
+            <div class="rm-item rm-item--tuning">
+                <div class="rm-item__main">
+                    <div class="rm-item__name" title="{{ r.name }}">
+                        <button type="button" class="rm-item__open" hx-get="{{ r.url }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+                                title="Open this rule">{{ r.name }}</button></div>
+                    <div class="rm-item__meta">
+                        {% if r.destination %}{{ tag(r.destination, title='Destination') }}{% endif %}
+                        <span title="Alerts a day over the last 7 days{{ ', and the share people recorded as not needing action' if r.share is not none }}">{% if not r.per_day %}No alerts in 7 days{% else %}{{ '{:,.0f}'.format(r.per_day) if r.per_day >= 10 else '%.1f' | format(r.per_day) }} alerts a day{% endif %}{% if r.share is not none %}, {{ '{:.0%}'.format(r.share) }} not needing action{% endif %}</span>
+                        <span class="text-muted">{{ r.reasons | join('; ') }}</span>
+                        {% if r.new %}<span class="text-warning" title="Began in the last {{ days }} days">New</span>{% endif %}
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% elif tu.linked %}
+        <p class="rm-empty">No rule needs tuning.</p>
+        {% else %}
+        <p class="rm-empty">No SIEM is linked to this client yet.</p>
+        {% endif %}
+        {{ more_link(tu.url, 'Show all in Rule Tuning', tu.more) }}
     {% endif %}
     </div>
 </section>

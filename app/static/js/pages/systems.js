@@ -9,13 +9,12 @@
     function checked(id) { return $(id).checked ? 'true' : 'false'; }
 
     function filterCards() {
-        var query = (($('system-filter-q') || {}).value || '').toLowerCase();
+        var query = TIDE.searchMatcher(($('system-filter-q') || {}).value);
         var classification = ($('system-filter-classification') || {}).value || '';
         var risk = ($('system-filter-risk') || {}).value || '';
         var cards = document.querySelectorAll('#systems-grid .system-cve-card'), visible = 0;
         cards.forEach(function (card) {
-            var haystack = [card.dataset.name || '', card.dataset.description || '', card.dataset.classification || '', card.dataset.metrics || ''].join(' ');
-            var show = (!query || haystack.indexOf(query) !== -1)
+            var show = (!query || query([card.dataset.name, card.dataset.description, card.dataset.classification, card.dataset.metrics]))
                 && (!classification || (card.dataset.classification || '') === classification)
                 && (!risk || (card.dataset.risk || '') === risk);
             card.style.display = show ? 'block' : 'none';

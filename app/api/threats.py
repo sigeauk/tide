@@ -227,9 +227,9 @@ def list_threats(
     covered, _counts = catalog.coverage_for(db, client_id)
 
     if search:
-        needle = search.lower()
-        actors = [a for a in actors if needle in a.name.lower() or needle in (a.aliases or "").lower()
-                  or needle in (a.description or "").lower()]
+        from app.services.search_query import SearchQuery
+        query = SearchQuery(search)
+        actors = [a for a in actors if query.matches(a.name, a.aliases, a.description)]
     if origin:
         actors = [a for a in actors if a.origin and origin.lower() in a.origin.lower()]
     if source:
