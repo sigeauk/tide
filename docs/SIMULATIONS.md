@@ -75,6 +75,17 @@ The results (the board, the answers given, the rules and their alerts) stay in T
 
 Start it before your audience arrives, with **Noise** *Normal*, **Speed** 10 and one player: setting up and the first replay take a few minutes. Begin on **Threat Landscape** with its attacker, *Banking trojan crew*: its techniques are the attack's, and it counts most of them as covered because a rule is tagged with each. Then show what TIDE finds that Kibana doesn't, in **Rule Monitoring**, **Rule Tuning** and the system's **Covered** and **Effective** figures. Fix each rule in its window, and for each technique without a rule, **Deploy** one of Elastic's rules or **Convert** a Sigma rule from the technique's window, then map it. **Replay data** sends the attack again: every fixed rule fires on it, and the system shows 7 of its 8 techniques covered and effective, with the interception still a known gap on record.
 
+## The air-gap demo
+
+*TIDE demo: USB, insider and rogue device* is a second demo, with no questions and no routine traffic: only the attack's events. On an air-gapped design network, a contractor's USB stick runs a DLL, a Raspberry Pi behind a printer answers DHCP and collects a service account's password, and the drawings leave on the same stick. Its system, *Engineering enclave*, starts with:
+
+- three rules that work;
+- a rule someone left disabled, and one written for data the network hasn't (Elastic Defend's), so its index pattern matches nothing;
+- a known gap whose reason the data shows is no longer true ("USB storage is blocked by Group Policy");
+- steps with no rule at all, one of them, the rogue device, with no rule in Elastic's or Sigma's library that runs on this stack.
+
+Fix the two rules (the second with **Use the default index**), **Deploy** or **Convert** a rule from the libraries for the steps without one, and for the rogue device add a hunt under **Coverage** and make a rule from it with **Create rule**. **Replay data** sends the attack again, and every fixed rule fires on it: the system ends with all 9 techniques covered and effective. The presenter's script is `sim/scenarios/airgap/DEMO_SCRIPT.md`.
+
 ## Playing a simulation
 
 **Simulation** appears in the sidebar as soon as a simulation you are a player in starts, and goes when it ends. While it sets up you can read the questions; answers open when the replay starts. It has two tabs: **Questions** shows each scenario's story, **Open the space in Kibana**, and its questions, each of which folds by its text and stays as you left it; **Dashboard** shows each player's score over time, the **Board**, and how many players have solved each question.

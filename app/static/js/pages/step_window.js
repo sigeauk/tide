@@ -40,6 +40,11 @@
             $('sm-gap-reason').focus();
         } else {
             $('sm-cov-watch-kind').value = kind;
+            // A hunt of the client's own has its ES|QL query; a dashboard, report or log hasn't (#130).
+            document.querySelectorAll('#sm-cov-watch [data-hunt-only]').forEach(function (el) {
+                el.hidden = kind !== 'hunt';
+                el.querySelectorAll('textarea').forEach(function (t) { t.required = kind === 'hunt'; t.disabled = kind !== 'hunt'; });
+            });
             $('sm-cov-title').focus();
         }
     }

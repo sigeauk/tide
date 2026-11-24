@@ -295,21 +295,48 @@
         var scopeSelect = form.querySelector('#rule-scope-pair'), indexInput = form.querySelector('#rule-index');
         var reasonInput = form.querySelector('#rule-reason'), errorBox = form.querySelector('#rule-form-error');
 
-        // A destination's default index (its own, else its space's in Kibana) fills an empty index
-        // field, and replaces the last one it filled when the destination changes; an operator's own
-        // value wins.
-        var filled = '';
-        function updateDefaultIndex() {
-            if (!scopeSelect || !indexInput) return;
-            var selected = scopeSelect.options[scopeSelect.selectedIndex];
-            var defaultIndex = (selected && (selected.getAttribute('data-default-index') || '').trim()) || '';
-            var current = indexInput.value.trim();
-            if (!current || current === filled) { indexInput.value = defaultIndex; filled = defaultIndex; }
+        // A destination's default index (its own, else, for a new rule, its space's in Kibana) fills an
+        // empty index field, and replaces the last one it filled when the destination changes; an
+        // operator's own value wins. Use the default index puts it in place of the patterns given (a
+        // library rule's own, which may search every namespace), read-only; unticked, they come back.
+        var filled = '', given = null;
+        var choice = form.querySelector('#rule-default-index-choice'), useDefault = form.querySelector('#rule-use-default-index');
+        var choiceValue = form.querySelector('#rule-default-index-value');
+        function setIndex(value) {          // as typed: the field suggestions follow the patterns
+            indexInput.value = value;
+            indexInput.dispatchEvent(new Event('change', { bubbles: true }));
         }
-        if (scopeSelect) {
-            scopeSelect.addEventListener('change', updateDefaultIndex);
-            if (mode === 'create') updateDefaultIndex();
+        function destinationDefault() {
+            var selected = scopeSelect && scopeSelect.options[scopeSelect.selectedIndex];
+            return (selected && (selected.getAttribute('data-default-index') || '').trim()) || '';
         }
+        function showChoice() {
+            if (!choice || !indexInput) return;
+            var dflt = destinationDefault();
+            if (choiceValue) choiceValue.textContent = dflt;
+            choice.hidden = !dflt || (!useDefault.checked && indexInput.value.trim() === dflt);
+        }
+        function updateDefaultIndex(atLoad) {
+            if (!indexInput) return;
+            var dflt = destinationDefault(), current = indexInput.value.trim();
+            if (useDefault && useDefault.checked) {
+                if (dflt) setIndex(dflt);
+                else { useDefault.checked = false; indexInput.readOnly = false; setIndex(given || ''); given = null; }
+            } else if (!(atLoad && mode !== 'create') && (!current || current === filled)) {
+                setIndex(dflt); filled = dflt;
+            }
+            showChoice();
+        }
+        if (useDefault && indexInput) {
+            useDefault.addEventListener('change', function () {
+                if (useDefault.checked) { given = indexInput.value; setIndex(destinationDefault()); indexInput.readOnly = true; }
+                else { setIndex(given || ''); given = null; indexInput.readOnly = false; }
+                showChoice();
+            });
+            indexInput.addEventListener('input', showChoice);
+        }
+        if (scopeSelect) scopeSelect.addEventListener('change', function () { updateDefaultIndex(false); });
+        updateDefaultIndex(true);
 
         // ES|QL and machine learning rules take no index patterns: the field is hidden, and neither
         // checked nor posted.

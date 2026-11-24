@@ -6,6 +6,7 @@ deployed as a rule.
 """
 
 import logging
+from typing import Optional
 
 from html import escape
 
@@ -114,6 +115,7 @@ def run_hunt(
     db: DbDep,
     client_id: ActiveClient,
     query_no: int = Query(0, ge=0),
+    slot: Optional[int] = Query(None, ge=0),    # the result's own number, where several hunts show results
     destination: str = Form(""),
     lookback: str = Form(""),
     pipeline: str = Form(""),
@@ -126,6 +128,7 @@ def run_hunt(
     siem, _space = hunt_runner.destination(db, client_id, destination)
     if not siem:
         return error("Choose one of this client's destinations to run it on.")
+    index = index or str(siem.get("default_index") or "")     # none given (a technique's window): the destination's
     hunt, query, kind, ran_query, problem = _hunt_query(db, source, hunt_id, query_no, pipeline, index)
     if problem:
         return error(problem)
@@ -133,7 +136,7 @@ def run_hunt(
     logger.info("Hunting query %s/%s #%d run on SIEM %s by %s: %s", source, hunt_id, query_no, siem["id"],
                 getattr(user, "username", ""), "ok" if result["ok"] else result["error"][:200])
     return request.app.state.templates.TemplateResponse(request, "partials/hunt_run_result.html", {
-        "result": result, "siem_label": siem.get("label") or siem["id"], "ran_query": ran_query, "n": query_no,
+        "result": result, "siem_label": siem.get("label") or siem["id"], "ran_query": ran_query, "n": query_no if slot is None else slot,
         "when": dict(hunt_runner.LOOKBACKS).get(lookback if lookback in dict(hunt_runner.LOOKBACKS) else "", ""),
     })
 
@@ -165,6 +168,7 @@ def save_hunt(
     siem, space = hunt_runner.destination(db, client_id, destination)
     if not siem:
         return reply("Choose one of this client's destinations to save it to.", "error")
+    index = index or str(siem.get("default_index") or "")
     hunt, query, kind, _ran, problem = _hunt_query(db, source, hunt_id, query_no, pipeline, index)
     if problem:
         return reply(problem, "error")
@@ -183,6 +187,58 @@ def save_hunt(
         return reply(result["error"], "error")
     return reply(f'{"Saved again, replacing the earlier copy," if result["replaced"] else "Saved"} in {dest_name} as '
                  f'"{title}".', "ok", result["url"])
+
+
+@router.get("/{source}/{hunt_id}/rule-form", response_class=HTMLResponse)
+def hunt_rule_form(
+    request: Request,
+    source: str,
+    hunt_id: str,
+    user: RequireUser,
+    db: DbDep,
+    client_id: ActiveClient,
+    query_no: int = Query(0, ge=0),
+    destination: str = Query(""),
+    pipeline: str = Query(""),
+    index: str = Query(""),
+    technique_url: str = Query(""),
+):
+    """Create rule from a hunt (#130): the New rule form, as an ES|QL rule with one of a hunt's queries
+    (a Sigma hunt converted for the chosen destination's default index, unless an index pattern is
+    given), named after the hunt, with its ATT&CK techniques and a reason saying which hunt it came
+    from, to narrow and create. From a technique's window, its X goes back there."""
+    error = lambda text: HTMLResponse(f'<div class="alert alert-danger">{escape(text)}</div>')   # noqa: E731
+    siem, _space = hunt_runner.destination(db, client_id, destination)
+    index = index or (str(siem.get("default_index") or "") if siem else "")
+    hunt, query, kind, _ran, problem = _hunt_query(db, source, hunt_id, query_no, pipeline, index)
+    if problem:
+        return error(problem)
+    if kind != "esql":
+        return error("Only an ES|QL query can be made into a rule here: open it on the Hunting page and write the rule from it.")
+    view = hunt.get("rule") or {}
+    name = str(hunt.get("name") or view.get("title") or hunt_id)
+    return hunt_rule_form_response(request, db, client_id, user, name=name, query=query,
+                                   description=str(hunt.get("description") or view.get("description") or ""),
+                                   techniques=list(hunt.get("techniques") or []),
+                                   origin=f"the {'Elastic' if source == 'elastic' else 'Sigma'} hunt {name}",
+                                   scope_pair=destination if siem else "", technique_url=technique_url)
+
+
+def hunt_rule_form_response(request: Request, db, client_id: str, user, *, name: str, query: str, description: str,
+                            techniques: list, origin: str, scope_pair: str = "", technique_url: str = ""):
+    """The New rule form for a rule made from a hunt: an ES|QL rule with its query, named after it, its
+    techniques, a reason naming ``origin`` (kept in the rule's History), on ``scope_pair`` when given.
+    Shared by the Hunting page, a technique's Hunting section and a hunt on its Coverage."""
+    from app.api.elastic import _TECHNIQUE_URL
+    from app.api.rules import _build_rule_form_context
+    prefill = {"name": name, "description": description or f"Made from {origin}.", "query": query,
+               "language": "esql", "type": "esql", "mitre_ids": [str(t).upper() for t in techniques if t],
+               "scope_pair": scope_pair, "reason": f"Made from {origin}."}
+    ctx = _build_rule_form_context(db, client_id, getattr(user, "username", "") or "", "/api/rules/create",
+                                   "Create rule", "Create rule", prefill=prefill)
+    if _TECHNIQUE_URL.match(technique_url or ""):
+        ctx["cancel_url"] = technique_url
+    return request.app.state.templates.TemplateResponse(request, "components/rule_create_form.html", ctx)
 
 
 def _hunt_query(db, source: str, hunt_id: str, query_no: int, pipeline: str, index: str):

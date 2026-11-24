@@ -103,6 +103,9 @@
             <div class="form-section" id="rule-index-plain"{% if _no_index %} hidden{% endif %}>
               <label class="form-label" for="rule-index">Index patterns{% if mode != 'edit' %} *{% endif %}</label>
               <input class="rule-form-control" type="text" id="rule-index" name="index" value="{{ form_values.index }}" placeholder="logs-*, auditbeat-*"{% if mode != 'edit' %} required{% endif %}{% if _no_index %} disabled{% endif %}>
+              {# The destination's default index in place of the patterns given (a library's, the rule's own):
+                 rule_form.js shows it when the destination has one, and unticking puts them back. #}
+              <label class="rm-form-confirm mt-sm" id="rule-default-index-choice" hidden><input type="checkbox" id="rule-use-default-index"> Use the default index: <span class="mono" id="rule-default-index-value"></span></label>
               {% if mode == 'edit' and not form_values.index and not _no_index %}
               <div class="scope-note">None of its own: Kibana searches this space's default index patterns for it.</div>
               {% endif %}

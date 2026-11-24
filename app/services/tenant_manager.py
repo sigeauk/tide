@@ -659,6 +659,8 @@ def _create_tenant_schema(conn):
     DatabaseService.add_step_risk_columns(conn)
     # ── The library rule a technique was made from (same columns as Migration 97) ──
     DatabaseService.add_step_source_columns(conn)
+    # ── A hunt as a technique's coverage (same columns as Migration 116) ──
+    DatabaseService.add_step_hunt_columns(conn)
     # ── The platforms a person adds to a system (same column as Migration 109) ──
     DatabaseService.add_system_platforms_column(conn)
 

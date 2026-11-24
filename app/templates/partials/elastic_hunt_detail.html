@@ -7,7 +7,7 @@
 #}
 {% from "macros/icons.html" import icon, icon_text %}
 {% from "components/mitre_pill.html" import mitre_pill %}
-{% from "components/hunt_run.html" import run_button, save_button, run_result %}
+{% from "components/hunt_run.html" import run_button, save_button, rule_button, run_result %}
 <div class="lib-detail__head">
     <h2 class="lib-detail__title">{{ hunt.name }}</h2>
     <div class="lib-detail__pills">
@@ -53,6 +53,7 @@
             <span class="lib-detail__tools">
                 {{ run_button('elastic', hunt.hunt_id, loop.index0, _kind, run) }}
                 {{ save_button('elastic', hunt.hunt_id, loop.index0, _kind, run) }}
+                {{ rule_button('elastic', hunt.hunt_id, loop.index0, _kind, run) }}
                 <button name="Copy Query" type="button" class="btn btn-secondary btn-sm" data-rm-copy="#elastic-hunt-query-{{ loop.index }}">{{ icon_text('copy', 'Copy', '12') }}</button>
             </span>
         </div>

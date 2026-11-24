@@ -36,6 +36,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
+from app.elastic_helper import esql_data_view  # noqa: F401  (simulation.esql_data_view, as before)
 from app.services.sim import client, game, kibana, packs, replay, rules
 
 logger = logging.getLogger(__name__)
@@ -530,18 +531,6 @@ def clear(store, sim_id: str) -> None:
 
 SEARCH_LABELS = {"kql": "KQL", "esql": "ES|QL"}
 SINCE_MARGIN = timedelta(minutes=5)       # a saved search opens a little before the simulation began
-
-
-def esql_data_view(query: str) -> dict:
-    """The ad hoc data view Discover makes for an ES|QL query, as it keeps it in a saved search: on the
-    query's FROM sources (joined by commas), with @timestamp as its time field, and the id Discover gives
-    it (the SHA-256 of "esql-" and that pattern)."""
-    import hashlib
-    m = re.match(r"(?is)\s*FROM\s+([^|]+?)(\s+METADATA[^|]*)?\s*(\||$)", query)
-    pattern = ",".join(s.strip() for s in m.group(1).split(",")) if m else ""
-    return {"id": hashlib.sha256(f"esql-{pattern}".encode()).hexdigest(), "title": pattern, "name": pattern,
-            "timeFieldName": "@timestamp", "type": "esql", "sourceFilters": [], "fieldFormats": {},
-            "runtimeFieldMap": {}, "allowNoIndex": False, "allowHidden": False}
 
 
 def search_saving(sim: dict, scenario: str, n: int, title: str, searches: list, view_id: str) -> list:

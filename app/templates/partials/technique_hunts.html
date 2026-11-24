@@ -1,0 +1,91 @@
+{#
+  The technique window's Hunting section (#130): the library's hunts (Elastic's hunting queries,
+  SigmaHQ's threat-hunting rules) suggested from the technique's ATT&CK ids, or, with a query from
+  the section's search, any that match. A way to look for the technique where no rule alerts. Each
+  hunt's "…" menu runs it on the destination chosen above (a system's own come first), over the time
+  chosen, and saves an ES|QL one to Kibana, through the Hunting page's Run and Save to Kibana; with no
+  index pattern given, they read the destination's default index. A Sigma hunt is converted to ES|QL
+  with the usual pipeline for its platform. On a system, Add as coverage records it under Coverage as a
+  hunt (non-alerting: someone runs it), and Create rule opens the New rule form with an ES|QL one.
+  Context: hunts (source, hunt_id, name, description, platform, query_no: its first query that runs
+  on the SIEM, kind), query, technique_ids, step_id, system_id, technique_url, can_add, run
+  {destinations, lookbacks, lookback, can_run, can_save}.
+#}
+{% from "macros/icons.html" import icon %}
+{% from "macros/menu.html" import more_button %}
+{% set _form = 'sm-hunt-run-' ~ step_id %}
+<p class="text-muted sm-sigma__note">Hunting queries to look for it where no rule alerts. One counts as coverage only once added under Coverage, as a hunt someone runs.</p>
+{% if hunts and run.can_run %}
+  {% if run.destinations %}
+  <div class="sm-hunt__run" id="{{ _form }}">
+    <div class="sm-hunt__field">
+      <label class="form-label" for="{{ _form }}-destination">Run on</label>
+      <select id="{{ _form }}-destination" name="destination" class="form-input form-select"
+              title="Run uses this destination's SIEM and default index; Save to Kibana saves into its space">
+        {% for d in run.destinations %}<option value="{{ d.value }}">{{ d.label }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="sm-hunt__field">
+      <label class="form-label" for="{{ _form }}-lookback">Time</label>
+      <select id="{{ _form }}-lookback" name="lookback" class="form-input form-select">
+        {% for value, label in run.lookbacks %}<option value="{{ value }}"{% if value == run.lookback %} selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    </div>
+  </div>
+  {% else %}
+  <p class="text-muted sm-muted">Link a SIEM to this client to run them.</p>
+  {% endif %}
+{% endif %}
+{% if hunts %}
+<div class="sm-sigma__group">{% if query %}Matching “{{ query }}”{% else %}Suggested for {{ technique_ids | join(', ') }}{% endif %}</div>
+<ul class="sm-sigma">
+  {% for h in hunts %}
+  {% set _slot = loop.index0 %}
+  {% set _url = '/api/hunting/' ~ h.source ~ '/' ~ h.hunt_id %}
+  <li class="sm-sigma__item sm-hunt__item">
+    <span class="sm-sigma__title"{% if h.description %} title="{{ h.description | truncate(400, end='…') }}"{% endif %}>{{ h.name }}</span>
+    <span class="sm-sigma__meta">
+      <span class="text-muted">{{ 'Elastic' if h.source == 'elastic' else 'Sigma' }}{% if h.platform %} · {{ h.platform | capitalize }}{% endif %}</span>
+      <span class="rh-more" data-more>
+        {{ more_button('Actions for ' ~ h.name, title='Hunt actions', attrs='name="Hunt Actions"') }}
+        <span class="rh-more__menu" role="menu" hidden>
+          {% if run.can_run and run.destinations and h.kind != 'osquery' %}
+          <button name="Run Hunt" type="button" role="menuitem" class="rh-more__item"
+                  hx-post="{{ _url }}/run?query_no={{ h.query_no }}&slot={{ _slot }}" hx-include="#{{ _form }}"
+                  hx-target="#sm-hunt-result-{{ _slot }}" hx-swap="innerHTML" hx-indicator="#sm-hunt-result-{{ _slot }}"
+                  title="Run it on the destination chosen above and show what it finds">{{ icon('binoculars', '14') }}<span>Run</span></button>
+          {% endif %}
+          {% if run.can_save and run.destinations and h.kind == 'esql' %}
+          <button name="Save Hunt To Kibana" type="button" role="menuitem" class="rh-more__item"
+                  hx-post="{{ _url }}/save?query_no={{ h.query_no }}" hx-include="#{{ _form }}"
+                  hx-target="#sm-hunt-save-{{ _slot }}" hx-swap="innerHTML"
+                  title="Save it in the chosen destination's Kibana space as a Discover search (saving again replaces it)">{{ icon('save', '14') }}<span>Save to Kibana</span></button>
+          {% endif %}
+          {% if can_add and h.kind != 'osquery' %}
+          <button name="Add Hunt As Coverage" type="button" role="menuitem" class="rh-more__item"
+                  hx-post="{{ technique_url }}/coverage" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+                  hx-vals='{{ {"kind": "hunt", "title": h.name, "hunt_ref": h.source ~ "/" ~ h.hunt_id, "hunt_query_no": h.query_no} | tojson }}'
+                  title="Add it under Coverage as a hunt: covered, non-alerting, run from its card">{{ icon('eye', '14') }}<span>Add as coverage</span></button>
+          {% endif %}
+          {% if run.can_run and run.destinations and h.kind == 'esql' %}
+          <button name="Create Rule From Hunt" type="button" role="menuitem" class="rh-more__item"
+                  hx-get="{{ _url }}/rule-form?query_no={{ h.query_no }}&technique_url={{ technique_url | urlencode }}" hx-include="#{{ _form }}"
+                  hx-target="#modal-container" hx-swap="innerHTML"
+                  title="Open the New rule form with its query, as an ES|QL rule for the destination chosen above, to narrow and create">{{ icon('plus', '14') }}<span>Create rule</span></button>
+          {% endif %}
+          <a name="Open in Hunting" role="menuitem" class="rh-more__item"
+             href="/hunting?hunt={{ (h.source ~ '/' ~ h.hunt_id) | urlencode }}{% if technique_ids %}&technique={{ technique_ids[0] | urlencode }}{% endif %}"
+             title="Open it on the Hunting page">{{ icon('external-link', '14') }}<span>Open in Hunting</span></a>
+        </span>
+      </span>
+    </span>
+    <div class="hunt-save-result" id="sm-hunt-save-{{ _slot }}" aria-live="polite"></div>
+    <div class="hunt-run-result" id="sm-hunt-result-{{ _slot }}" aria-live="polite"></div>
+  </li>
+  {% endfor %}
+</ul>
+{% elif query %}
+<p class="text-muted sm-muted">No hunts match “{{ query }}”.</p>
+{% else %}
+<p class="text-muted sm-muted">{% if technique_ids %}No hunts found for {{ technique_ids | join(', ') }}.{% else %}Map an ATT&amp;CK technique to see suggested hunts.{% endif %}</p>
+{% endif %}

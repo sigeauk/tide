@@ -1,0 +1,54 @@
+# The detection rules a simulation of this scenario runs in its own Kibana space, as the demo starts
+# them: three that work, one left disabled, and one written for data this network hasn't. Each rule's
+# index patterns are narrowed to the simulation's own data streams (logs-*-<its namespace>). See
+# sim/scenarios/demo/rules.toml for the keys. Four steps start with no rule: the presenter adds two from
+# Elastic's library, one from Sigma's, and covers the rogue device with a hunt and a rule made from it
+# (Elastic's own rule for it needs stack 9.4).
+
+# Works: the look round.
+[[rule]]
+source = "elastic"
+rule_id = "0c7ca5c2-728d-4ad9-b1c5-bbba83ecb1f4"
+name = "Peripheral Device Discovery"
+covers = "Drives and domain admins listed"
+
+# Works: a logon of type 9 by seclogo with Negotiate. Sigma lists "runas /netonly" as its false positive;
+# here it is the attack. (Elastic's Potential Pass-the-Hash is a new terms rule, which a simulation can't run.)
+[[rule]]
+source = "sigma"
+rule_id = "192a0330-c20b-4356-90b6-7b7049ae0b87"
+name = "Successful Overpass the Hash Attempt"
+covers = "A service account's captured password used"
+
+# Works: the log cleared.
+[[rule]]
+source = "elastic"
+rule_id = "d331bbe2-6db4-4941-80a5-8270db72eb61"
+name = "Clearing Windows Event Logs"
+covers = "Security log cleared"
+
+# Left disabled: tested once, too many alerts from the backup job then, never switched back on.
+[[rule]]
+source = "sigma"
+rule_id = "855bc8b5-2ae8-402e-a9ed-b889e6df1900"
+name = "Copy From Or To Admin Share Or Sysvol Folder"
+covers = "Design drawings copied from the file server's admin share"
+enabled = false
+
+# Can't work: written for Elastic Defend's file events, which this network hasn't (its endpoints run
+# Sysmon), so its index pattern matches nothing. The query is right for Sysmon's events.
+[[rule]]
+source = "custom"
+rule_id = "6f0c52d4-3a8e-4b8d-9f61-2d7e5b1c9a47"
+name = "Archive written to removable drive"
+covers = "Archive written to the USB"
+description = "An archive (7z, zip or rar) created on a removable drive's letter: data leaving on a USB stick."
+type = "eql"
+language = "eql"
+query = 'file where event.type == "creation" and file.path : ("D:\\*", "E:\\*", "F:\\*") and file.extension : ("7z", "zip", "rar")'
+index = ["logs-endpoint.events.file-*"]
+severity = "high"
+risk_score = 73
+techniques = ["T1052.001"]
+tactic = "Exfiltration"
+tags = ["Domain: Endpoint"]

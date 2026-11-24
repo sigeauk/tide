@@ -618,6 +618,9 @@ LABELS = {
     "Port": "IpPort", "Client Address": "IpAddress", "Client Port": "IpPort", "Source Address": "IpAddress",
     "Source Workstation": "Workstation", "Caller Workstation": "Workstation",
     "Logon Process": "LogonProcessName", "Authentication Package": "AuthenticationPackageName",
+    # A device event's (6416, 6419 to 6424) "Device Name" is its DeviceDescription in Windows' own event data.
+    "Device Name": "DeviceDescription", "Device ID": "DeviceId", "Class ID": "ClassId", "Class Name": "ClassName",
+    "Vendor IDs": "VendorIds", "Compatible IDs": "CompatibleIds", "Location Information": "LocationInformation",
     "Transited Services": "TransmittedServices", "Package Name (NTLM only)": "LmPackageName",
     "Key Length": "KeyLength", "Failure Reason": "FailureReason", "Status": "Status",
     "Sub Status": "SubStatus", "Failure Code": "Status", "Error Code": "Status",

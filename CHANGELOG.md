@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [7.1.3] - 2026-11-24
+
+### Added
+- **A second demo simulation: an air-gapped network.** **Simulations → Run** offers *TIDE demo: USB, insider and rogue device*, with no questions and only the attack's events: a contractor's USB stick, a Raspberry Pi answering DHCP on the network, and drawings carried out on the stick. Its rules start disabled, unable to work or missing, for you to fix in TIDE with rules from Elastic's and Sigma's libraries and, for the rogue device, a hunt and a rule made from it. The **Simulations** guide says how to run it.
+- **Hunt a technique from its window.** A baseline technique's window has a **Hunting** section beside **Sigma rules** and **Elastic rules**: Elastic's hunting queries and SigmaHQ's threat-hunting rules for its ATT&CK techniques, to look for it where no rule alerts. **Run** one on a destination, the system's own first, and see what it finds there, or **Save to Kibana** to open it in Discover. They search the destination's default index pattern. A hunt counts as coverage only once added, as below.
+- **A hunt as coverage, and a rule from a hunt.** A technique no rule catches can be covered by a hunt someone runs: **Add as coverage** on one of the library's under **Hunting**, or **Add coverage** with the **Hunt** type for an ES|QL query of your own. Its card shows when it last ran and what it found, **Run** runs it again, and each run goes in the technique's history. **Create rule**, on a hunt's card, under **Hunting** and on the **Hunting** page, opens the rule form with its query as an ES|QL rule, to narrow and create.
+- **Use a destination's default index when deploying a rule.** A rule deployed from Elastic's or Sigma's library comes with its own index patterns, which often search every namespace on the SIEM. Under **Index patterns**, **Use the default index** puts the destination's default index in their place, and unticking it brings them back. Editing a rule offers it too. The demo simulation's script uses it.
+
+### Fixed
+- **Sigma's hunts on Windows paths run.** A Sigma rule converted to ES|QL wrote a backslash in a path the way Elasticsearch reads as something else, so it refused the query ("Invalid pattern for LIKE"), or a path ending in a backslash matched the wrong thing. About a third of SigmaHQ's threat-hunting rules on **Hunting** didn't run. They do now, and so does any Sigma rule converted to ES|QL.
+- **A hunt says which fields the data hasn't.** Where none of the indexes a hunt reads has a field it uses, Elasticsearch refuses the query, and **Hunting** showed it as failed. It now says there was nothing to search, and names the fields.
+- **A simulation's Windows device events carry Windows' own field names.** A replayed "new external device recognised" event (and the other device events) named the device's name DeviceName; Windows, and Sigma's rules, call it DeviceDescription, so a rule reading it now finds it.
+- **Hunting's settings line up.** The **Index pattern** box sat lower and was shorter than the choices beside it; every control on the row is now the same height, as on **Sigma Rules** and **Elastic Rules**.
+- **Hunting's saved searches open in Discover.** A hunt saved with **Save to Kibana** was saved, but opening it in Kibana's Discover failed with "Cannot read properties of undefined (reading 'id')". It now opens on its query. Save a hunt again to replace a copy saved before.
+
 ## [7.1.2] - 2026-11-24
 
 ### Added

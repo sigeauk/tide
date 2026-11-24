@@ -130,6 +130,26 @@
           {% endif %}
         </div>
 
+        {# Hunting (#130): the library's hunts suggested from this technique's ATT&CK ids, or any the
+           search finds, to look for it where no rule alerts: run here, or saved to Kibana. Never coverage. #}
+        <div class="rm-panel" data-fold="tw-hunts" data-section="hunts" data-section-label="Hunting">
+          <div class="rm-panel__head">
+            {{ collapse_ctl('Hunting') }}
+            <h3 class="rm-panel__title">Hunting</h3>
+            {% if not new %}{{ drag_ctl('Hunting') }}{% endif %}
+          </div>
+          {% if new %}
+          <p class="rm-empty">Suggested from its ATT&amp;CK techniques once it is created.</p>
+          {% else %}
+          <input type="search" id="sm-hunt-search" class="form-input sm-sigma__search" name="q" placeholder="Search hunts…"
+                 aria-label="Search hunts" hx-get="{{ step_url }}/hunts" hx-trigger="input changed delay:300ms, search"
+                 hx-target="#sm-hunt-candidates" hx-swap="innerHTML">
+          <div id="sm-hunt-candidates" hx-get="{{ step_url }}/hunts" hx-trigger="load" hx-swap="innerHTML">
+            {{ loading_state("Looking for hunts…", inline=true) }}
+          </div>
+          {% endif %}
+        </div>
+
         {# Risks: copied to each system the template is applied to, as its starting point. #}
         <div class="rm-panel" data-fold="tw-risks" data-section="risks" data-section-label="Risks">
           <div class="rm-panel__head">

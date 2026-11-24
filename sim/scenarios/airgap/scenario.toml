@@ -1,0 +1,24 @@
+# A scenario for showing TIDE rather than testing players: it has no questions. An insider on an air-gapped
+# network, with a USB stick and a rogue device, and a client that starts in a believable bad state: a gap
+# accepted for a reason that's no longer true, rules that look fine in Kibana but can't work, and steps
+# with no rule at all, one of them with no rule in Elastic's or Sigma's library for this data, which a
+# hunt covers until a rule is written. The presenter fixes it all in TIDE, then Replay data sends the
+# same data again and every fixed rule fires. The folder's name is its id.
+
+title = "TIDE demo: USB, insider and rogue device"   # short, for lists
+date = "12 March 2026"
+environment = "halcyon-marine"            # whose network the logs come from (made up)
+source = "Events made for the demo (test/sim_airgap_events.py): no noise, only the attack's"
+licence = "CC0-1.0"
+
+# The attack, in original time (UTC): a contractor's USB stick on ENG-WS07, a DLL run from it, a look round,
+# a Raspberry Pi answering DHCP, svc_eng's captured password used, the Typhoon drawings copied from FS01,
+# archived with a password, written to the USB, and the Security log cleared, 09:01 to 09:12.
+window = ["2026-03-12T08:55:00Z", "2026-03-12T09:20:00Z"]
+
+# Nothing either side of the window, and no noise: the demo needs only the attack's events.
+lead = "0m"
+
+# The insider's stick, tools and archive, and the rogue device.
+attacker = ["4C530001231107105165", "Drawings.lnk", "E:\\.tools", "viewer.dll", "7za.exe", "backup.7z",
+            "10.40.12.250", "B8-27-EB-4C-19-A2", "raspberrypi"]

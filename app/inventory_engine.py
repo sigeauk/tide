@@ -3587,8 +3587,10 @@ STEP_CATEGORIES = [
     ("email", "Email"), ("secops", "SecOps"), ("ot_ics", "OT/ICS"),
 ]
 # Non-alerting coverage a technique can have on a system, besides mapped rules: each is watched,
-# but nothing alerts -- a person has to look. Any one of them makes the technique covered.
-COVERAGE_KINDS = [("dashboard", "Dashboard"), ("report", "Report"), ("log", "Log")]
+# but nothing alerts -- a person has to look. Any one of them makes the technique covered. A hunt
+# (#130) is a library hunt or the client's own ES|QL query, run from its card.
+COVERAGE_KINDS = [("dashboard", "Dashboard"), ("report", "Report"), ("log", "Log"), ("hunt", "Hunt")]
+HUNT_SOURCES = {"elastic": "Elastic hunt", "sigma": "Sigma hunt"}
 
 
 def _risk_fields(values) -> Dict[str, str]:
@@ -3674,50 +3676,74 @@ def update_step_risks(step_id: str, system_id: str, *, priority: str, category: 
 
 
 def get_step_coverage(step_ids: List[str]) -> Dict[str, List[Dict]]:
-    """``step_id`` -> its dashboards, reports and logs, oldest first. Empty for a tenant DB that
-    has not got the table yet."""
+    """``step_id`` -> its dashboards, reports, logs and hunts, oldest first. A hunt also has its
+    ``hunt_ref`` (a library hunt, "elastic/<id>" or "sigma/<id>"), ``hunt_query_no``, ``query`` (the
+    client's own ES|QL), ``source_label`` and its last run (``last_run_at``, ``last_run_hits``: None
+    when there was nothing to search, ``last_run_on``). Empty for a tenant DB that has not got the
+    table yet; a table from before a hunt could be coverage (migration 116) gives its dashboards,
+    reports and logs, never nothing."""
     if not step_ids:
         return {}
     ph = ",".join("?" for _ in step_ids)
     out: Dict[str, List[Dict]] = {}
+    base = "id, step_id, kind, title, url, rationale, created_by, created_at"
     with _get_conn() as conn:
-        try:
-            rows = conn.execute(
-                f"SELECT id, step_id, kind, title, url, rationale, created_by, created_at FROM step_coverage "
-                f"WHERE step_id IN ({ph}) ORDER BY created_at, title", list(step_ids),
-            ).fetchall()
-        except Exception:
+        rows = None
+        for columns in (base + ", hunt_ref, hunt_query_no, query, last_run_at, last_run_hits, last_run_on",
+                        base + ", '', 0, '', NULL, NULL, ''"):
+            try:
+                rows = conn.execute(f"SELECT {columns} FROM step_coverage WHERE step_id IN ({ph}) "
+                                    "ORDER BY created_at, title", list(step_ids)).fetchall()
+                break
+            except Exception:
+                continue
+        if rows is None:
             return {}
     labels = dict(COVERAGE_KINDS)
-    for cid, sid, kind, title, url, why, by, at in rows:
-        out.setdefault(sid, []).append({"id": cid, "kind": kind, "kind_label": labels.get(kind, kind), "title": title,
-                                        "url": url or "", "rationale": why or "", "created_by": by, "created_at": at})
+    for cid, sid, kind, title, url, why, by, at, ref, query_no, query, run_at, hits, run_on in rows:
+        out.setdefault(sid, []).append({
+            "id": cid, "kind": kind, "kind_label": labels.get(kind, kind), "title": title, "url": url or "",
+            "rationale": why or "", "created_by": by, "created_at": at, "hunt_ref": ref or "",
+            "hunt_query_no": query_no or 0, "query": query or "",
+            "source_label": HUNT_SOURCES.get((ref or "").split("/")[0], "Your query") if kind == "hunt" else "",
+            "last_run_at": run_at, "last_run_hits": hits, "last_run_on": run_on or ""})
     return out
 
 
-def _coverage_fields(kind: str, title: str, url: str, rationale: str) -> Tuple[str, str, str]:
-    """A dashboard, report or log's title, link and rationale, cleaned. It needs a title; the
-    link is optional and must be a web address."""
+def _coverage_fields(kind: str, title: str, url: str, rationale: str, query: str = "",
+                     hunt_ref: str = "") -> Tuple[str, str, str, str]:
+    """A dashboard, report, log or hunt's title, link, rationale and (a hunt of the client's own) ES|QL
+    query, cleaned. It needs a title; the link is optional and must be a web address. A hunt is a
+    library hunt (``hunt_ref``) or an ES|QL query."""
     title, url, rationale = (title or "").strip(), (url or "").strip(), (rationale or "").strip()
+    query = (query or "").strip() if kind == "hunt" and not hunt_ref else ""
     if kind not in dict(COVERAGE_KINDS):
-        raise ValueError("Choose a dashboard, report or log.")
+        raise ValueError("Choose a dashboard, report, log or hunt.")
     if not title:
         raise ValueError("Give it a title, so it can be told apart from the others.")
     if url and not re.match(r"^https?://", url, re.I):
         raise ValueError("The link must be a web address starting http:// or https://.")
-    return title, url, rationale
+    if kind == "hunt" and hunt_ref and hunt_ref.split("/")[0] not in HUNT_SOURCES:
+        raise ValueError("That isn't one of the hunts built into TIDE.")
+    if kind == "hunt" and not hunt_ref and not re.match(r"(?is)\s*from\s+\S", query):
+        raise ValueError("Give its ES|QL query, starting FROM and the index patterns it searches.")
+    return title, url, rationale, query
 
 
 def add_step_coverage(step_id: str, system_id: str, *, kind: str, title: str, url: str = "", rationale: str = "",
+                      query: str = "", hunt_ref: str = "", hunt_query_no: int = 0,
                       actor: str = None, client_id: str = None) -> None:
-    """Record a dashboard, report or log watching this technique on this system."""
-    title, url, rationale = _coverage_fields(kind, title, url, rationale)
+    """Record a dashboard, report, log or hunt watching this technique on this system."""
+    hunt_ref = (hunt_ref or "").strip() if kind == "hunt" else ""
+    title, url, rationale, query = _coverage_fields(kind, title, url, rationale, query, hunt_ref)
     from app.services.database import DatabaseService
     with _get_conn() as conn:
-        conn.execute(DatabaseService.STEP_COVERAGE_DDL)
+        DatabaseService.add_step_hunt_columns(conn)
         conn.execute(
-            "INSERT INTO step_coverage (step_id, system_id, kind, title, url, rationale, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [step_id, system_id, kind, title, url, rationale, actor],
+            "INSERT INTO step_coverage (step_id, system_id, kind, title, url, rationale, created_by, hunt_ref, "
+            "hunt_query_no, query) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [step_id, system_id, kind, title, url, rationale, actor, hunt_ref, int(hunt_query_no or 0) if hunt_ref else 0,
+             query],
         )
         _record_technique_event(conn, "coverage_added", step_id=step_id, system_id=system_id,
                                 detail=f"{dict(COVERAGE_KINDS)[kind]}: {title}", reason=rationale or None,
@@ -3725,34 +3751,65 @@ def add_step_coverage(step_id: str, system_id: str, *, kind: str, title: str, ur
 
 
 def update_step_coverage(coverage_id: str, step_id: str, system_id: str, *, kind: str, title: str, url: str = "",
-                         rationale: str = "", actor: str = None, client_id: str = None) -> bool:
-    """Change one dashboard, report or log on this technique on this system, recording what
-    changed. False if it is not on this technique."""
-    title, url, rationale = _coverage_fields(kind, title, url, rationale)
+                         rationale: str = "", query: str = "", actor: str = None, client_id: str = None) -> bool:
+    """Change one dashboard, report, log or hunt on this technique on this system, recording what
+    changed. A hunt stays a hunt, and a library hunt the hunt it is; a hunt of the client's own can
+    have its query changed. False if it is not on this technique."""
     labels = dict(COVERAGE_KINDS)
     with _get_conn() as conn:
         row = conn.execute(
-            "SELECT kind, title, url, rationale FROM step_coverage WHERE id = ? AND step_id = ? AND system_id = ?",
+            "SELECT kind, title, url, rationale, hunt_ref, query FROM step_coverage WHERE id = ? AND step_id = ? AND system_id = ?",
             [coverage_id, step_id, system_id],
         ).fetchone()
         if not row:
             return False
+        if (row[0] == "hunt") != (kind == "hunt"):
+            raise ValueError("A hunt stays a hunt, and a dashboard, report or log can't become one: add it anew.")
+        title, url, rationale, query = _coverage_fields(kind, title, url, rationale, query, row[4] or "")
         changed = [name for name, old, new in (
             ("type", row[0], kind), ("title", row[1], title), ("link", row[2] or "", url), ("rationale", row[3] or "", rationale),
+            ("query", row[5] or "", query),
         ) if old != new]
         if not changed:
             return True
-        conn.execute("UPDATE step_coverage SET kind = ?, title = ?, url = ?, rationale = ? WHERE id = ?",
-                     [kind, title, url, rationale, coverage_id])
+        conn.execute("UPDATE step_coverage SET kind = ?, title = ?, url = ?, rationale = ?, query = ? WHERE id = ?",
+                     [kind, title, url, rationale, query, coverage_id])
         _record_technique_event(conn, "coverage_edited", step_id=step_id, system_id=system_id,
                                 detail=f"{labels[kind]}: {title} (changed {', '.join(changed)})",
                                 reason=rationale or None, actor=actor, client_id=client_id)
     return True
 
 
+def get_step_coverage_item(coverage_id: str, step_id: str, system_id: str) -> Optional[Dict]:
+    """One dashboard, report, log or hunt on this technique on this system (as ``get_step_coverage``
+    gives it), or None."""
+    with _get_conn() as conn:
+        found = conn.execute("SELECT 1 FROM step_coverage WHERE id = ? AND step_id = ? AND system_id = ?",
+                             [coverage_id, step_id, system_id]).fetchone()
+    if not found:
+        return None
+    return next((c for c in get_step_coverage([step_id]).get(step_id, []) if c["id"] == coverage_id), None)
+
+
+def record_hunt_run(coverage_id: str, step_id: str, system_id: str, *, hits: Optional[int], on: str,
+                    actor: str = None, client_id: str = None) -> None:
+    """A hunt on this technique was run: when, how many hits (None: there was nothing to search) and
+    where, on its card and in the technique's history."""
+    with _get_conn() as conn:
+        row = conn.execute("SELECT title FROM step_coverage WHERE id = ? AND step_id = ? AND system_id = ? AND kind = 'hunt'",
+                           [coverage_id, step_id, system_id]).fetchone()
+        if not row:
+            return
+        conn.execute("UPDATE step_coverage SET last_run_at = now(), last_run_hits = ?, last_run_on = ? WHERE id = ?",
+                     [hits, on, coverage_id])
+        found = "nothing to search" if hits is None else f"{hits} hit{'' if hits == 1 else 's'}"
+        _record_technique_event(conn, "hunt_run", step_id=step_id, system_id=system_id,
+                                detail=f"Hunt: {row[0]}, on {on}: {found}", actor=actor, client_id=client_id)
+
+
 def remove_step_coverage(coverage_id: str, step_id: str, system_id: str, actor: str = None,
                          client_id: str = None) -> bool:
-    """Remove one dashboard, report or log from this technique on this system."""
+    """Remove one dashboard, report, log or hunt from this technique on this system."""
     with _get_conn() as conn:
         row = conn.execute(
             "SELECT kind, title FROM step_coverage WHERE id = ? AND step_id = ? AND system_id = ?",
@@ -4517,7 +4574,7 @@ def _record_technique_event(conn, event: str, *, step_id: str = None, system_id:
 
 
 _EVENT_KIND = {
-    "rule_mapped": "rules", "rule_unmapped": "rules", "rule_relinked": "rules", "coverage_added": "rules", "coverage_edited": "rules", "coverage_removed": "rules",
+    "rule_mapped": "rules", "rule_unmapped": "rules", "rule_relinked": "rules", "coverage_added": "rules", "coverage_edited": "rules", "coverage_removed": "rules", "hunt_run": "rules",
     "gap_added": "gaps", "gap_removed": "gaps", "na_added": "gaps", "na_removed": "gaps",
     "gap_edited": "gaps", "na_edited": "gaps",
     "sigma_dismissed": "technique", "sigma_restored": "technique",

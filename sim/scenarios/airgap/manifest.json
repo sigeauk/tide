@@ -1,0 +1,51 @@
+{
+  "about": "Written by the generator of the air-gap demo's events: what each log file holds. Edit the generator (test/sim_airgap_events.py), not this.",
+  "built_from": "Events made for the demo (CC0-1.0). No noise: only the attack's events.",
+  "span": [
+    "2026-03-12T08:55:00.000Z",
+    "2026-03-12T09:20:00.000Z"
+  ],
+  "events": {
+    "logs": 31,
+    "noise": 0
+  },
+  "in_window": {
+    "logs": 31,
+    "noise": 0
+  },
+  "files": [
+    {
+      "file": "logs/sysmon.ndjson.gz",
+      "source": "sysmon",
+      "format": "ecs",
+      "events": 21,
+      "in_window": 21,
+      "first": "2026-03-12T09:02:10.733Z",
+      "last": "2026-03-12T09:12:30.811Z",
+      "bytes": 7178,
+      "clock_offset_seconds": 0.0
+    },
+    {
+      "file": "logs/security.ndjson.gz",
+      "source": "security",
+      "format": "ecs",
+      "events": 3,
+      "in_window": 3,
+      "first": "2026-03-12T09:02:10.716Z",
+      "last": "2026-03-12T09:12:30.795Z",
+      "bytes": 1872,
+      "clock_offset_seconds": 0.0
+    },
+    {
+      "file": "logs/stream-dhcp.ndjson.gz",
+      "source": "stream-dhcp",
+      "format": "ecs",
+      "events": 7,
+      "in_window": 7,
+      "first": "2026-03-12T09:01:12.004Z",
+      "last": "2026-03-12T09:05:02.347Z",
+      "bytes": 999,
+      "clock_offset_seconds": 0.0
+    }
+  ]
+}

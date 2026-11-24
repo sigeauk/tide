@@ -152,6 +152,12 @@ def run(siem: Dict[str, Any], query: str, kind: str, lookback: str = "", index: 
         if missing:     # not an error: this SIEM simply holds no such data
             out.update(ok=True, note=f"No index on this SIEM matches {missing.group(1)}, so there was nothing to search.")
             return out
+        fields = list(dict.fromkeys(re.findall(r"Unknown column \[([^\]]+)\]", text)))
+        if fields:      # nor this: ES|QL refuses a field no index it reads maps, where a search would find nothing
+            out.update(ok=True, note=(f"No index it searches maps {', '.join(fields)}, so it can't find anything "
+                                      "here. Its data may be named differently on this SIEM (another Sigma pipeline), "
+                                      "or not collected."))
+            return out
         out["error"] = f"Elasticsearch refused the query ({resp.status_code}): {text}"
         return out
     data = resp.json() or {}
@@ -225,7 +231,8 @@ def save_search(siem: Dict[str, Any], space: str, saved_id: str, title: str, des
     attributes: Dict[str, Any] = {
         "title": title[:250], "description": (description or "")[:2000],
         "columns": [], "sort": [], "grid": {}, "hideChart": False, "isTextBasedQuery": True,
-        "kibanaSavedObjectMeta": {"searchSourceJSON": json.dumps({"query": {"esql": query}, "filter": []})},
+        "kibanaSavedObjectMeta": {"searchSourceJSON": json.dumps(
+            {"query": {"esql": query}, "filter": [], "index": elastic_helper.esql_data_view(query)})},
         "timeRestore": bool(lookback),
     }
     if lookback:

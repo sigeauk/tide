@@ -97,7 +97,7 @@ A **destination** is one space of one SIEM, linked to the client with a name and
 
 1. On the client's page, under **Integrations**, open the **⋮** on **Linked SIEMs** and choose **Manage SIEMs**.
 2. Under **Add SIEM**, pick the SIEM, **Name** the destination, and give the Kibana **space** ID (blank for Kibana's default space). The space ID is the space's real ID in Kibana, not the name. For a Wazuh SIEM, give one of its agent groups instead, picked from the ones the manager has (blank, or `*`, for every agent): the client sees only those agents. Two clients can share one Wazuh manager this way, each with its own group.
-3. Optionally set a **Default index pattern**, which a rule created there starts with (Elastic only). Without one, a new rule starts with the index patterns the space searches by default in Kibana.
+3. Optionally set a **Default index pattern**, which a rule created there starts with, and which **Use the default index** puts in place of a deployed or edited rule's own (Elastic only). Without one, a new rule starts with the index patterns the space searches by default in Kibana.
 4. Click **Link SIEM**. Link as many spaces of as many SIEMs as the client uses.
 
 **Edit**, in the **⋮** beside a destination, changes its **Name**, **Default index** and **Card colour** (the colour on its rules' cards and tags). Renaming a destination never touches its rules, scores or validation. A Wazuh destination has **Include every Wazuh rule** in place of a default index: off, it holds the rules with an ATT&CK technique and your own; on, every rule Wazuh has (thousands more), from the next sync.

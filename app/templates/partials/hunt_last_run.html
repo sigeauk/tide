@@ -1,0 +1,13 @@
+{#
+  A hunt on a technique's Coverage (#130): when it last ran, where, and what it found. On its card,
+  and swapped in (oob) by the card's Run. Context: w (get_step_coverage's hunt), oob.
+#}
+<span class="text-muted sm-hunt__last" id="sm-hunt-last-{{ w.id }}"{% if oob %} hx-swap-oob="true"{% endif %}
+      title="Each run is kept in the technique's history">
+  {%- if w.last_run_at -%}
+  Last run {{ w.last_run_at.strftime('%Y-%m-%d %H:%M') }}{% if w.last_run_on %} on {{ w.last_run_on }}{% endif %}:
+  {% if w.last_run_hits is none %}nothing to search{% else %}{{ w.last_run_hits }} hit{{ '' if w.last_run_hits == 1 else 's' }}{% endif %}
+  {%- else -%}
+  Not run yet
+  {%- endif -%}
+</span>

@@ -36,6 +36,7 @@ import json
 import uuid
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote, urlencode
+from html import escape
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from app.api.deps import ActiveClient, CurrentUser, RequireUser
@@ -2365,6 +2366,75 @@ def api_system_technique_elastic(request: Request, system_id: str, step_id: str,
     return _elastic_suggestions(request, user, step_id, q, f"/api/systems/{system_id}/steps/{step_id}")
 
 
+@router.get("/api/systems/{system_id}/steps/{step_id}/hunts", response_class=HTMLResponse)
+def api_system_technique_hunts(request: Request, system_id: str, step_id: str, user: CurrentUser,
+                               client_id: ActiveClient, q: str = Query("")):
+    """Hunts for a system's technique (see _hunt_suggestions)."""
+    _system_step_or_404(system_id, step_id, client_id)
+    return _hunt_suggestions(request, user, client_id, step_id, q, system_id)
+
+
+@router.get("/api/baselines/tactics/{tactic_id}/hunts", response_class=HTMLResponse)
+def api_template_technique_hunts(request: Request, tactic_id: str, user: CurrentUser, client_id: ActiveClient,
+                                 q: str = Query("")):
+    """Hunts for a template's technique (see _hunt_suggestions)."""
+    _template_step_or_404(tactic_id, client_id)
+    return _hunt_suggestions(request, user, client_id, tactic_id, q)
+
+
+def _hunt_suggestions(request: Request, user, client_id: str, step_id: str, q: str, system_id: str = ""):
+    """The library's hunts (Elastic's hunting queries, SigmaHQ's threat-hunting rules) for a
+    technique from its ATT&CK ids, or, with ``q``, any that match (#130): a way to look for it where
+    no rule alerts. Each runs on one of the client's destinations, a system's own first, through the
+    Hunting page's Run and Save to Kibana. Never coverage."""
+    from app.services import elastic_rules as er
+    from app.services import hunt_runner, hunting
+    from app.services.database import get_database_service
+    db = get_database_service()
+    step = get_playbook_step(step_id)
+    ids = [t.technique_id for t in step.techniques] or ([step.technique_id] if step.technique_id else [])
+    q = q.strip()
+    hunts, seen = [], set()
+    with db.get_shared_connection() as conn:
+        if any(hunting.indexes_ready(conn)):
+            batches = [hunting.search(conn, q=q, limit=50)[0]] if q else [
+                hunting.search(conn, technique=tid, limit=25)[0] for tid in ids]
+            for batch in batches:
+                for h in batch:
+                    if (h["source"], h["hunt_id"]) in seen:
+                        continue
+                    seen.add((h["source"], h["hunt_id"]))
+                    if h["source"] == "elastic":    # its first query that runs on the SIEM (not Osquery)
+                        kinds = [hunt_runner.query_kind(x) for x in (er.get_hunt(conn, h["hunt_id"]) or {}).get("queries") or []]
+                        h["query_no"] = next((i for i, k in enumerate(kinds) if k != "osquery"), None)
+                        h["kind"] = kinds[h["query_no"]] if h["query_no"] is not None else "osquery"
+                    else:                           # converted to ES|QL as it runs
+                        h["query_no"], h["kind"] = 0, "esql"
+                    hunts.append(h)
+    dests = _hunt_destinations(db, client_id, system_id)
+    return _render("partials/technique_hunts.html", request, {
+        "hunts": hunts[:50 if q else 25], "query": q, "technique_ids": ids, "step_id": step_id,
+        "system_id": system_id, "technique_url": (f"/api/systems/{system_id}/steps/{step_id}" if system_id
+                                                  else f"/api/baselines/tactics/{step_id}"),
+        "can_add": bool(system_id) and (not user or user.can_write("page:systems")),
+        "run": {"destinations": dests, "lookbacks": hunt_runner.LOOKBACKS, "lookback": "24h",
+                "can_run": not user or user.can_read("page:hunting"),
+                "can_save": not user or user.can_write("page:hunting")},
+    })
+
+
+def _hunt_destinations(db, client_id: str, system_id: str = "") -> list:
+    """The client's destinations a hunt can run on (``hunt_runner.destinations_for``), a system's own
+    (its SIEM coverage) first."""
+    from app.services import hunt_runner
+    dests = hunt_runner.destinations_for(db, client_id)
+    if system_id:
+        from app.inventory_engine import get_system_coverage_destinations
+        own = set(get_system_coverage_destinations(system_id, client_id=client_id))
+        dests.sort(key=lambda d: (d["siem_id"], d["space"]) not in own)
+    return dests
+
+
 def _elastic_suggestions(request: Request, user, step_id: str, q: str, technique_url: str):
     """Elastic's bundled rules suggested for a technique from its ATT&CK techniques, or, with
     ``q``, any that match. Deprecated rules are left out. Potential rules -- never coverage; each
@@ -2445,18 +2515,20 @@ def api_system_technique_risks(
 def api_add_technique_coverage(
     request: Request, system_id: str, step_id: str, user: RequireUser, client_id: ActiveClient,
     kind: str = Form(...), title: str = Form(""), url: str = Form(""), rationale: str = Form(""),
+    query: str = Form(""), hunt_ref: str = Form(""), hunt_query_no: int = Form(0),
 ):
-    """Record a dashboard, report or log watching this technique on this system (non-alerting
-    coverage), from Add coverage. A refused entry comes back with the form open and the reason."""
+    """Record a dashboard, report, log or hunt watching this technique on this system (non-alerting
+    coverage), from Add coverage, or a library hunt from the window's Hunting section (``hunt_ref``).
+    A refused entry comes back with the form open and the reason."""
     from app.inventory_engine import add_step_coverage
     _system_step_or_404(system_id, step_id, client_id)
     try:
-        add_step_coverage(step_id, system_id, kind=kind, title=title, url=url, rationale=rationale,
-                          actor=_actor(user), client_id=client_id)
+        add_step_coverage(step_id, system_id, kind=kind, title=title, url=url, rationale=rationale, query=query,
+                          hunt_ref=hunt_ref, hunt_query_no=hunt_query_no, actor=_actor(user), client_id=client_id)
     except ValueError as exc:
         return _step_modal_response(request, system_id, step_id, client_id,
                                     coverage_error={"message": str(exc), "kind": kind, "title": title,
-                                                    "url": url, "rationale": rationale})
+                                                    "url": url, "rationale": rationale, "query": query})
     resp = _step_modal_response(request, system_id, step_id, client_id)
     resp.headers["HX-Trigger"] = "stepsChanged"
     return resp
@@ -2466,18 +2538,19 @@ def api_add_technique_coverage(
 def api_update_technique_coverage(
     request: Request, system_id: str, step_id: str, coverage_id: str, user: RequireUser, client_id: ActiveClient,
     kind: str = Form(...), title: str = Form(""), url: str = Form(""), rationale: str = Form(""),
+    query: str = Form(""),
 ):
-    """Change one dashboard, report or log on this technique on this system. A refused change
+    """Change one dashboard, report, log or hunt on this technique on this system. A refused change
     comes back with that card's form open and the reason."""
     from app.inventory_engine import update_step_coverage
     _system_step_or_404(system_id, step_id, client_id)
     try:
         found = update_step_coverage(coverage_id, step_id, system_id, kind=kind, title=title, url=url,
-                                     rationale=rationale, actor=_actor(user), client_id=client_id)
+                                     rationale=rationale, query=query, actor=_actor(user), client_id=client_id)
     except ValueError as exc:
         return _step_modal_response(request, system_id, step_id, client_id,
                                     coverage_error={"id": coverage_id, "message": str(exc), "kind": kind,
-                                                    "title": title, "url": url, "rationale": rationale})
+                                                    "title": title, "url": url, "rationale": rationale, "query": query})
     if not found:
         raise HTTPException(status_code=404, detail="Coverage not found on this technique")
     resp = _step_modal_response(request, system_id, step_id, client_id)
@@ -2489,7 +2562,7 @@ def api_update_technique_coverage(
 def api_remove_technique_coverage(
     request: Request, system_id: str, step_id: str, coverage_id: str, user: RequireUser, client_id: ActiveClient,
 ):
-    """Remove one dashboard, report or log from this technique on this system."""
+    """Remove one dashboard, report, log or hunt from this technique on this system."""
     from app.inventory_engine import remove_step_coverage
     _system_step_or_404(system_id, step_id, client_id)
     if not remove_step_coverage(coverage_id, step_id, system_id, actor=_actor(user), client_id=client_id):
@@ -2497,6 +2570,93 @@ def api_remove_technique_coverage(
     resp = _step_modal_response(request, system_id, step_id, client_id)
     resp.headers["HX-Trigger"] = "stepsChanged"
     return resp
+
+
+def _technique_hunt(system_id: str, step_id: str, coverage_id: str, client_id: str):
+    """``(hunt card, destinations, the destination's siem row, its value, its label)`` for a hunt on this
+    technique's Coverage; 404 when it isn't one."""
+    from app.inventory_engine import get_step_coverage_item
+    _system_step_or_404(system_id, step_id, client_id)
+    item = get_step_coverage_item(coverage_id, step_id, system_id)
+    if not item or item["kind"] != "hunt":
+        raise HTTPException(status_code=404, detail="Hunt not found on this technique")
+    return item
+
+
+def _hunt_card_query(db, item: dict, index: str):
+    """``(query, kind, converted query, problem)``: a library hunt's query (a Sigma hunt converted to
+    ES|QL over ``index``), or the client's own ES|QL."""
+    from app.api.hunting import _hunt_query
+    if not item["hunt_ref"]:
+        return item["query"], "esql", "", ""
+    source, _, hunt_id = item["hunt_ref"].partition("/")
+    _hunt, query, kind, converted, problem = _hunt_query(db, source, hunt_id, item["hunt_query_no"], "", index)
+    return query, kind, converted, problem
+
+
+@router.post("/api/systems/{system_id}/steps/{step_id}/coverage/{coverage_id}/run", response_class=HTMLResponse)
+def api_run_technique_hunt(
+    request: Request, system_id: str, step_id: str, coverage_id: str, user: RequireUser, client_id: ActiveClient,
+    destination: str = Form(""), lookback: str = Form("24h"),
+):
+    """Run a hunt on this technique's Coverage (#130) on the destination chosen in the window's Hunting
+    section (the system's own first when none is chosen), over its default index, and show what it
+    found. The run (when, how many hits, where) goes on its card and in the technique's history."""
+    from app.inventory_engine import record_hunt_run
+    from app.services import hunt_runner
+    from app.services.database import get_database_service
+    error = lambda text: HTMLResponse(f'<div class="alert alert-danger">{escape(text)}</div>')   # noqa: E731
+    item = _technique_hunt(system_id, step_id, coverage_id, client_id)
+    if user and not user.can_read("page:hunting"):
+        return error("Running hunts needs access to the Hunting page.")
+    db = get_database_service()
+    dests = _hunt_destinations(db, client_id, system_id)
+    destination = destination or (dests[0]["value"] if dests else "")
+    siem, _space = hunt_runner.destination(db, client_id, destination)
+    if not siem:
+        return error("Link a SIEM to this client to run it.")
+    index = str(siem.get("default_index") or "")
+    query, kind, converted, problem = _hunt_card_query(db, item, index)
+    if problem:
+        return error(problem)
+    result = hunt_runner.run(siem, query, kind, lookback, index)
+    on = next((d["label"] for d in dests if d["value"] == destination), siem.get("label") or siem["id"])
+    if result["ok"]:
+        record_hunt_run(coverage_id, step_id, system_id, hits=None if result["note"] else result["total"], on=on,
+                        actor=_actor(user), client_id=client_id)
+        item = _technique_hunt(system_id, step_id, coverage_id, client_id)
+    found = _render("partials/hunt_run_result.html", request, {
+        "result": result, "siem_label": on, "ran_query": converted, "n": f"cov-{coverage_id}",
+        "when": dict(hunt_runner.LOOKBACKS).get(lookback if lookback in dict(hunt_runner.LOOKBACKS) else "", ""),
+    })
+    last = _render("partials/hunt_last_run.html", request, {"w": item, "oob": True})
+    return HTMLResponse(found.body.decode() + last.body.decode())
+
+
+@router.get("/api/systems/{system_id}/steps/{step_id}/coverage/{coverage_id}/rule-form", response_class=HTMLResponse)
+def api_technique_hunt_rule_form(request: Request, system_id: str, step_id: str, coverage_id: str,
+                                 user: RequireUser, client_id: ActiveClient):
+    """Create rule from a hunt on this technique's Coverage (#130): the New rule form as an ES|QL rule
+    with its query, on the system's first destination, with the technique's ATT&CK ids. Its X goes
+    back to the technique."""
+    from app.api.hunting import hunt_rule_form_response
+    from app.services import hunt_runner
+    from app.services.database import get_database_service
+    item = _technique_hunt(system_id, step_id, coverage_id, client_id)
+    db = get_database_service()
+    dests = _hunt_destinations(db, client_id, system_id)
+    siem, _space = hunt_runner.destination(db, client_id, dests[0]["value"] if dests else "")
+    query, kind, _converted, problem = _hunt_card_query(db, item, str((siem or {}).get("default_index") or ""))
+    if problem or kind != "esql":
+        return HTMLResponse('<div class="alert alert-danger">' + escape(
+            problem or "Only an ES|QL query can be made into a rule here.") + "</div>")
+    step = get_playbook_step(step_id)
+    ids = [t.technique_id for t in step.techniques] or ([step.technique_id] if step.technique_id else [])
+    return hunt_rule_form_response(request, db, client_id, user, name=item["title"], query=query,
+                                   description=item["rationale"], techniques=ids,
+                                   origin=f"the hunt {item['title']} on {step.title}",
+                                   scope_pair=dests[0]["value"] if dests else "",
+                                   technique_url=f"/api/systems/{system_id}/steps/{step_id}")
 
 
 def _client_pipelines(client_id: str) -> List[Dict[str, str]]:

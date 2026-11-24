@@ -1290,6 +1290,19 @@ def space_default_index(kibana_url: str, api_key: str, space: str, timeout: floa
         return None
 
 
+def esql_data_view(query: str) -> dict:
+    """The ad hoc data view Discover makes for an ES|QL query, as it keeps it in a saved search: on the
+    query's FROM sources (joined by commas), with @timestamp as its time field, and the id Discover gives
+    it (the SHA-256 of "esql-" and that pattern). Discover reads it on opening the search: without it,
+    "Cannot read properties of undefined (reading 'id')"."""
+    import hashlib
+    m = re.match(r"(?is)\s*FROM\s+([^|]+?)(\s+METADATA[^|]*)?\s*(\||$)", query)
+    pattern = ",".join(s.strip() for s in m.group(1).split(",")) if m else ""
+    return {"id": hashlib.sha256(f"esql-{pattern}".encode()).hexdigest(), "title": pattern, "name": pattern,
+            "timeFieldName": "@timestamp", "type": "esql", "sourceFilters": [], "fieldFormats": {},
+            "runtimeFieldMap": {}, "allowNoIndex": False, "allowHidden": False}
+
+
 def get_data_view_indices(session, base_url, space, rule):
     """Resolve index patterns from Kibana data view metadata for rules that do not carry `index`."""
     data_view = get_data_view(session, base_url, space, rule)

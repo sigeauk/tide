@@ -164,6 +164,7 @@ Click a technique on a system's page or the Baselines page to open its window. A
 | **Coverage** | Everything that catches it on this system |
 | **Hardening checks** | Checks from Wazuh's CIS benchmarks named on it, with how many of the system's devices pass each: mitigation beside its coverage, never counted in it (see [Name hardening checks on a technique](#name-hardening-checks-on-a-technique)) |
 | **Sigma rules**, **Elastic rules** | Rules from the libraries built into TIDE that detect its ATT&CK techniques |
+| **Hunting** | Hunting queries from the libraries built into TIDE that look for its ATT&CK techniques, to run on one of your destinations where no rule alerts |
 | **Risks** | Its priority and category |
 | **MITRE ATT&CK** | The ATT&CK techniques it covers |
 | **How to detect** | MITRE ATT&CK's detection strategy for each of those techniques: for each platform, what to look for, the log sources to read (hover one for what it records) and what to tune. On a system, its own platforms come first and the rest fold under **Other platforms** |
@@ -213,6 +214,8 @@ A configuration check that passes makes a technique harder without detecting it,
 
 Some techniques are covered by a dashboard, a report or a log someone checks, rather than a rule. **Add coverage**, choose the kind (non-alerting), and give it a **Title**, an optional **Link** and a **Rationale** (what it watches, and who looks at it). It counts as covered and is labelled **Non-alerting**.
 
+A technique no rule catches can be covered by a **Hunt** someone runs: one of the library's, with **Add as coverage** in its **⋮** under **Hunting**, or one of your own, with **Add coverage**, the **Hunt** type and its **ES|QL query**. Say in its **Rationale** how often it is run. Its card shows when it last ran, where and what it found; **Run** in its **⋮** runs it on the destination chosen under **Hunting** and shows the hits, and each run goes in the technique's history. **Create rule** opens the rule form with its query as an ES|QL rule, to narrow and create once the hunt has shown what to alert on. Like a dashboard, a hunt counts as covered and is labelled **Non-alerting**.
+
 ### Relink a rule TIDE can't find
 
 When a mapped rule has been deleted, moved or renamed, its card says **Needs relinking**, with why on hover. Choose **Relink** from its **⋮** menu: the rule picker opens, searched by its name. The rule you pick replaces it, keeping its history.
@@ -225,7 +228,7 @@ A rule covers more than one technique, and a rule tagged with an ATT&CK techniqu
 
 ### Use a suggested rule
 
-**Sigma rules** suggests SigmaHQ rules for the technique's ATT&CK techniques; **Convert** opens the rule form with the converted rule, ready to create in your SIEM. **Elastic rules** suggests Elastic's detection rules; **Deploy** puts one in your SIEM. A suggestion never counts as coverage until it is in your SIEM, synced and mapped. See [Sigma, Elastic & Hunting](LIBRARIES.md).
+**Sigma rules** suggests SigmaHQ rules for the technique's ATT&CK techniques; **Convert** opens the rule form with the converted rule, ready to create in your SIEM. **Elastic rules** suggests Elastic's detection rules; **Deploy** puts one in your SIEM. A suggestion never counts as coverage until it is in your SIEM, synced and mapped. **Hunting** suggests Elastic's hunting queries and SigmaHQ's threat-hunting rules for a technique no rule alerts on, or one you want to look into: choose where to **Run on** and over what **Time**, then **Run** one from its **⋮** to see what it finds there, below it, or **Save to Kibana** to open it in Discover. They search the destination's default index pattern, and a Sigma rule is converted to ES|QL first. **Open in Hunting** opens it on the Hunting page, **Add as coverage** records it under **Coverage** as a hunt someone runs (see above), and **Create rule** opens the rule form with an ES|QL one as an ES|QL rule for the destination chosen. A system's own destinations are listed first. A hunt counts as coverage only once added. See [Sigma, Elastic & Hunting](LIBRARIES.md).
 
 ## How a technique's status is decided
 

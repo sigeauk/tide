@@ -812,6 +812,9 @@ def convert_sigma_rule(
         else:
             result = sigma_backend.convert(collection)
 
+        if backend == 'esql':
+            result = [esql_like_escapes(r) if isinstance(r, str) else r
+                      for r in (result if isinstance(result, list) else [result])]
         if isinstance(result, list):
             parts = [json.dumps(r) if isinstance(r, dict) else str(r) for r in result]
             return True, '\n'.join(parts)
@@ -821,6 +824,70 @@ def convert_sigma_rule(
 
     except Exception as exc:
         return False, f"Conversion error: {str(exc)}"
+
+
+_LIKE_AT = re.compile(r'(?i)like\b')
+
+
+def _like_pattern(literal: str) -> str:
+    """One LIKE pattern's string literal (its text between the quotes), escaped as Elasticsearch reads
+    it: a literal backslash is ``\\`` in the pattern (``\\\\`` in the string), and an escaped wildcard
+    ``\\*`` or ``\\?`` (``\\\\*`` in the string)."""
+    out, k = [], 0
+    while k < len(literal):
+        if literal[k] == '\\' and k + 1 < len(literal):
+            nxt = literal[k + 1]
+            out.append('\\\\\\\\' if nxt == '\\' else '\\\\' + nxt if nxt in '*?' else literal[k:k + 2])
+            k += 2
+        else:
+            out.append(literal[k])
+            k += 1
+    return ''.join(out)
+
+
+def esql_like_escapes(query: str) -> str:
+    """pySigma's ES|QL (backend 2.1.1) writes a backslash in a LIKE pattern once, as a string escape
+    (``like "*:\\\\Program Files\\\\*"``, the pattern ``*:\\Program Files\\*``), and an escaped
+    wildcard as a bare ``\\*``. Elasticsearch reads a backslash in a LIKE pattern as an escape, so
+    it refuses the first ("escape character is not followed by special wildcard char"), or, where a
+    path ends ``\\*``, matches a literal ``*``. This writes each LIKE pattern as Elasticsearch needs it
+    (``_like_pattern``); RLIKE, other strings and triple-quoted strings are left as they are.
+    ``test/cicd_hunting_and_sigma_render.py`` fails if pySigma starts writing them right itself."""
+    out, i, n = [], 0, len(query)
+    pending, depth = False, 0      # the next string literal (or a bracketed list of them) is a LIKE pattern
+    while i < n:
+        ch = query[i]
+        if ch == '"':
+            if query.startswith('"""', i):
+                end = query.find('"""', i + 3)
+                end = n if end < 0 else end + 3
+                out.append(query[i:end])
+                i = end
+            else:
+                j = i + 1
+                while j < n and query[j] != '"':
+                    j += 2 if query[j] == '\\' else 1
+                literal = query[i + 1:min(j, n)]
+                out.append('"' + (_like_pattern(literal) if pending else literal) + '"')
+                i = j + 1
+            if pending and depth == 0:
+                pending = False
+            continue
+        if pending and ch == '(':
+            depth += 1
+        elif pending and ch == ')':
+            depth -= 1
+            if depth <= 0:
+                pending, depth = False, 0
+        elif (not pending and (ch in 'lL') and _LIKE_AT.match(query, i)
+              and (i == 0 or not (query[i - 1].isalnum() or query[i - 1] == '_'))):
+            end = _LIKE_AT.match(query, i).end()
+            out.append(query[i:end])
+            i, pending = end, True
+            continue
+        out.append(ch)
+        i += 1
+    return ''.join(out)
 
 
 def validate_sigma_rule(yaml_content: str) -> Tuple[bool, str]:

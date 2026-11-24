@@ -100,7 +100,7 @@ A banking trojan reaches a finance user, Bob Smith, through an invoice opened fr
   1. **Edit** → **Define rule**: change the query to `registry.path : *AutoConfigURL*`.
   2. **Reason for change**: "Its field was Splunk's: ECS calls it registry.path." Save.
 - **Scheduled task rule:**
-  1. **Edit** → **Index patterns**: `logs-windows.sysmon_operational-sim<id>`.
+  1. **Edit** → under **Index patterns**, tick **Use the default index** (`logs-*-sim<id>`, the simulation's data).
   2. **Schedule**: **Run every** `1m`, **Look back** `now-6m`.
   3. Give a reason, and save.
 - **certutil rule:**
@@ -115,7 +115,7 @@ A banking trojan reaches a finance user, Bob Smith, through an invoice opened fr
 1. Open it. Its **Coverage** has the Sigma rule *New Root Certificate Installed Via Certutil.EXE*, and a known gap: "Procedure B: a root certificate added to the machine's store, by PowerShell or straight in the registry."
    *Say:* "Kibana's ATT&CK coverage counts T1553.004 as covered because one rule carries the tag. TIDE says partly: the attacker can do it two ways, and we watch one."
 2. **Elastic rules** → *Creation or Modification of Root Certificate* → **⋮ → Deploy**.
-   - In the form, set **Index patterns** to `logs-windows.sysmon_operational-sim<id>`. Elastic's own patterns search every namespace on the SIEM.
+   - In the form, under **Index patterns**, tick **Use the default index** (`logs-*-sim<id>`). Elastic's own patterns search every namespace on the SIEM.
    - **Status**: *Enabled*, **Run every** `1m`, **Author**: your name.
    - **Deploy rule**.
 3. Once the sync after saving finishes: **Coverage ⋮ → Add coverage → Rule (alerting)**, search *Root Certificate*, and pick the new rule.
@@ -214,7 +214,7 @@ Two simulations can't set up, replay or clean up on the same SIEM at once.
 | The figures don't match section 1 | A rule hasn't run on the data yet, or the last sync was too early | Wait a minute, then **Rule Health → Sync** |
 | No **Too many alerts** on Rule Tuning | It needs about 700 alerts: a few minutes into the first pass | Wait, and **Sync**. **Alerts spiked** shows the same story |
 | A fixed rule is still not effective | It hasn't run since the fix | Wait a minute, then **Sync this rule** in its window |
-| The deployed root certificate rule shows **No recent events in the index pattern** | Its index patterns weren't narrowed, so it searches Elastic's own patterns on every namespace | **Edit** → **Index patterns**: `logs-windows.sysmon_operational-sim<id>` |
+| The deployed root certificate rule shows **No recent events in the index pattern** | **Use the default index** wasn't ticked, so it searches Elastic's own patterns on every namespace | **Edit** → under **Index patterns**, tick **Use the default index** |
 | The converted Sigma query names `Image` or `CommandLine` | The wrong pipeline | **Convert** again with *ECS Windows* |
 | A new rule isn't in **Add coverage**'s list | The sync after saving it hasn't finished | Wait for it, then search again |
 | No **Replay data** button | The first pass isn't done | Wait for *Playing* |

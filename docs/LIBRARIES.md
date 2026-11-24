@@ -69,10 +69,12 @@ Hunting queries look for activity your detection rules may not alert on. The **H
 2. For a Sigma rule, choose the **Sigma pipeline** and **Index pattern** it is converted with. Elastic's ES|QL and EQL queries run as written.
 3. Open the hunt and click **Run** beside its query.
 
-The hits show under the query: how many, where, over what time and how long it took, with the first 50 rows. **Copy** puts the rows on your clipboard to paste into a spreadsheet. **The query that ran** shows exactly what was sent. A SIEM with no data in the query's indices says so instead of failing.
+The hits show under the query: how many, where, over what time and how long it took, with the first 50 rows. **Copy** puts the rows on your clipboard to paste into a spreadsheet. **The query that ran** shows exactly what was sent. A SIEM with no data in the query's indices says so instead of failing, and so does one whose indexes don't have a field the query uses, naming it: its data may be named otherwise there (try another Sigma pipeline) or not collected. A baseline technique's window also lists the hunts for its ATT&CK techniques, to run from there (see [Systems](SYSTEMS.md)).
 
 Osquery hunts run on your hosts through Osquery Manager rather than the SIEM, so they have no **Run**.
 
 ### Save a hunt to Kibana
 
 **Save to Kibana** saves an ES|QL query (a Sigma rule as converted) in the destination's Kibana space as a Discover search, named after the hunt and with the chosen time range, and links to it. Saving again replaces it. EQL queries can't be saved, as Discover doesn't run them. Saving needs edit access to Hunting, and an API key with Discover access in that space.
+
+**Create rule** opens the rule form with an ES|QL query (a Sigma rule as converted, over the destination's default index pattern unless you gave one) as an ES|QL rule for the chosen destination, named after the hunt and carrying its ATT&CK techniques, to narrow and create. Its history says which hunt it came from.

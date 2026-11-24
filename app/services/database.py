@@ -152,7 +152,7 @@ def in_validated_range(rule, lo: Optional[datetime], hi: Optional[datetime], sta
 
 
 # Schema version for migrations
-SCHEMA_VERSION = 115
+SCHEMA_VERSION = 116
 
 # The per-client role that opens Diagnostics for that client. Only a super admin can grant or
 # revoke it (set_user_roles(grant_support=...)).
@@ -4381,6 +4381,15 @@ class DatabaseService:
             self._set_schema_version(conn, 115)
             logger.info("Migration 115: sync results keep their error code.")
 
+        # ── Migration 116: a hunt as coverage (7.1.3, #130) ──
+        # step_coverage, in every tenant DB: a hunt beside the dashboards, reports and logs on a system's
+        # technique, as the library hunt it is or the client's own ES|QL query, with its last run (when,
+        # how many hits, where). Empty for every existing row. Additive only.
+        if current_version < 116:
+            self._in_every_tenant(conn, 116, self.add_step_hunt_columns, "step_coverage hunt columns ensured")
+            self._set_schema_version(conn, 116)
+            logger.info("Migration 116: a technique's coverage can be a hunt.")
+
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
 
     @staticmethod
@@ -4438,9 +4447,21 @@ class DatabaseService:
             url        VARCHAR DEFAULT '',
             rationale  VARCHAR DEFAULT '',
             created_by VARCHAR,
-            created_at TIMESTAMP DEFAULT now()
+            created_at TIMESTAMP DEFAULT now(),
+            hunt_ref      VARCHAR DEFAULT '',
+            hunt_query_no INTEGER DEFAULT 0,
+            query         VARCHAR DEFAULT '',
+            last_run_at   TIMESTAMP,
+            last_run_hits INTEGER,
+            last_run_on   VARCHAR DEFAULT ''
         )
     """
+    # A hunt as coverage (#130, migration 116): the library hunt it is (``hunt_ref`` "elastic/<id>" or
+    # "sigma/<id>", and which of its queries) or the client's own ES|QL ``query``, and its last run: when,
+    # how many hits (NULL when there was nothing to search) and on which destination.
+    STEP_HUNT_COLUMNS = (("hunt_ref", "VARCHAR DEFAULT ''"), ("hunt_query_no", "INTEGER DEFAULT 0"),
+                         ("query", "VARCHAR DEFAULT ''"), ("last_run_at", "TIMESTAMP"), ("last_run_hits", "INTEGER"),
+                         ("last_run_on", "VARCHAR DEFAULT ''"))
 
     @staticmethod
     def add_event_baselines(tconn, client_id: str = None) -> int:
@@ -4474,6 +4495,13 @@ class DatabaseService:
         for col in ("priority", "category"):
             tconn.execute(f"ALTER TABLE playbook_steps ADD COLUMN IF NOT EXISTS {col} VARCHAR DEFAULT ''")
         tconn.execute(cls.STEP_COVERAGE_DDL)
+
+    @classmethod
+    def add_step_hunt_columns(cls, tconn) -> None:
+        """Migration 116 for one tenant DB (and every new tenant). Idempotent."""
+        tconn.execute(cls.STEP_COVERAGE_DDL)
+        for col, kind in cls.STEP_HUNT_COLUMNS:
+            tconn.execute(f"ALTER TABLE step_coverage ADD COLUMN IF NOT EXISTS {col} {kind}")
 
     @staticmethod
     def add_step_source_columns(tconn) -> None:

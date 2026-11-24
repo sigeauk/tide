@@ -1,0 +1,101 @@
+# What a simulation of this scenario sets up in its client's TIDE when it starts, and removes when it
+# is cleaned up: the attack as a baseline, the system it hit (with the baseline applied, counting the
+# simulation's space as its coverage), the gap the client has accepted, and the attacker as a threat
+# actor. The rules in rules.toml are mapped to the baseline's techniques by their `covers`, a technique's
+# title here. See sim/scenarios/demo/tide.toml for the keys.
+
+[baseline]
+name = "Air-gapped design network: insider with a USB stick and a rogue device"
+description = "How someone with access to an air-gapped network takes data out of it: a USB stick brings the tools in, a device of their own on the network collects a password, and the same stick takes the data out. Each technique is one step of it."
+
+[[baseline.technique]]
+tactic = "Initial Access"
+techniques = ["T1200"]
+title = "USB storage plugged into an engineering workstation"
+priority = "high"
+category = "endpoint"
+description = "A USB stick is plugged into ENG-WS07. On a network with no internet connection, removable media is how tools come in and data goes out."
+
+[[baseline.technique]]
+tactic = "Execution"
+techniques = ["T1204.002", "T1218.011"]
+title = "A shortcut on the USB runs a DLL"
+priority = "high"
+category = "endpoint"
+description = "Drawings.lnk on the stick looks like a folder; opening it has rundll32 run viewer.dll from the stick, with the stick as its working directory."
+
+[[baseline.technique]]
+tactic = "Discovery"
+techniques = ["T1120", "T1069.002"]
+title = "Drives and domain admins listed"
+priority = "medium"
+category = "endpoint"
+description = "The DLL lists the machine's drives (fsutil fsinfo drives) and the domain's admins (net group \"Domain Admins\" /domain)."
+
+[[baseline.technique]]
+tactic = "Credential Access"
+techniques = ["T1557.003"]
+title = "A rogue device answers DHCP"
+priority = "critical"
+category = "network"
+description = "A Raspberry Pi behind a printer answers DHCP before the domain controller does, naming itself the gateway and DNS server, so clients send it their traffic and their sign-ins. Seen only by the network sensor: it has no agent."
+
+[[baseline.technique]]
+tactic = "Lateral Movement"
+techniques = ["T1078.002", "T1550.002"]
+title = "A service account's captured password used"
+priority = "critical"
+category = "identity"
+description = "With svc_eng's password, taken by the rogue device, runas /netonly gives a shell that signs in to the network as svc_eng (a logon of type 9 by seclogo)."
+
+[[baseline.technique]]
+tactic = "Collection"
+techniques = ["T1039", "T1021.002"]
+title = "Design drawings copied from the file server's admin share"
+priority = "high"
+category = "endpoint"
+description = "As svc_eng, the Typhoon class drawings are copied from FS01's D$ share to a folder of the workstation's own."
+
+[[baseline.technique]]
+tactic = "Collection"
+techniques = ["T1560.001"]
+title = "Drawings archived with a password"
+priority = "medium"
+category = "endpoint"
+description = "7za.exe, from the stick, puts the drawings in an archive with a password and encrypted file names, so nothing reading the stick later sees what it holds."
+
+[[baseline.technique]]
+tactic = "Exfiltration"
+techniques = ["T1052.001"]
+title = "Archive written to the USB"
+priority = "critical"
+category = "endpoint"
+description = "The archive is written straight to the stick (E:\\backup.7z): on an air-gapped network, the way data leaves."
+
+[[baseline.technique]]
+tactic = "Defense Impairment"
+techniques = ["T1070.001"]
+title = "Security log cleared"
+priority = "high"
+category = "endpoint"
+description = "On the way out, wevtutil cl Security empties the workstation's Security log."
+
+# The attacker, as a threat actor on Threat Landscape: its techniques are the baseline's.
+[threat_actor]
+name = "Rogue contractor"
+description = "Someone already trusted with access to an air-gapped network who takes its data out: tools brought in on a USB stick, a device of their own on the network to collect a password, and the data carried out on the same stick."
+
+[[system]]
+name = "Engineering enclave"
+description = "Halcyon Marine's air-gapped design network: engineering workstations, the drawings file server and its domain controller. It has no internet connection; a network sensor on its core switch watches its traffic."
+hosts = [
+  { name = "ENG-WS07", ip = "10.40.12.57", os = "Windows 10" },
+  { name = "FS01", ip = "10.40.1.20", os = "Windows Server 2019" },
+  { name = "DC01", ip = "10.40.1.10", os = "Windows Server 2019" },
+]
+
+# Out of date: the policy it names doesn't stop a stick being recognised and used, as the 6416 event shows.
+[[known_gap]]
+technique = "USB storage plugged into an engineering workstation"
+reason = "USB storage is blocked by Group Policy on the engineering workstations, so no rule is needed for it."
+review_days = 180

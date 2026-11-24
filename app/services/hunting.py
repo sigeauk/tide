@@ -134,7 +134,7 @@ def search(conn, q: str = "", technique: str = "", platform: str = "", source: s
     total = conn.execute(f"SELECT COUNT(*) FROM ({union}) h").fetchone()[0]
     matching = conn.execute(f"SELECT COUNT(*) FROM ({union}) h {clause}", params).fetchone()[0]
     rows = rows_as_dicts(conn.execute(
-        f"SELECT source, hunt_id, name, platform, techniques FROM ({union}) h {clause} "
+        f"SELECT source, hunt_id, name, description, platform, techniques FROM ({union}) h {clause} "
         f"ORDER BY lower(name), hunt_id LIMIT ? OFFSET ?", params + [int(limit), max(0, int(offset))]))
     return rows, matching, total
 

@@ -3,8 +3,9 @@
   run_bar(run): the page's settings row, like the Sigma page's (where, over what time, and how a Sigma
   rule is converted), kept while hunts are opened; every Run and Save sends it (#hunt-run-form). A
   change to the pipeline or index pattern shows the open hunt again (library.js, data-refresh-view).
-  run_button(...), save_button(...) and run_result(n) sit with each query: Run on the destination's
-  SIEM, Save to Kibana (an ES|QL query, as a Discover saved search) in its space.
+  run_button(...), save_button(...), rule_button(...) and run_result(n) sit with each query: Run on the
+  destination's SIEM, Save to Kibana (an ES|QL query, as a Discover saved search) in its space, and
+  Create rule (an ES|QL query, as a new ES|QL rule in the New rule form, #130).
   ``run``: {destinations, lookbacks, lookback, pipelines, index, can_save}.
 #}
 {% from "macros/icons.html" import icon, icon_text %}
@@ -25,7 +26,7 @@
                      attrs='data-refresh-view', wrap='sigma-select-group', tip='How a Sigma threat-hunting rule is converted to ES|QL') }}
     <div class="sigma-select-group lib-settings__wide">
         <label class="form-label" for="hunt-index" title="The indices a Sigma rule or an EQL query reads (ES|QL queries name their own)">Index pattern</label>
-        <input type="text" id="hunt-index" name="index" class="sigma-select" value="{{ run.index }}" spellcheck="false" data-refresh-view>
+        <input type="text" id="hunt-index" name="index" class="form-input" value="{{ run.index }}" spellcheck="false" data-refresh-view>
     </div>
 </div>
 {%- endmacro %}
@@ -47,6 +48,15 @@
         hx-post="/api/hunting/{{ source }}/{{ hunt_id }}/save?query_no={{ n }}" hx-include="#hunt-run-form"
         hx-target="#hunt-save-result-{{ n }}" hx-swap="innerHTML" hx-disabled-elt="this"
         title="Save it in the chosen destination's Kibana space as a Discover search (saving again replaces it)">{{ icon_text('save', 'Save to Kibana', '12') }}</button>
+{% endif %}
+{%- endmacro %}
+
+{% macro rule_button(source, hunt_id, n, kind, run) -%}
+{% if run.destinations and kind == 'esql' %}
+<button name="Create Rule From Hunt" type="button" class="btn btn-secondary btn-sm"
+        hx-get="/api/hunting/{{ source }}/{{ hunt_id }}/rule-form?query_no={{ n }}" hx-include="#hunt-run-form"
+        hx-target="#modal-container" hx-swap="innerHTML"
+        title="Open the New rule form with this query, as an ES|QL rule for the destination chosen above, to narrow and create">{{ icon_text('plus', 'Create rule', '12') }}</button>
 {% endif %}
 {%- endmacro %}
 

@@ -76,7 +76,7 @@
             {{ icon('shield-check', '12') }} {{ status_label }}
           </span>
           {% if detail.non_alerting %}
-          <span class="status-pill status-info" title="Covered by a dashboard, report or log: it is watched, but nothing alerts">{{ icon('eye', '12') }} Non-alerting</span>
+          <span class="status-pill status-info" title="Covered by a dashboard, report, log or hunt: it is watched, but nothing alerts">{{ icon('eye', '12') }} Non-alerting</span>
           {% endif %}
           {% if detail.not_effective %}{{ not_effective_pill(detail.not_effective_why, '12') }}{% endif %}
           {% if step.priority %}<span class="status-pill sm-priority sm-priority--{{ step.priority }}" title="Priority">{{ rl.priority[step.priority] }}</span>{% endif %}
@@ -272,11 +272,18 @@
             <label class="rm-label" for="sm-cov-title">Title</label>
             <input id="sm-cov-title" name="title" class="form-input" required value="{{ ae.title or '' }}"
                    placeholder="e.g. SOC wallboard – PowerShell activity">
+            {# A hunt of the client's own (#130): its ES|QL query. A library hunt is added from Hunting below. #}
+            <div data-hunt-only{% if ae.kind != 'hunt' %} hidden{% endif %}>
+              <label class="rm-label" for="sm-cov-query">ES|QL query</label>
+              <textarea id="sm-cov-query" name="query" class="form-input mono" rows="5" spellcheck="false"
+                        placeholder="FROM logs-* | WHERE …">{{ ae.query or '' }}</textarea>
+              <p class="text-muted tf-form__note">{{ icon('info', '12') }} Run it from its card, on the destination chosen under Hunting. To add one of the library's hunts instead, use its ⋮ under Hunting.</p>
+            </div>
             <label class="rm-label" for="sm-cov-url">Link <span class="text-muted">(optional)</span></label>
             <input type="url" id="sm-cov-url" name="url" class="form-input" placeholder="https://…" value="{{ ae.url or '' }}">
             <label class="rm-label" for="sm-cov-why">Rationale <span class="text-muted">(optional)</span></label>
             <textarea id="sm-cov-why" name="rationale" class="form-input" rows="3"
-                      placeholder="What it watches, and who looks at it">{{ ae.rationale or '' }}</textarea>
+                      placeholder="What it watches, and who looks at it (for a hunt, how often it is run)">{{ ae.rationale or '' }}</textarea>
             <p class="text-muted tf-form__note">{{ icon('info', '12') }} Counts as covered, labelled non-alerting: someone has to look, nothing alerts.</p>
             <div><button name="Save Coverage" type="submit" class="btn btn-primary btn-sm">Add</button></div>
           </form>
@@ -385,7 +392,7 @@
             {% if not new %}
             {% call section_menu('Coverage') %}
             <button name="Add Coverage" type="button" role="menuitem" class="rh-more__item" data-click="step.coverageAdd"
-                    title="Add a rule, known gap, N/A, dashboard, report or log">{{ icon('plus', '14') }}<span>Add coverage</span></button>
+                    title="Add a rule, known gap, N/A, dashboard, report, log or hunt">{{ icon('plus', '14') }}<span>Add coverage</span></button>
             {% endcall %}
             {% endif %}
           </div>
@@ -480,26 +487,40 @@
                   {% if w.url %}<a href="{{ w.url }}" target="_blank" rel="noopener noreferrer" title="Open {{ w.url }}">{{ w.title }}</a>{% else %}{{ w.title }}{% endif %}
                 </div>
                 {% if w.rationale %}<p class="rm-item__text">{{ w.rationale }}</p>{% endif %}
+                {% if w.kind == 'hunt' and w.query %}<pre class="rm-item__text mono sm-hunt__query">{{ w.query }}</pre>{% endif %}
                 <div class="rm-item__meta">
                   {{ tag(w.kind_label, title='Coverage type') }}
-                  <span class="text-info" title="Watched by a {{ w.kind_label | lower }}: someone has to look, nothing alerts">Non-alerting</span>
+                  {% if w.kind == 'hunt' %}<span class="text-muted">{{ w.source_label }}</span>{% endif %}
+                  <span class="text-info" title="Watched by a {{ w.kind_label | lower }}: someone has to {{ 'run it' if w.kind == 'hunt' else 'look' }}, nothing alerts">Non-alerting</span>
                   {% if w.created_by %}{{ tag(w.created_by, title='Added by') }}{% endif %}
                   {% if w.created_at %}<span class="text-muted">{{ w.created_at.strftime('%Y-%m-%d') }}</span>{% endif %}
                   {% if status == 'grey' %}<span class="text-muted" title="Not applicable decides this technique's status">not counted while it is marked not applicable</span>{% endif %}
                 </div>
+                {% if w.kind == 'hunt' %}
+                <div class="rm-item__meta">{% include "partials/hunt_last_run.html" %}</div>
+                <div class="hunt-run-result" id="sm-hunt-card-result-{{ w.id }}" aria-live="polite"></div>
+                {% endif %}
               </div>
               {# Update: this card's own form, in place of its body (the history keeps the change). #}
               <form class="rm-item__main sm-gapform" data-watch-form hx-put="{{ step_url }}/coverage/{{ w.id }}"
                     hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"{% if not we %} hidden{% endif %}>
                 {% if we.message %}<p class="inline-error" role="alert">{{ icon('triangle-alert', '12') }} {{ we.message }}</p>{% endif %}
+                {% if w.kind == 'hunt' %}
+                <input type="hidden" name="kind" value="hunt">
+                {% else %}
                 <label class="rm-label" for="sm-watch-kind-{{ w.id }}">Type</label>
                 <select id="sm-watch-kind-{{ w.id }}" name="kind" class="form-input form-select">
-                  {% for k, v in rl.coverage_kind.items() %}<option value="{{ k }}"{% if (we.kind or w.kind) == k %} selected{% endif %}>{{ v }}</option>{% endfor %}
+                  {% for k, v in rl.coverage_kind.items() if k != 'hunt' %}<option value="{{ k }}"{% if (we.kind or w.kind) == k %} selected{% endif %}>{{ v }}</option>{% endfor %}
                 </select>
+                {% endif %}
                 <label class="rm-label" for="sm-watch-title-{{ w.id }}">Title</label>
                 <input id="sm-watch-title-{{ w.id }}" name="title" class="form-input" required value="{{ we.title if we else w.title }}">
                 <label class="rm-label" for="sm-watch-url-{{ w.id }}">Link <span class="text-muted">(optional)</span></label>
                 <input type="url" id="sm-watch-url-{{ w.id }}" name="url" class="form-input" placeholder="https://…" value="{{ we.url if we else w.url }}">
+                {% if w.kind == 'hunt' and not w.hunt_ref %}
+                <label class="rm-label" for="sm-watch-query-{{ w.id }}">ES|QL query</label>
+                <textarea id="sm-watch-query-{{ w.id }}" name="query" class="form-input mono" rows="5" spellcheck="false">{{ we.query if we else w.query }}</textarea>
+                {% endif %}
                 <label class="rm-label" for="sm-watch-why-{{ w.id }}">Rationale <span class="text-muted">(optional)</span></label>
                 <textarea id="sm-watch-why-{{ w.id }}" name="rationale" class="form-input" rows="3">{{ we.rationale if we else w.rationale }}</textarea>
                 <div class="sm-risks__actions">
@@ -510,8 +531,17 @@
               <div class="rh-more" data-more>
                 {{ more_button('Actions for ' ~ w.title, title=w.kind_label ~ ' actions', attrs='name="Coverage Actions"') }}
                 <div class="rh-more__menu" role="menu" hidden>
+                  {% if w.kind == 'hunt' %}
+                  <button name="Run Coverage Hunt" type="button" role="menuitem" class="rh-more__item"
+                          hx-post="{{ step_url }}/coverage/{{ w.id }}/run" hx-include="#sm-hunt-run-{{ step.id }}"
+                          hx-target="#sm-hunt-card-result-{{ w.id }}" hx-swap="innerHTML" hx-indicator="#sm-hunt-card-result-{{ w.id }}"
+                          title="Run it on the destination chosen under Hunting (this system's own unless changed) and show what it finds">{{ icon('binoculars', '14') }}<span>Run</span></button>
+                  <button name="Create Rule From Hunt" type="button" role="menuitem" class="rh-more__item"
+                          hx-get="{{ step_url }}/coverage/{{ w.id }}/rule-form" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+                          title="Open the New rule form with its query, as an ES|QL rule, to narrow and create">{{ icon('plus', '14') }}<span>Create rule</span></button>
+                  {% endif %}
                   <button name="Update Coverage" type="button" role="menuitem" class="rh-more__item" data-click="step.watchEdit"
-                          title="Change its type, title, link or rationale">{{ icon('pencil', '14') }}<span>Update</span></button>
+                          title="Change its {{ 'title, query, link or rationale' if w.kind == 'hunt' and not w.hunt_ref else 'title, link or rationale' if w.kind == 'hunt' else 'type, title, link or rationale' }}">{{ icon('pencil', '14') }}<span>Update</span></button>
                   <button name="Remove Coverage" type="button" role="menuitem" class="rh-more__item rh-more__item--danger"
                           title="Remove this {{ w.kind_label | lower }} from the technique"
                           hx-delete="{{ step_url }}/coverage/{{ w.id }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
@@ -592,6 +622,26 @@
                  hx-target="#sm-elastic-candidates" hx-swap="innerHTML">
           <div id="sm-elastic-candidates" hx-get="{{ step_url }}/elastic" hx-trigger="load" hx-swap="innerHTML">
             {{ loading_state("Looking for Elastic rules…", inline=true) }}
+          </div>
+          {% endif %}
+        </div>
+
+        {# Hunting (#130): the library's hunts suggested from this technique's ATT&CK ids, or any the
+           search finds, to look for it where no rule alerts: run here, or saved to Kibana. Never coverage. #}
+        <div class="rm-panel" data-fold="tw-hunts" data-section="hunts" data-section-label="Hunting">
+          <div class="rm-panel__head">
+            {{ collapse_ctl('Hunting') }}
+            <h3 class="rm-panel__title">Hunting</h3>
+            {% if not new %}{{ drag_ctl('Hunting') }}{% endif %}
+          </div>
+          {% if new %}
+          <p class="rm-empty">Suggested from its ATT&amp;CK techniques once it is created.</p>
+          {% else %}
+          <input type="search" id="sm-hunt-search" class="form-input sm-sigma__search" name="q" placeholder="Search hunts…"
+                 aria-label="Search hunts" hx-get="{{ step_url }}/hunts" hx-trigger="input changed delay:300ms, search"
+                 hx-target="#sm-hunt-candidates" hx-swap="innerHTML">
+          <div id="sm-hunt-candidates" hx-get="{{ step_url }}/hunts" hx-trigger="load" hx-swap="innerHTML">
+            {{ loading_state("Looking for hunts…", inline=true) }}
           </div>
           {% endif %}
         </div>
