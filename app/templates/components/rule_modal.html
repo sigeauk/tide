@@ -200,7 +200,7 @@
 
             {# ───────── LEFT: activity + score chart ───────── #}
             <section class="rm-col rm-col--history" data-col="left" aria-label="Left column">
-                {# History, the score chart and Alerts open folded, so the rule itself comes first (UX.md 9.5). #}
+                {# History, the score chart and Alerts open folded, so the rule itself comes first. #}
                 <div class="rm-panel rm-panel--history is-collapsed" data-fold="history" data-section="history" data-section-label="History">
                     <div class="rm-panel__head">
                         {{ collapse_ctl('history', open=false) }}
@@ -448,6 +448,7 @@
                     <dl class="rm-facts">
                         {% if details.risk_score is not none %}<div><dt>Risk score</dt><dd>{{ details.risk_score }}</dd></div>{% endif %}
                         {% if rule.query_language %}<div><dt>Language</dt><dd>{{ rule.query_language | rule_language_name }}</dd></div>{% endif %}
+                        {% if details.building_block %}<div title="Its alerts are marked as building block alerts: they feed other rules and are kept off Kibana's Alerts page, so Rule Monitoring doesn't judge how many it raises"><dt>Building block</dt><dd>Yes</dd></div>{% endif %}
                         {% if is_wazuh %}
                         <div><dt>Level</dt><dd>{{ wazuh.level }}</dd></div>
                         {% if wazuh.file %}<div><dt>File</dt><dd class="mono">{{ wazuh.file }}</dd></div>{% endif %}
@@ -913,48 +914,53 @@
                 </details>
                 {% endif %}
 
-                {% if rule.field_mappings or index_patterns %}
+                {% if mapping_groups | default([]) %}
+                {# Each index pattern the rule searches, whether it matches any index (#63), and the fields the
+                   rule uses that it has (#128): a field the rule doesn't need that no index has shows N/A. #}
+                {% set mns = namespace(fields=[]) %}{% for g in mapping_groups %}{% for f in g.fields %}{% if f.field not in mns.fields %}{% set mns.fields = mns.fields + [f.field] %}{% endif %}{% endfor %}{% endfor %}
                 <details class="rm-fold" open data-fold="mappings" data-section="mappings" data-section-label="Field mappings">
-                    <summary><span>Field mappings <span class="rm-fold__count">{{ rule.field_mappings | length }}</span></span>{{ drag_ctl('Field mappings') }}</summary>
-                    {% if index_patterns %}
-                    {# Whether each index pattern matches any index at all (#63), before which fields they have. #}
-                    <ul class="rm-index-list" aria-label="Index patterns">
-                        {% for ip in index_patterns %}
-                        <li>
-                            <span class="rm-chip rm-chip--mono">{{ ip.pattern }}</span>
-                            {% if ip.state == 'found' %}<span class="status-pill status-success">Matches indices · {{ ip.fields }} fields</span>
-                            {% elif ip.state == 'no_index' %}<span class="status-pill status-danger" title="The SIEM has no index this pattern matches, so the rule searches nothing there">No matching index</span>
+                    <summary><span>Field mappings <span class="rm-fold__count">{{ mns.fields | length }}</span></span>{{ drag_ctl('Field mappings') }}</summary>
+                    <div class="rm-mapping-groups">
+                    {% for g in mapping_groups %}
+                    <div class="rm-mapping-group">
+                        <div class="rm-mapping-group__head">
+                            <span class="rm-chip rm-chip--mono">{{ g.pattern }}</span>
+                            {% if g.state == 'found' %}<span class="status-pill status-{{ 'success' if g.found == g.needed else 'warning' }}">{{ g.found }} of {{ g.needed }} field{{ '' if g.needed == 1 else 's' }}</span>
+                            {% elif g.state == 'no_index' %}<span class="status-pill status-danger" title="The SIEM has no index this pattern matches, so the rule searches nothing there">No matching index</span>
                             {% else %}<span class="status-pill status-muted" title="Not checked yet: Sync this rule checks it">Not checked yet</span>{% endif %}
-                            {% if ip.error %}<span class="text-muted fs-xs" title="{{ ip.error }}">last re-check failed</span>{% endif %}
-                        </li>
-                        {% endfor %}
-                    </ul>
-                    {% endif %}
-                    {% if rule.field_mappings %}
-                    <div class="mapping-table-wrapper">
+                            {% if g.error %}<span class="text-muted fs-xs" title="{{ g.error }}">last re-check failed</span>{% endif %}
+                        </div>
+                        {% if g.fields and g.state != 'no_index' %}
                         <table class="mapping-table">
-                            <thead><tr><th>Index</th><th>Field</th><th class="text-center">Valid</th><th>Type</th></tr></thead>
+                            <thead><tr><th>Field</th><th class="text-center">Valid</th><th>Type</th></tr></thead>
                             <tbody>
-                                {% for mapping in rule.field_mappings %}
+                                {% for f in g.fields %}
                                 <tr>
-                                    <td>{{ mapping[0] }}</td>
-                                    <td>{{ mapping[1] }}</td>
+                                    <td>{{ f.field }}</td>
                                     <td class="text-center">
-                                        {% if mapping[2] in ['Yes', True] %}<span class="text-success">{{ icon('check','12') }}</span>
-                                        {% elif mapping[2] == '?' %}<span class="text-warning">?</span>
+                                        {% if f.state == 'found' %}<span class="text-success">{{ icon('check','12') }}</span>
+                                        {% elif f.state == 'na' %}<span class="text-muted" title="{{ 'An alternative: the query matches without it' if f.note == 'alternative' else 'Optional (?field): searched as empty where the data lacks it' }}">N/A</span>
+                                        {% elif f.state == 'unknown' %}<span class="text-warning">?</span>
                                         {% else %}<span class="text-danger">{{ icon('x','12') }}</span>{% endif %}
                                     </td>
-                                    <td>{{ mapping[3] or '-' }}</td>
+                                    <td>{% if f.state == 'found' %}{{ f.type or '-' }}{% elif f.state == 'na' %}<span class="text-muted">{{ 'Alternative, not in the data' if f.note == 'alternative' else 'Optional, not in the data' }}</span>{% elif f.state == 'unknown' %}<span class="text-muted">Not checked</span>{% else %}<span class="text-muted">Not in this index</span>{% endif %}</td>
                                 </tr>
                                 {% endfor %}
                             </tbody>
                         </table>
+                        {% endif %}
                     </div>
+                    {% endfor %}
+                    </div>
+                    {% if default_index_note | default([]) %}
+                    <p class="rm-mapping-age">The rule has no index patterns or data view of its own, so Kibana searches this space's default index patterns (Advanced settings → Elastic Security default index); its fields are checked against those.</p>
                     {% endif %}
                     {% if mapping_info and mapping_info.label %}
                     <p class="rm-mapping-age">Checked against the SIEM's index mappings {{ mapping_info.label }}{% if mapping_info.known < mapping_info.patterns %} · {{ mapping_info.patterns - mapping_info.known }} pattern(s) not checked yet{% endif %}. Use Sync this rule to re-check now.</p>
                     {% endif %}
                 </details>
+                {% elif searches_everything | default(false) %}
+                <div class="rm-note rm-note--warn">{{ icon_text('triangle-alert', 'No index patterns: the list is empty and there is no data view, so Kibana searches every index and its fields are not checked. Edit the rule in Kibana and give it its index patterns.', '14') }}</div>
                 {% elif rule.score_mapping == 0 and not is_wazuh %}
                 <div class="rm-note rm-note--danger">{{ icon_text('triangle-alert', 'Field mapping issues: index fields missing or not checked.', '14') }}</div>
                 {% endif %}

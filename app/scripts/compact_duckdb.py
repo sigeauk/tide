@@ -3,12 +3,12 @@
 DuckDB never shrinks a database file, and a file can come to hold far more
 space than its data: a client's database of 1.8 GB held 26 MB. This rewrites
 the database into a fresh file and swaps it in. TIDE does it by itself as it
-starts for a file mostly space no table holds (maintenance.compact_grown_at_startup),
+starts for a file compacting would halve (maintenance.compact_grown_at_startup),
 and at the maintenance window's restart.
 
     # 1. STOP the app first — DuckDB allows only one process on a file:
     docker compose stop tide-app
-    # 2. Dry run (default): reports live vs file size, changes nothing:
+    # 2. Dry run (default): makes the fresh file, reports its size against the file's, removes it:
     docker compose run --rm --no-deps tide-app python -m app.scripts.compact_duckdb /app/data/primary_bc9c913e.duckdb
     # 3. Apply (keeps the original as <file>.pre-compact-<timestamp>):
     docker compose run --rm --no-deps tide-app python -m app.scripts.compact_duckdb /app/data/primary_bc9c913e.duckdb --apply
@@ -43,14 +43,6 @@ def compact(path: str, apply: bool) -> int:
     size_before = os.path.getsize(path)
     con = duckdb.connect(":memory:")
     con.execute(f"ATTACH '{path}' AS old (READ_ONLY)")
-    used, total = con.execute(
-        "SELECT used_blocks * block_size, total_blocks * block_size FROM pragma_database_size() WHERE database_name = 'old'"
-    ).fetchone()
-    print(f"{path}\n  file: {_mb(size_before)}   live data: {_mb(used)}   reclaimable: {_mb(max(0, total - used))}")
-    if not apply:
-        print("Dry run — pass --apply (with the app stopped) to compact.")
-        return 0
-
     t = time.time()
     con.execute(f"ATTACH '{tmp}' AS new")
     con.execute("COPY FROM DATABASE old TO new")
@@ -71,6 +63,13 @@ def compact(path: str, apply: bool) -> int:
         print(f"ABORT: verification failed (row-count mismatches: {bad}; indexes {idx_old} -> {idx_new}). Original untouched.")
         os.remove(tmp)
         return 1
+    size_after = os.path.getsize(tmp)
+    print(f"{path}\n  file: {_mb(size_before)}   compacted: {_mb(size_after)}   "
+          f"reclaimable: {_mb(max(0, size_before - size_after))}")
+    if not apply:
+        os.remove(tmp)
+        print("Dry run — pass --apply (with the app stopped) to compact.")
+        return 0
 
     stamp = time.strftime("%Y%m%d-%H%M%S")
     backup = f"{path}.pre-compact-{stamp}"

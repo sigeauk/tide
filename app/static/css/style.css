@@ -1743,7 +1743,8 @@ a:hover { color: var(--color-primary); }
 .client-users-table th:nth-child(1) { width: 12rem; }
 .client-users-table .client-users-table__role { width: 6rem; text-align: center; }
 .client-users-table input[type="checkbox"]:disabled { opacity: 0.6; cursor: not-allowed; }
-.client-users-table .client-users-table__more { width: 3rem; overflow: visible; text-align: right; }
+.client-users-table .client-users-table__more,
+.mapping-table .mgmt-users__more { width: 3rem; overflow: visible; text-align: right; }   /* a user's ⋮ (Settings → Users too) */
 
 /* ================================================================
  * HOST CARD GRID  (nested inside a card; uses bg-action layer)
@@ -2483,7 +2484,7 @@ a:hover { color: var(--color-primary); }
 /* ================================================================
  * GRID LAYOUTS
  * ================================================================ */
-/* A page shows four figures at most (UX.md 9.3); --6 is for the strips that keep more:
+/* A page shows four figures at most; --6 is for the strips that keep more:
    a system with Wazuh devices, a client's page, Diagnostics. */
 .metrics-grid {
   display: grid;
@@ -2529,6 +2530,7 @@ a:hover { color: var(--color-primary); }
 .source-pill.src-ics        { background: var(--color-warning-glow); border-color: var(--color-warning); color: var(--color-warning-text); }
 .source-pill.src-mobile     { background: var(--color-primary-muted); border-color: var(--color-primary); color: var(--color-primary); }
 .source-pill.src-opencti    { background: var(--color-success-glow); border-color: var(--color-success); color: var(--color-success-text); }
+.source-pill.src-simulation { background: var(--color-danger-glow);  border-color: var(--color-danger);  color: var(--color-danger-text); }
 
 .source-pill-row {
   display: inline-flex;
@@ -2726,9 +2728,9 @@ a:hover { color: var(--color-primary); }
 .tide-filter-dropdown { max-height: min(60vh, 420px); overflow-y: auto; }
 /* A rule library's browser: a choice that would show no rules (app.js hideEmptyChoices) */
 .tide-filter-dropdown label.rh-checkbox-row.is-empty-choice { display: none; }
-/* A filter dropdown in a rule library's settings row: the standard size, at least this wide (UX.md 9.5) */
+/* A filter dropdown in a rule library's settings row: the standard size, at least this wide */
 .sigma-select-group .tide-filter-btn { min-width: 140px; }
-/* A rule library's browser: the same filter button as a filters bar, filling its cell (UX.md 9.5) */
+/* A rule library's browser: the same filter button as a filters bar, filling its cell */
 .browser-filter .tide-filter-btn { width: 100%; }
 /* The filters a list uses less, under one Filters fold that counts those set (macros/filters.html more_filters) */
 .filters-more { grid-column: 1 / -1; }
@@ -6751,6 +6753,7 @@ body.is-resizing-slide-panel {
 .rules-table th[data-col="type"]      { width: 7.5rem; }
 .rules-table th[data-col="lang"]      { width: 4.25rem; }
 .rules-table th[data-col="alerts"]    { width: 7.5rem; }
+.rules-table th[data-col="actionable"] { width: 7.5rem; }
 .rules-table th.rt-check { width: 2.5rem; padding-left: 0; padding-right: 0; text-align: center; }
 .rt-th--sortable { cursor: pointer; user-select: none; }
 .rt-th--sortable:hover { color: var(--color-text); }
@@ -6982,9 +6985,9 @@ body.is-resizing-slide-panel {
 .rm-scores__note { margin: 0 0.85rem 0.6rem; font-size: 0.72rem; line-height: 1.4; color: var(--color-text-muted); }
 .rm-mapping-age { margin: 0; padding: 0 0.85rem 0.7rem; font-size: 0.7rem; color: var(--color-text-muted); }
 .rm-mapping-age--flush { padding: 0.5rem 0 0; }
-/* Field mappings: whether each index pattern matches any index (#63) */
-.rm-index-list { list-style: none; margin: 0; padding: 0 0.85rem 0.6rem; display: flex; flex-direction: column; gap: 0.3rem; }
-.rm-index-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
+/* Field mappings grouped by index pattern (#128): each pattern, then the fields the rule uses there */
+.rm-mapping-groups { max-height: 20rem; overflow: auto; padding: 0 0.85rem 0.85rem; display: flex; flex-direction: column; gap: 0.75rem; }
+.rm-mapping-group__head { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin-bottom: 0.35rem; }
 /* Last run (#63): Kibana's message for the rule's last run, or why there is none. A quiet box
    with a thin left accent: amber for a warning, red for a failure, grey otherwise. */
 .rm-run-message {
@@ -7890,6 +7893,8 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .rmon-md { max-height: 14rem; overflow: auto; margin: 0; padding: 0.75rem 5.5rem 0.75rem 0.9rem; font-family: var(--font-mono);
            font-size: 0.78rem; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere;
            background: var(--bg-level-3-inner); border: 1px solid var(--color-border); border-radius: var(--radius-md); }
+/* The Markdown can be changed before it goes (#124): a box as tall as the Markdown was, that can be pulled taller. */
+textarea.rmon-md { display: block; width: 100%; height: 14rem; min-height: 6rem; max-height: none; resize: vertical; color: var(--color-text); }
 .rmon-gitlab { margin: 0 0 1rem; padding-top: 0.75rem; border-top: 1px solid var(--color-border); }
 .rmon-gitlab__title { display: flex; align-items: center; gap: 0.4rem; margin: 0 0 0.5rem; font-size: var(--fs-base); }
 .rmon-gitlab__raised { list-style: none; margin: 0 0 0.75rem; padding: 0; display: grid; gap: 0.3rem; }
@@ -8257,7 +8262,7 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .sigma-select.sigma-select--wide { min-width: 180px; }
 .browser-filter.browser-filter--wide { flex: 2; }
 /* The Sigma, Elastic and Hunting browsers: the search two thirds wide beside MITRE technique, the rest
-   under one Filters fold below (UX.md 9.5) */
+   under one Filters fold below */
 .lib-workbench .browser-filters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .lib-workbench .browser-filter--wide { grid-column: span 2; }
 /* A library page fits the window, as Rule Health does (rule-browser-page): the header and settings
@@ -8439,7 +8444,7 @@ body.light {
   --sim-series-5: #e87ba4; --sim-series-6: #008300; --sim-series-7: #6250d6; --sim-series-8: #e34948;
 }
 .sim-pick { max-width: 32rem; margin-bottom: 1rem; }
-.sim-qtable td:first-child, .sim-qtable th:first-child { width: 50%; }
+.sim-qtable__n { white-space: nowrap; font-weight: 600; }      /* a question as its number, its words on hover */
 .sim-chart { max-height: 18rem; }
 .sim-chart__zero { stroke: var(--color-border); stroke-width: 1; }
 .sim-chart__line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
@@ -8459,12 +8464,36 @@ body.light {
 .sim-answers { border: 1px solid var(--color-border-muted); border-radius: var(--radius-md); padding: 0.5rem 0.75rem; margin-bottom: 0.5rem; }
 .sim-answers > summary { cursor: pointer; color: var(--color-text-secondary); }
 .sim-answer { border-top: 1px solid var(--color-border-muted); padding-top: 0.5rem; margin-top: 0.5rem; }
-.sim-answer__writeup pre { overflow-x: auto; }
+/* A question's write-up (#126): its title and Save in Kibana, the question, its answer set apart in TIDE's
+   blue, then each search in a box named for its language, so neither is taken for the other. */
+.sim-answer__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; }
+.sim-answer__title { margin: 0.25rem 0; font-size: var(--fs-base); font-weight: 600; cursor: pointer; }      /* folds the question */
+.sim-answer__question { color: var(--color-text-secondary); }
+.sim-answer__question p { margin: 0 0 0.25rem; }
+.sim-answer__answer { display: flex; align-items: baseline; gap: 0.6rem; margin: 0.5rem 0; padding: 0.45rem 0.75rem;
+                      border-left: 3px solid var(--color-primary); border-radius: var(--radius-sm);
+                      background: color-mix(in srgb, var(--color-primary) 12%, transparent); color: var(--color-primary); }
+.sim-answer__answer-label { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
+.sim-answer__answer-value { overflow-wrap: anywhere; }
+.sim-answer__answer-value strong { font-weight: 700; }
+.sim-answer__answer-value p { margin: 0; }
+.sim-answer__answer-value code { color: inherit; }
+.sim-answer__writeup pre { position: relative; margin: 0.5rem 0; padding: 0.6rem 0.75rem; overflow-x: auto;
+                           border: 1px solid var(--color-border-muted); border-radius: var(--radius-sm); background: var(--color-bg-base); }
+.sim-answer__writeup pre code { font-family: var(--font-mono); font-size: 0.78rem; background: none; padding: 0; }
+.sim-answer__writeup pre:has(> code[class^="language-"]) { padding-top: 1.6rem; }
+.sim-answer__writeup pre code[class^="language-"]::before { position: absolute; top: 0.35rem; left: 0.75rem; font-family: var(--ff);
+                                                            font-size: 0.68rem; font-weight: 700; color: var(--color-text-muted); }
+.sim-answer__writeup code.language-kql::before { content: "KQL"; }
+.sim-answer__writeup code.language-esql::before { content: "ES|QL"; }
+.sim-answer__writeup code.language-eql::before { content: "EQL"; }
 .sim-story { margin-bottom: 1rem; }
 .sim-questions { display: flex; flex-direction: column; gap: 0.75rem; }
 .sim-q { border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 0.75rem; background: var(--color-bg-surface); }
 .sim-q--solved { border-color: var(--color-success); }
 .sim-q__text p { display: inline; }
+.sim-q__text { cursor: pointer; }                 /* folds the question */
+.sim-q[open] > .sim-q__text { margin-bottom: 0.5rem; }
 .sim-q__hint { color: var(--color-text-secondary); margin: 0.4rem 0 0; }
 .sim-q__score, .sim-q__ok { color: var(--color-success-text); margin: 0.4rem 0 0; }
 .sim-q__form { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }

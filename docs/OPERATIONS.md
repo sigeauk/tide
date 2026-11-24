@@ -54,7 +54,7 @@ Out of hours, the maintenance window keeps Rule Monitoring current, backs up, an
 
 1. **Sync every client**: each client's destinations, as **Sync** does. A client already syncing is skipped. Each sync is listed in **Diagnostics → Sync activity**, by *maintenance window*.
 2. **Back up**: the backup **Backups** makes. While the window runs it, it replaces the daily backup schedule; how many to keep is still set under **Backups**.
-3. **Reclaim space**: a database file that is 30% or more empty space, and at least 200 MB, is compacted. Compacting needs the files closed, so TIDE restarts: every signed-in page says when, 15 minutes ahead, with **Delay 30 minutes** (up to 2 hours in all, then **Postpone to the next window**). At the restart, TIDE compacts each file as it starts, before opening any, the same way as [by hand](#reclaiming-disk-space): checked table by table, and left untouched if a check fails. The original is kept beside it as `<file>.duckdb.pre-compact-<time>`, until the file is next compacted. TIDE is back within a few minutes. The panel's **Restart now** and **Postpone to the next window** do the same for a super admin.
+3. **Reclaim space**: a database file of at least 200 MB that compacting would make 30% or more smaller is compacted. Compacting needs the files closed, so TIDE restarts: every signed-in page says when, 15 minutes ahead, with **Delay 30 minutes** (up to 2 hours in all, then **Postpone to the next window**). At the restart, TIDE compacts each file as it starts, before opening any, the same way as [by hand](#reclaiming-disk-space): checked table by table, and left untouched if a check fails. The original is kept beside it as `<file>.duckdb.pre-compact-<time>`, until the file is next compacted. TIDE is back within a few minutes. The panel's **Restart now** and **Postpone to the next window** do the same for a super admin.
 
 The panel shows the last run step by step, with each file's size before and after.
 
@@ -243,13 +243,13 @@ Use this to move some clients rather than all, or to move to a host running a ne
 3. On the new host, add the SIEMs and Keycloak again (their connection details are not exported), then import each file. Choose **+ Create a new client** for a new client, and tick **Also import users** where the file has them.
 4. Link each client's destinations again (the same SIEM and space as before), then sync each client's rules.
 
-Importing adds and never deletes: existing rows are kept, and a baseline whose name already exists isn't duplicated. Imported TIDE accounts have no password until one is set. Single sign-on users sign in as before once they exist in the new Keycloak realm with the same username or email.
+Importing adds and never deletes: existing rows are kept, and a baseline whose name already exists isn't duplicated. Imported TIDE accounts have no password until an admin sets one with **Reset password** (see [Passwords](CONFIGURATION.md#passwords)). Single sign-on users sign in as before once they exist in the new Keycloak realm with the same username or email.
 
 ---
 
 ## Reclaiming disk space
 
-A database file never shrinks on its own, and can come to hold far more space than its data. Space no table holds slows every sync, so TIDE compacts, as it starts, any file of 200 MB or more of which half or more is such space: checked table by table, and left untouched if a check fails. The original is kept beside it as `<file>.duckdb.pre-compact-<time>` until the file is next compacted; delete it once TIDE runs normally. TIDE's log says what was compacted. The [maintenance window](#the-maintenance-window) also reclaims space out of hours, from files that are 30% or more empty. To do it by hand, first see how much each file could shrink:
+A database file never shrinks on its own, and can come to hold far more space than its data. That space slows every sync, so TIDE compacts, as it starts, any file of 200 MB or more that compacting would make half or more smaller: checked table by table, and left untouched if a check fails. Some of a file's space is its tables' indexes, which compacting doesn't give back, so when TIDE can't tell from the file alone, it copies the file to see. The copy takes about as long as the file's data takes to copy, and TIDE doesn't copy the file again until it has grown by half. The original is kept beside it as `<file>.duckdb.pre-compact-<time>` until the file is next compacted; delete it once TIDE runs normally. TIDE's log says what was compacted. The [maintenance window](#the-maintenance-window) also reclaims space out of hours, from files that compacting would make 30% or more smaller. To do it by hand, first see how much each file could shrink:
 
 ```bash
 docker exec tide-app python -m app.scripts.diag_sync --state
@@ -260,7 +260,7 @@ Its **Files** section lists each file's empty space and the command to reclaim i
 ```bash
 docker compose stop tide-app
 
-# Dry run: reports the size and how much would be reclaimed; changes nothing
+# Dry run: makes the compacted copy, reports its size and how much would be reclaimed, then removes it; changes nothing
 docker compose run --rm --no-deps tide-app python -m app.scripts.compact_duckdb /app/data/<file>.duckdb
 
 # Compact it

@@ -1083,7 +1083,8 @@ console.debug('TIDE app.js loading...');
         if (!btn) return;
         var src = document.querySelector(btn.getAttribute('data-rm-copy'));
         if (!src || !navigator.clipboard) return;
-        navigator.clipboard.writeText(src.innerText).then(function() {
+        // A box that can be changed (Raise issue's Markdown) is copied as it is now.
+        navigator.clipboard.writeText(src.tagName === 'TEXTAREA' ? src.value : src.innerText).then(function() {
             btn.classList.add('is-done');
             setTimeout(function() { btn.classList.remove('is-done'); }, 1200);
             if (btn.dataset.copied && typeof showToast === 'function') showToast(btn.dataset.copied, 'success');
@@ -1740,7 +1741,7 @@ console.debug('TIDE app.js loading...');
         if (dashDirty && dashGrid()) { e.preventDefault(); e.returnValue = ''; }
     });
 
-    // ── Hover tips: one for the whole app (UX.md 5.4) ──
+    // ── Hover tips: one for the whole app ──
     // Any element with a title gets TIDE's own tip, on hover and on keyboard focus: one look and one
     // delay everywhere, above the element (below when there's no room; beside it in the sidebar), never
     // clipped by a scrolling box. Write a plain title="…", as a plain <select> for a choice. While the
@@ -1835,7 +1836,7 @@ console.debug('TIDE app.js loading...');
     document.addEventListener('scroll', hideTip, true);
     document.addEventListener('htmx:afterSwap', function() { if (tipFor && !tipFor.isConnected) hideTip(); });
 
-    // ── Folds remembered: one mechanism for every fold that keeps its state (UX.md 5.5) ──
+    // ── Folds remembered: one mechanism for every fold that keeps its state ──
     // A fold is a <details data-fold="name">, a panel folded by its head (.rm-panel / .sys-section
     // [data-fold]) or a sidebar nav group. Whether it is open is kept per browser in the JSON object
     // named by its nearest [data-fold-store] (a page's, a list's, the sidebar's); a window's folds
@@ -1932,6 +1933,16 @@ console.debug('TIDE app.js loading...');
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function() { restorePageSections(); });
     else restorePageSections();
     document.addEventListener('htmx:load', function(e) { restorePageSections(e.target); });
+    // A store's panels drawn again by htmx (a tab or list that asks for itself again, as a simulation's
+    // Dashboard every 15 s): as they were left, straight after the swap, before it is painted, so a
+    // folded one doesn't open for a moment, and wherever the store sits in what was swapped.
+    document.addEventListener('htmx:afterSwap', function(e) {
+        var root = e.detail && e.detail.target;
+        if (!root || !root.querySelectorAll) return;
+        var stores = Array.prototype.slice.call(root.querySelectorAll('[data-fold-store]'));
+        if (root.matches && root.matches('[data-fold-store]')) stores.push(root);
+        stores.forEach(function(col) { col.querySelectorAll(':scope > [data-fold]:not(details)').forEach(restorePanel); });
+    });
 
     // ATT&CK picker (components/mitre_picker.html): tactic, then technique, as often as needed.
     // Chosen techniques are listed as pills with their names; `technique_ids` carries them and

@@ -433,7 +433,7 @@ def generate_markdown(data: Dict[str, Any]) -> str:
     lines: List[str] = [
         f"<!-- {classif} -->",
         "",
-        "# TIDE — Threat Coverage Report",
+        "# TIDE — Threat coverage report",
         "",
         f"**Classification:** {classif}",
         f"**Generated:** {data['generated_at']}",
@@ -443,24 +443,24 @@ def generate_markdown(data: Dict[str, Any]) -> str:
         "",
         "---",
         "",
-        "## Executive Summary",
+        "## Executive summary",
         "",
         "| Metric | Value |",
         "|--------|-------|",
-        f"| Selected Actors | {len(data['selected_actors'])} |",
-        f"| Total Adversary TTPs | {data['total_ttps']} |",
-        f"| Detection Coverage | {data['coverage_pct']}% |",
-        f"| Effective Coverage | {data.get('effective_pct', data['coverage_pct'])}% |",
+        f"| Selected actors | {len(data['selected_actors'])} |",
+        f"| Total adversary TTPs | {data['total_ttps']} |",
+        f"| Detection coverage | {data['coverage_pct']}% |",
+        f"| Effective coverage | {data.get('effective_pct', data['coverage_pct'])}% |",
         f"| Covered TTPs | {data['covered_count']} |",
-        f"| Critical Gaps | {data['gap_count']} |",
-        f"| Mapped Elastic Rules | {data['total_elastic_rules']} |",
-        f"| Sigma Quick Wins Available | {data.get('sigma_opportunity_count', 0)} |",
+        f"| Critical gaps | {data['gap_count']} |",
+        f"| Mapped Elastic rules | {data['total_elastic_rules']} |",
+        f"| Sigma quick wins available | {data.get('sigma_opportunity_count', 0)} |",
         "",
     ]
 
     # ── Selected Adversaries ──────────────────────────────────────────────
-    lines += ["## Selected Adversaries", ""]
-    lines += ["| Actor | Description | TTPs | Intel Sources | Aliases |"]
+    lines += ["## Selected adversaries", ""]
+    lines += ["| Actor | Description | TTPs | Intel sources | Aliases |"]
     lines += ["|-------|-------------|-----:|---------------|---------|"]
     for actor in data["actor_details"]:
         src = ", ".join(actor["sources"]) if actor["sources"] else "MITRE"
@@ -472,7 +472,7 @@ def generate_markdown(data: Dict[str, Any]) -> str:
     lines.append("")
     # ── Coverage matrix overview ──────────────────────────────────────────
     lines += [
-        "## MITRE ATT&CK Coverage Overview",
+        "## MITRE ATT&CK coverage overview",
         "",
         "> Legend: 🔴 **GAP** – no detection rule | "
         "🟢 **COVERED** – detection exists | "
@@ -499,12 +499,12 @@ def generate_markdown(data: Dict[str, Any]) -> str:
     overlap = data.get("overlap_table", [])
     if overlap:
         lines += [
-            "## High ROI Priority — Top Adversary Overlap",
+            "## High ROI priority — top adversary overlap",
             "",
             "> GAP techniques shared by 3 or more selected actors.",
             "> A single detection rule would address coverage for multiple adversaries.",
             "",
-            "| ID | Technique | Tactic | Shared By | Actor Count |",
+            "| ID | Technique | Tactic | Shared by | Actor count |",
             "|----|-----------|--------|-----------|-------------|",
         ]
         for row in overlap:
@@ -523,7 +523,7 @@ def generate_markdown(data: Dict[str, Any]) -> str:
 
     # ── Detailed per-tactic tables (technical only) ───────────────────────
     if level == "technical":
-        lines += ["## Detailed Coverage by Tactic", ""]
+        lines += ["## Detailed coverage by tactic", ""]
 
         for tactic in data["tactics"]:
             cells = data["matrix"].get(tactic, [])
@@ -534,7 +534,7 @@ def generate_markdown(data: Dict[str, Any]) -> str:
             lines.append("")
 
             if any(c.get("sigma_rules") for c in cells):
-                lines.append("| ID | Technique | Status | Source | Elastic Rules | Sigma Opportunities |")
+                lines.append("| ID | Technique | Status | Source | Elastic rules | Sigma opportunities |")
                 lines.append("|----|-----------|--------|--------|---------------|---------------------|")
                 for cell in cells:
                     icon = {
@@ -553,7 +553,7 @@ def generate_markdown(data: Dict[str, Any]) -> str:
                         f"{cell['source']} | {rules_str} | {sigma_str} |"
                     )
             else:
-                lines.append("| ID | Technique | Status | Source | Elastic Rules |")
+                lines.append("| ID | Technique | Status | Source | Elastic rules |")
                 lines.append("|----|-----------|--------|--------|---------------|")
                 for cell in cells:
                     icon = {

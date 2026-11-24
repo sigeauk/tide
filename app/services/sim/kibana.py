@@ -57,6 +57,20 @@ class Kibana:
                                     "override": True})
         return (body.get("data_view") or {}).get("id", "")
 
+    def data_view_id(self, space: str, title: str) -> str:
+        """The id of the space's data view on ``title`` (its index pattern); '' when it has none."""
+        body = self.call("GET", f"/s/{space}/api/data_views", f"read the data views of {space}")
+        return next((str(d.get("id")) for d in body.get("data_view") or [] if d.get("title") == title), "")
+
+    # ── Saved searches (#126) ──────────────────────────────────────────────────────────────────
+
+    def save_search(self, space: str, object_id: str, attributes: dict, references: list) -> str:
+        """Save a Discover search in the space as ``object_id``, replacing one saved as it before; its id."""
+        body = self.call("POST", f"/s/{space}/api/saved_objects/search/{object_id}?overwrite=true",
+                         f"save the search '{attributes.get('title')}'",
+                         json_body={"attributes": attributes, "references": references})
+        return str(body.get("id") or object_id)
+
     # ── Its rules and their alerts ─────────────────────────────────────────────────────────────
 
     def create_rule(self, space: str, rule: dict) -> str:

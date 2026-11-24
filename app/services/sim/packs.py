@@ -391,7 +391,8 @@ def read_key(sc: Scenario) -> dict[int, dict]:
 
 def read_tide(sc: Scenario) -> dict:
     """What a simulation of the scenario sets up in its client's TIDE (tide.toml: its baseline, the
-    systems it hit, its known gaps), {} when it has none, or a PackError saying what is wrong."""
+    systems it hit, its known gaps, its attacker as a threat actor), {} when it has none, or a PackError
+    saying what is wrong."""
     path = sc.path("tide.toml")
     if not path.is_file():
         return {}
@@ -413,4 +414,10 @@ def read_tide(sc: Scenario) -> dict:
     for g in data.get("known_gap", []):
         if not isinstance(g, dict) or g.get("technique") not in titles or not g.get("reason"):
             raise PackError(f"{where}: each [[known_gap]] names one of the baseline's techniques, with a reason")
+        days = g.get("review_days")
+        if days is not None and (not isinstance(days, int) or isinstance(days, bool) or days < 1):
+            raise PackError(f'{where}: known gap "{g["technique"]}"\'s review_days is a number of days, such as 90')
+    actor = data.get("threat_actor")
+    if actor is not None and (not isinstance(actor, dict) or not str(actor.get("name") or "").strip()):
+        raise PackError(f"{where}: [threat_actor] needs its name")
     return data

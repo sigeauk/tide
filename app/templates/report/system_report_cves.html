@@ -5,7 +5,7 @@
 <div class="page-break"></div>
 
 <div class="section-banner avoid-break" id="sec-cves">
-    <div class="section-banner-title">CVE Breakdown — By Vulnerability</div>
+    <div class="section-banner-title">CVE breakdown — by vulnerability</div>
     <div class="section-banner-sub">Comprehensive per-CVE analysis with affected hosts and detection status</div>
 </div>
 
@@ -38,7 +38,7 @@
 
     {% if cve.detections %}
     <div style="margin-bottom:2mm;">
-        <span style="font-size:5.5pt;color:var(--text-3);font-weight:600;">Detection Rules:</span>
+        <span style="font-size:5.5pt;color:var(--text-3);font-weight:600;">Detection rules:</span>
         {% for d in cve.detections %}
         <span class="badge badge-primary" style="font-size:5.5pt;">{{ d.note or d.rule_ref or 'Rule' }}</span>
         {% endfor %}
@@ -46,7 +46,7 @@
     {% endif %}
 
     <table style="margin-bottom:0;">
-        <thead><tr><th>Host</th><th>IP</th><th>Status</th><th>Active Rule(s)</th></tr></thead>
+        <thead><tr><th>Host</th><th>IP</th><th>Status</th><th>Active rule(s)</th></tr></thead>
         <tbody>
             {% for h in cve.hosts_red %}
             <tr>
@@ -70,7 +70,7 @@
 <div class="page-break"></div>
 
 <div class="section-banner avoid-break" id="sec-hosts">
-    <div class="section-banner-title">CVE Breakdown — By Host</div>
+    <div class="section-banner-title">CVE breakdown — by host</div>
     <div class="section-banner-sub">Per-device CVE exposure and active detection rules</div>
 </div>
 
@@ -91,7 +91,7 @@
         </div>
     </div>
     <table style="margin-bottom:0;">
-        <thead><tr><th>CVE</th><th>Status</th><th>Active Rule(s)</th></tr></thead>
+        <thead><tr><th>CVE</th><th>Status</th><th>Active rule(s)</th></tr></thead>
         <tbody>
             {% for c in h.cves %}
             <tr>

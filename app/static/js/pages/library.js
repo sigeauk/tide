@@ -2,12 +2,25 @@
  * Rule and hunt libraries (pages/rules/sigma.html, elastic.html, hunting.html): a list row loads its
  * item into the detail pane (htmx). This marks the row as open, keeps the choice across filtering
  * (the filter form's hidden "selected"), and puts it in the address under the workbench's
- * data-library name, so a reload or a link reopens it. A page's settings row (data-library-settings)
- * rides along with each row's request; a change to a setting marked data-refresh-view shows the
- * open item again with it.
+ * data-library name, so a reload or a link reopens it. The browser's search and filters are kept in
+ * the address beside it, as the list answers them (#119), so a reload or a link shows the same list.
+ * A page's settings row (data-library-settings) rides along with each row's request; a change to a
+ * setting marked data-refresh-view shows the open item again with it.
  */
 (function () {
     'use strict';
+
+    document.addEventListener('htmx:afterRequest', function (e) {
+        var form = e.detail && e.detail.elt;
+        if (!e.detail.successful || !form || !form.matches || !form.matches('[data-library] form.browser-filters')) return;
+        var key = form.closest('[data-library]').getAttribute('data-library');
+        var open = new URLSearchParams(window.location.search).get(key);
+        var params = new URLSearchParams();
+        new FormData(form).forEach(function (v, k) { if (v !== '' && k !== 'selected') params.append(k, v); });
+        if (open) params.set(key, open);
+        var qs = params.toString();
+        history.replaceState(history.state, '', window.location.pathname + (qs ? '?' + qs : ''));
+    });
 
     var refreshTimer = null;
     function refreshOpen(e) {

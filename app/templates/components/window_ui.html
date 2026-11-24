@@ -8,7 +8,7 @@
 {% from "macros/icons.html" import icon %}
 {% from "macros/menu.html" import more_button, manage_menu %}
 
-{# ``open=false``: a section drawn folded (the window opens with fewer: UX.md 9.5); once the user opens
+{# ``open=false``: a section drawn folded (the window opens with fewer); once the user opens
    it, it opens so from then on (app.js, the fold memory). #}
 {% macro collapse_ctl(label, open=true) -%}
 <button type="button" class="rm-collapse" data-rm-collapse aria-expanded="{{ 'true' if open else 'false' }}" title="Collapse or expand {{ label }}" aria-label="Collapse or expand {{ label }}">{{ icon('chevron-down', '14') }}</button>

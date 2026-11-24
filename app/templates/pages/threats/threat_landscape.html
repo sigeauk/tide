@@ -48,6 +48,7 @@
             name="search"
             class="form-input" 
             placeholder="Actor name, alias, description…"
+            value="{{ tl.search }}"
             hx-get="/api/threats"
             hx-trigger="keyup changed delay:300ms"
             hx-target="#threats-grid"
@@ -58,20 +59,21 @@
     {% set tl_hx = 'hx-get="/api/threats" hx-trigger="change" hx-target="#threats-grid" hx-swap="innerHTML" hx-include="[name=\'search\'], [name=\'origin\'], [name=\'source\'], [name=\'sort_by\']"' %}
     {% set origin_opts = [('', 'Any')] %}
     {% for origin in origins %}{% set _ = origin_opts.append((origin, origin)) %}{% endfor %}
-    {{ filter_choice('tl-origin', 'origin', 'Origin', origin_opts, '', attrs=tl_hx) }}
+    {{ filter_choice('tl-origin', 'origin', 'Origin', origin_opts, tl.origin, attrs=tl_hx) }}
 
-    {{ filter_choice('tl-source', 'source', 'Source', [('', 'Any')] + sources | list, '', attrs=tl_hx) }}
+    {{ filter_choice('tl-source', 'source', 'Source', [('', 'Any')] + sources | list, tl.source, attrs=tl_hx) }}
 
     {{ filter_choice('tl-sort', 'sort_by', 'Sort by', [('ttp_desc', 'TTPs (High → Low)'), ('ttp_asc', 'TTPs (Low → High)'), ('name_asc', 'Name (A → Z)'),
-                     ('coverage_desc', 'Coverage (High → Low)'), ('coverage_asc', 'Coverage (Low → High)')], 'ttp_desc', attrs=tl_hx) }}
+                     ('coverage_desc', 'Coverage (High → Low)'), ('coverage_asc', 'Coverage (Low → High)')], tl.sort_by or 'ttp_desc', attrs=tl_hx) }}
 </div>
 </div>
 
-<!-- Threats Grid - Load on page load via HTMX -->
+<!-- Threats Grid - Load on page load via HTMX, with the filters; its query is kept in the address (#119) -->
 <div class="rule-scroll-region">
-<div name="Open Threats" id="threats-grid" data-rule-list
+<div name="Open Threats" id="threats-grid" data-rule-list data-keep-url="/threats"
      hx-get="/api/threats"
      hx-trigger="load, refreshThreats from:body"
+     hx-include="[name='search'], [name='origin'], [name='source'], [name='sort_by']"
      hx-swap="innerHTML">
     {% from "components/ui/loading_state.html" import loading_state %}
     {{ loading_state("Loading threat actors\u2026") }}
@@ -79,8 +81,6 @@
 </div>
 </div>
 
-<!-- Slide Panel Container (for TTP detail popups) -->
-<div id="slide-panel-container"></div>
 
 
 {% endblock %}

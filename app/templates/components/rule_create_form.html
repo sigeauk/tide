@@ -96,9 +96,16 @@
               <input class="rule-form-control" type="text" id="rule-index" name="index" value="{{ form_values.index }}" placeholder="logs-*, auditbeat-*" disabled>
             </div>
             {% else %}
-            <div class="form-section">
-              <label class="form-label" for="rule-index">Index patterns</label>
-              <input class="rule-form-control" type="text" id="rule-index" name="index" value="{{ form_values.index }}" placeholder="logs-*, auditbeat-*">
+            {# A new rule needs index patterns: an empty list makes Kibana search every index (#129). It
+               starts with the destination's default index, else its space's (data-default-index).
+               ES|QL and machine learning rules take none: rule_form.js hides it for them. #}
+            {% set _no_index = form_values.type in ('esql', 'machine_learning') %}
+            <div class="form-section" id="rule-index-plain"{% if _no_index %} hidden{% endif %}>
+              <label class="form-label" for="rule-index">Index patterns{% if mode != 'edit' %} *{% endif %}</label>
+              <input class="rule-form-control" type="text" id="rule-index" name="index" value="{{ form_values.index }}" placeholder="logs-*, auditbeat-*"{% if mode != 'edit' %} required{% endif %}{% if _no_index %} disabled{% endif %}>
+              {% if mode == 'edit' and not form_values.index and not _no_index %}
+              <div class="scope-note">None of its own: Kibana searches this space's default index patterns for it.</div>
+              {% endif %}
             </div>
             {% endif %}
             <div class="form-section">
@@ -219,6 +226,13 @@
             <div class="form-section">
               <label class="form-label" for="rule-tags">Tags (optional, comma-separated)</label>
               <input class="rule-form-control" type="text" id="rule-tags" name="tags" value="{{ form_values.tags }}" placeholder="detection, process, suspicious">
+            </div>
+            <div class="form-section">
+              <label class="form-label" for="rule-building-block">Building block</label>
+              {# Unticked, nothing is posted: unticking a building block removes it (rules._CLEARABLE). #}
+              <label class="rm-form-confirm"><input type="checkbox" name="building_block" value="true" id="rule-building-block"{% if form_values.building_block %} checked{% endif %}>
+                Mark all generated alerts as building block alerts</label>
+              <div class="rule-help">As in Kibana: its alerts feed other rules and are kept off the Alerts page, so Rule Monitoring doesn't judge how many it raises.</div>
             </div>
             <div class="form-section">
               <label class="form-label" for="rule-timestamp-override">Timestamp override</label>

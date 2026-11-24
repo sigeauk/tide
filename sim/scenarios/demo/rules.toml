@@ -1,0 +1,97 @@
+# The detection rules a simulation of this scenario runs in its own Kibana space, as the demo starts
+# them: one that works, one far too noisy, and several that look fine in Kibana but can't work. Each
+# rule's index patterns are narrowed to the simulation's own data streams (logs-*-<its namespace>).
+#
+# source = "elastic": one of Elastic's prebuilt rules, by its rule_id.
+# source = "sigma":   a Sigma rule, by its id, converted with a pipeline from sim/sigma/ (ecs.yml).
+# source = "custom":  the rule in full, here.
+# covers names the technique in tide.toml it is mapped to. enabled, interval and from start a rule
+# as written; without them it is enabled and runs every minute over the last six. Two techniques have
+# no rule at all.
+
+# Works: the part that needs no fixing.
+[[rule]]
+source = "elastic"
+rule_id = "a624863f-a70d-417f-a7d2-7a404638d47f"
+name = "Suspicious MS Office Child Process"
+covers = "Invoice opened: Word runs its macro"
+
+# Too noisy: it fires on the Splunk forwarder's own PowerShell, on every server, all day.
+[[rule]]
+source = "custom"
+rule_id = "025e7625-2114-481d-8eab-dfe67f5de641"
+name = "PowerShell started"
+covers = "PowerShell download cradle"
+description = "PowerShell started on a Windows host."
+type = "query"
+language = "kuery"
+query = "process.name : *powershell*"
+index = ["logs-windows.sysmon_operational-*", "logs-system.security-*"]
+severity = "medium"
+risk_score = 47
+techniques = ["T1059.001"]
+tactic = "Execution"
+tags = ["Domain: Endpoint"]
+
+# Half-finished: written by the team, left disabled, and its name has a space after it.
+[[rule]]
+source = "custom"
+rule_id = "d6a924df-59a5-4fe0-817f-11ece3fdcf93"
+name = "Certificate downloaded with certutil "
+covers = "Certificate downloaded with certutil"
+description = "certutil fetching a file over HTTP with -urlcache, as attackers do to download tools and certificates."
+type = "query"
+language = "kuery"
+query = 'process.name : "certutil.exe" and process.command_line : *urlcache* and process.command_line : *http*'
+index = ["logs-windows.sysmon_operational-*"]
+severity = "medium"
+risk_score = 47
+techniques = ["T1105"]
+tactic = "Command and Control"
+tags = ["Domain: Endpoint"]
+enabled = false
+
+# Works for procedure A only: certutil's command line. Procedure B is a known gap in tide.toml.
+[[rule]]
+source = "sigma"
+rule_id = "d2125259-ddea-4c1c-9c22-977eb5b29cf0"
+name = "New Root Certificate Installed Via Certutil.EXE"
+covers = "Rogue root certificate installed"
+
+# Never fires: ported from Splunk as written, its field (registry_path) is Splunk's, not in the data.
+# Kibana runs it without complaint.
+[[rule]]
+source = "custom"
+rule_id = "0a470ef8-6304-4a12-bbec-d52108b51571"
+name = "Proxy auto-config changed"
+covers = "Proxy auto-config pointed at the attacker"
+description = "A user's proxy auto-config URL changed: the browser may be sent through someone else's proxy."
+type = "query"
+language = "kuery"
+query = "registry_path : *AutoConfigURL*"
+index = ["logs-windows.sysmon_operational-*"]
+severity = "high"
+risk_score = 73
+techniques = ["T1112"]
+tactic = "Defense Impairment"
+tags = ["Domain: Endpoint"]
+
+# Can't work: written for Elastic Defend's data, which this SIEM hasn't, and it runs every 10 minutes
+# looking back 5, so it would miss half of what happens even with the right data.
+[[rule]]
+source = "custom"
+rule_id = "b49fb3aa-2cbe-486c-8fb2-71f50f980a43"
+name = "Scheduled task created at logon"
+covers = "Scheduled task at logon"
+description = "A scheduled task created to run at logon, as malware does to start again after a restart."
+type = "eql"
+language = "eql"
+query = 'process where event.type == "start" and process.name : "schtasks.exe" and process.args : "/create" and process.args : "onlogon"'
+index = ["logs-endpoint.events.process-*"]
+severity = "high"
+risk_score = 73
+techniques = ["T1053.005"]
+tactic = "Persistence"
+tags = ["Domain: Endpoint"]
+interval = "10m"
+from = "now-5m"

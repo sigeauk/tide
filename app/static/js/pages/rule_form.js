@@ -295,17 +295,35 @@
         var scopeSelect = form.querySelector('#rule-scope-pair'), indexInput = form.querySelector('#rule-index');
         var reasonInput = form.querySelector('#rule-reason'), errorBox = form.querySelector('#rule-form-error');
 
-        // A destination's default index fills an empty index field (an operator's own value wins).
+        // A destination's default index (its own, else its space's in Kibana) fills an empty index
+        // field, and replaces the last one it filled when the destination changes; an operator's own
+        // value wins.
+        var filled = '';
         function updateDefaultIndex() {
             if (!scopeSelect || !indexInput) return;
             var selected = scopeSelect.options[scopeSelect.selectedIndex];
-            var defaultIndex = selected && (selected.getAttribute('data-default-index') || '').trim();
-            if (defaultIndex && !indexInput.value.trim()) indexInput.value = defaultIndex;
+            var defaultIndex = (selected && (selected.getAttribute('data-default-index') || '').trim()) || '';
+            var current = indexInput.value.trim();
+            if (!current || current === filled) { indexInput.value = defaultIndex; filled = defaultIndex; }
         }
         if (scopeSelect) {
             scopeSelect.addEventListener('change', updateDefaultIndex);
             if (mode === 'create') updateDefaultIndex();
         }
+
+        // ES|QL and machine learning rules take no index patterns: the field is hidden, and neither
+        // checked nor posted.
+        var plainIndex = form.querySelector('#rule-index-plain'), typeSelect = form.querySelector('#rule-type');
+        var postedType = form.querySelector('input[type="hidden"][name="type"]');
+        function indexForType() {
+            if (!plainIndex || !indexInput) return;
+            var type = postedType ? postedType.value : (typeSelect && typeSelect.value);
+            var none = type === 'esql' || type === 'machine_learning';
+            plainIndex.hidden = none;
+            indexInput.disabled = none;
+        }
+        if (typeSelect) typeSelect.addEventListener('change', indexForType);
+        indexForType();
 
         // A rule that searches a data view: Use index patterns instead shows the patterns to save
         // in its place (filled with the data view's own); unticked, none are sent.

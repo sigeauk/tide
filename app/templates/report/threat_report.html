@@ -28,7 +28,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
-<title>TIDE — {{ classification }} Threat Report — {{ generated_at }}</title>
+<title>TIDE — {{ classification }} threat report — {{ generated_at }}</title>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -667,7 +667,7 @@ ul.rule-list li.rule-item::before { content: none; }
 }
 
 /* ══════════════════════════════════════════════════════
-   QUICK-WIN SIGMA TILE  (Executive Summary callout)
+   QUICK-WIN SIGMA TILE  (Executive summary callout)
    ══════════════════════════════════════════════════════ */
 .quick-win-card {
     background: #eef4ff;          /* light blue tint — branded, on white page */
@@ -752,8 +752,8 @@ ul.rule-list li.rule-item::before { content: none; }
         <span class="cover-logo">TIDE</span>
         <div class="cover-tagline">Threat Informed Detection Engine</div>
         <hr class="cover-rule"/>
-        <div class="cover-title">Threat Coverage Report</div>
-        <div class="cover-subtitle">MITRE ATT&amp;CK Detection Coverage Analysis</div>
+        <div class="cover-title">Threat coverage report</div>
+        <div class="cover-subtitle">MITRE ATT&amp;CK Detection coverage analysis</div>
         <div class="cover-level-pill">
             {%- if level == 'technical' -%}Technical / Engineer{%- else -%}Executive / CISO{%- endif -%}
         </div>
@@ -776,14 +776,14 @@ ul.rule-list li.rule-item::before { content: none; }
      SECTION 1 — EXECUTIVE SUMMARY
      ══════════════════════════════════════════════════════ -->
 <div class="section-banner avoid-break">
-    <div class="section-banner-title">Executive Summary</div>
+    <div class="section-banner-title">Executive summary</div>
     <div class="section-banner-sub">Detection coverage analysis for selected adversary profiles</div>
 </div>
 
 <div class="summary-grid avoid-break">
     <div class="stat-card">
         <span class="stat-value">{{ selected_actors | length }}</span>
-        <span class="stat-label">Actors Analysed</span>
+        <span class="stat-label">Actors analysed</span>
     </div>
     <div class="stat-card">
         <span class="stat-value">{{ total_ttps }}</span>
@@ -791,12 +791,12 @@ ul.rule-list li.rule-item::before { content: none; }
     </div>
     <div class="stat-card">
         <span class="stat-value {% if coverage_pct >= 80 %}success{% elif coverage_pct >= 50 %}warning{% else %}danger{% endif %}">{{ coverage_pct }}%</span>
-        <span class="stat-label">Detection Coverage</span>
+        <span class="stat-label">Detection coverage</span>
     </div>
     {%- set epct = effective_pct | default(coverage_pct) %}
     <div class="stat-card">
         <span class="stat-value {% if epct >= 80 %}success{% elif epct >= 50 %}warning{% else %}danger{% endif %}">{{ epct }}%</span>
-        <span class="stat-label">Effective Coverage</span>
+        <span class="stat-label">Effective coverage</span>
     </div>
     <div class="stat-card">
         <span class="stat-value success">{{ covered_count }}</span>
@@ -804,11 +804,11 @@ ul.rule-list li.rule-item::before { content: none; }
     </div>
     <div class="stat-card">
         <span class="stat-value {% if gap_count == 0 %}success{% elif gap_count < 10 %}warning{% else %}danger{% endif %}">{{ gap_count }}</span>
-        <span class="stat-label">Critical Gaps</span>
+        <span class="stat-label">Critical gaps</span>
     </div>
     <div class="stat-card">
         <span class="stat-value">{{ total_elastic_rules }}</span>
-        <span class="stat-label">Elastic Rules</span>
+        <span class="stat-label">Elastic rules</span>
     </div>
 </div>
 
@@ -816,7 +816,7 @@ ul.rule-list li.rule-item::before { content: none; }
 <div class="quick-win-card avoid-break">
     <div class="quick-win-icon">Sig</div>
     <div class="quick-win-body">
-        <div class="quick-win-title">Quick Win — Sigma Rules Available to Close Gaps</div>
+        <div class="quick-win-title">Quick win — Sigma rules available to close gaps</div>
         <div><span class="quick-win-count">{{ sigma_opportunity_count }}</span></div>
         <div class="quick-win-label">community Sigma rules map to your current detection gaps and are available for immediate import to improve coverage.</div>
     </div>
@@ -824,7 +824,7 @@ ul.rule-list li.rule-item::before { content: none; }
 {% endif %}
 
 <div style="font-size:7.5pt; font-weight:700; color:var(--text-3); text-transform:uppercase; letter-spacing:0.06em; border-bottom:1px solid var(--border); padding-bottom:2mm; margin-bottom:3mm;">
-    Selected Adversaries
+    Selected adversaries
 </div>
 
 <div class="actor-cards">
@@ -860,7 +860,7 @@ ul.rule-list li.rule-item::before { content: none; }
 
     <div class="overlap-callout">
         <div class="overlap-callout-title">
-            High ROI Priority — Top Adversary Overlap
+            High ROI priority — top adversary overlap
             <span class="roi-badge">{{ overlap_table | length }} technique{{ 's' if overlap_table | length != 1 else '' }}</span>
         </div>
         <div class="overlap-callout-desc">
@@ -882,7 +882,7 @@ ul.rule-list li.rule-item::before { content: none; }
                 <th>ID</th>
                 <th>Technique</th>
                 <th>Tactic</th>
-                <th>Shared By</th>
+                <th>Shared by</th>
                 <th style="text-align:center">Actors</th>
             </tr>
         </thead>
@@ -918,7 +918,7 @@ ul.rule-list li.rule-item::before { content: none; }
 {% if level == 'executive' %}
 <div style="margin-top: 8mm;">
     <div class="section-banner avoid-break">
-        <div class="section-banner-title">Tactic Coverage Overview</div>
+        <div class="section-banner-title">Tactic coverage overview</div>
         <div class="section-banner-sub">Coverage score per MITRE ATT&amp;CK tactic — full technique breakdown available in the Engineer report.</div>
     </div>
 
@@ -943,7 +943,7 @@ ul.rule-list li.rule-item::before { content: none; }
     <!-- Heading row + legend (top-right) -->
     <div class="matrix-header-row">
         <div>
-            <div class="matrix-heading">MITRE ATT&amp;CK Coverage Matrix</div>
+            <div class="matrix-heading">MITRE ATT&amp;CK coverage matrix</div>
             <div class="matrix-sub">
                 Each cell is a technique used by at least one selected adversary.
                 Colour indicates detection status across enabled Elastic rules.
@@ -985,7 +985,7 @@ ul.rule-list li.rule-item::before { content: none; }
 
     <div class="matrix-header-row">
         <div>
-            <div class="matrix-heading">MITRE ATT&amp;CK Coverage Matrix</div>
+            <div class="matrix-heading">MITRE ATT&amp;CK coverage matrix</div>
             <div class="matrix-sub">
                 Page 2 of 2 — tactics {{ tactics_a | length + 1 }}–{{ tactics | length }}.
             </div>
@@ -1029,7 +1029,7 @@ ul.rule-list li.rule-item::before { content: none; }
 <div class="detail-section">
 
     <div class="section-banner avoid-break">
-        <div class="section-banner-title">Detailed Coverage by Tactic</div>
+        <div class="section-banner-title">Detailed coverage by tactic</div>
         <div class="section-banner-sub">
             Source = MITRE framework (Enterprise / ICS) or OpenCTI.
             Rules = enabled Elastic detection rules providing coverage.
@@ -1081,8 +1081,8 @@ ul.rule-list li.rule-item::before { content: none; }
                     <th>Technique</th>
                     <th>Status</th>
                     <th>Source</th>
-                    <th>Detection Rules</th>
-                    {% if has_sigma %}<th>Sigma Opportunities</th>{% endif %}
+                    <th>Detection rules</th>
+                    {% if has_sigma %}<th>Sigma opportunities</th>{% endif %}
                 </tr>
             </thead>
             <tbody>

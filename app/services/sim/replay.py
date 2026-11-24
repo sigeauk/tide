@@ -192,7 +192,7 @@ class Replay:
 
     def __init__(self, es: Elastic, segments: list[Segment], *, namespace: str | None = None,
                  index: str | None = None, speed: float = 10.0, max_eps: float = MAX_EPS, max_gap: float = 5.0,
-                 batch_size: int = 500, workers: int = 2, slim: bool = False,
+                 batch_size: int = 500, workers: int = 2, slim: bool = False, loop: int = 1,
                  on_progress: Callable[[dict], None] | None = None):
         if bool(namespace) == bool(index):
             raise ValueError("A replay goes to a namespace's data streams or to one index: give one")
@@ -202,6 +202,7 @@ class Replay:
         self.speed, self.max_eps, self.max_gap = speed, max_eps, max_gap
         self.batch_size, self.workers, self.slim, self.on_progress = batch_size, max(workers, 1), slim, on_progress
         self.run_id = uuid.uuid4().hex[:8]
+        self.loop = loop                    # which pass of the same data this is (a simulation's Replay data)
         self.progress = Progress()
         self._stop = threading.Event()
         self._lock = threading.Lock()
@@ -227,7 +228,7 @@ class Replay:
             event.setdefault("module", ds.module)   # an imported ECS document keeps its own
         else:
             event["module"] = ds.module
-        doc["botes"]["replay"] = {"run_id": self.run_id, "loop": 1}
+        doc["botes"]["replay"] = {"run_id": self.run_id, "loop": self.loop}
         doc["botes"]["scenario"] = scenario
         if self.namespace:
             doc["data_stream"] = {"type": "logs", "dataset": ds.ds, "namespace": self.namespace}

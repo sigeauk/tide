@@ -34,6 +34,7 @@ def form_prefill(rule: dict) -> dict:
         "from": body.get("from") or "now-6m", "enabled": False, "type": body.get("type") or "query",
         "risk_score": body.get("risk_score"), "index": body.get("index") or [],
         "timestamp_override": body.get("timestamp_override") or "",
+        "building_block_type": body.get("building_block_type") or "",     # Elastic's building blocks (#125)
         "highlighted_fields": (body.get("investigation_fields") or {}).get("field_names") or [],
         # The settings the form shows for some rule types (rules._type_setting_values), and the
         # filters it shows but leaves as they are.

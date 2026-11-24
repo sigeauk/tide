@@ -43,6 +43,7 @@ _DISPLAY_MAP = {
     "enterprise": "MITRE Enterprise",
     "mobile": "MITRE Mobile",
     "ics": "MITRE ICS",
+    "simulation": "Simulation",     # a running simulation's attacker (sim/client.py)
 }
 
 

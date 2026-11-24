@@ -1,20 +1,38 @@
 {#
   The Simulations page's Answers tab, for one simulation (api.simulations.simulation_answers): each of
   its scenarios' questions with the answer, the searches that find it in the simulation's own data, and
-  the notes on its rules (With TIDE), which players never see.
+  the notes on its rules (With TIDE), which players never see. Each scenario and each question folds,
+  as it was left (the page's store, by scenario and question, so the same in every simulation of it).
+  can_save: Save in Kibana saves a question's KQL and ES|QL searches in the simulation's space, for
+  Discover (#126). While the simulation sets up, the tab asks for itself again, so Save in Kibana shows
+  once it can save.
 #}
 {% from "components/window_ui.html" import section_head %}
-<section class="card card-padded card-mb sys-section" data-fold="answers" aria-label="Questions and answers">
+{% from "macros/icons.html" import icon_text %}
+{% from "macros/sim_answer.html" import answer_body %}
+<section class="card card-padded card-mb sys-section" data-fold="answers" aria-label="Questions and answers"
+         {%- if sim.state == 'setting_up' %} hx-get="/api/simulations/{{ sim.id }}/answers" hx-trigger="every 10s" hx-target="#sim-answers" hx-swap="innerHTML"{% endif %}>
     {{ section_head('Questions and answers', 'book-open') }}
     <div class="sys-section__body">
         {% for sc, items in questions %}
         <details class="sim-answers" data-fold="answers-{{ sc.id }}">
             <summary>{{ sc.label }}: {{ items | length }} questions</summary>
-            {% for q, writeup in items %}
-            <div class="sim-answer">
-                <p><strong>{{ q.n }}.</strong> {{ q.text | md }}</p>
-                <div class="sim-answer__writeup">{{ writeup | md }}</div>
-            </div>
+            {% for q, parts, searches in items %}
+            {% set slot = 'sim-saved-' ~ sc.id ~ '-' ~ q.n %}
+            <details class="sim-answer" data-fold="answer-{{ sc.id }}-{{ q.n }}" open>
+                <summary class="sim-answer__title">{{ parts.title or (q.n ~ '.') }}</summary>
+                <div class="sim-answer__head">
+                    <div class="sim-answer__question">{{ q.text | md }}</div>
+                    {% if can_save and searches %}
+                    <button name="Save In Kibana" type="button" class="btn btn-secondary btn-sm"
+                            hx-post="/api/simulations/{{ sim.id }}/saved-searches" hx-vals='{{ {"scenario": sc.id, "n": q.n} | tojson }}'
+                            hx-target="#{{ slot }}" hx-swap="innerHTML" hx-disabled-elt="this"
+                            title="Save its {{ 'search' if searches == 1 else searches ~ ' searches' }} in the simulation's space in Kibana, to open in Discover">{{ icon_text('save', 'Save in Kibana', '13') }}</button>
+                    {% endif %}
+                </div>
+                {{ answer_body(parts) }}
+                <div id="{{ slot }}" aria-live="polite"></div>
+            </details>
             {% endfor %}
         </details>
         {% else %}

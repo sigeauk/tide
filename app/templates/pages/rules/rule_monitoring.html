@@ -20,7 +20,7 @@
             Rule Monitoring
             {{ help_button('rule-monitoring') }}
         </h1>
-        <p class="page-subtitle">Your rules that need action, grouped by what causes it.</p>
+        <p class="page-subtitle">Your rules that need fixing to work as they should, grouped by what causes it.</p>
         <div id="rh-last-sync" hx-get="/api/rules/sync/last" hx-trigger="load, refreshRules from:body" hx-swap="innerHTML"></div>
     </div>
     <div class="flex items-center gap-ms shrink-0">
@@ -51,7 +51,7 @@
 
 <div class="divider"></div>
 
-{# Search and SIEM, the rest under one Filters fold (UX.md 9.5) #}
+{# Search and SIEM, the rest under one Filters fold #}
 <div class="filters-bar" id="rmon-filters" data-fold-store="tide.ruleMonitoringFolds">
     <div class="filter-group grow">
         <label class="form-label" for="rmon-search">Search</label>
@@ -64,10 +64,8 @@
     {# The count names the filters that narrow the list: Rules and Show when not their default
        (data-filter-default); Group by only arranges it (data-filter-order). #}
     {% set d = filter_defaults %}
-    {% set active = [filters.kind, filters.severity, filters.fixer, filters.issue, filters.rules != d.rules, filters.show != d.show] | select | list | length %}
+    {% set active = [filters.severity, filters.fixer, filters.issue, filters.rules != d.rules, filters.show != d.show] | select | list | length %}
     {% call more_filters('filters', active) %}
-        {{ filter_multi('rmon-kind', 'kind', 'Kind', kind_options, filters.kind, 'Any', counts.kind, rmon_hx,
-                        {'health': 'Whether the rule works', 'tuning': 'Whether it is worth its alerts: listed on Rule Tuning too'}) }}
         {{ filter_multi('rmon-severity', 'severity', 'Severity', severity_options, filters.severity, 'Any', counts.severity, rmon_hx,
                         {'error': "The rule doesn't do its job until this is fixed", 'warning': 'The rule runs, but less well'}) }}
         {{ filter_multi('rmon-fixer', 'fixer', 'Who fixes', fixer_options, filters.fixer, 'Any', counts.fixer, rmon_hx) }}

@@ -1,6 +1,7 @@
 /*
- * Systems (pages/inventory/systems.html): filtering the system cards, the Nessus upload's new
- * environment, and exporting / importing systems as JSON.
+ * Systems (pages/inventory/systems.html): filtering the system cards (the filters kept in the
+ * address, which the page fills them from, so a reload or a link shows the same; #119), the Nessus
+ * upload's new environment, and exporting / importing systems as JSON.
  */
 (function () {
     'use strict';
@@ -22,10 +23,22 @@
         });
         var countEl = $('systems-filter-count');
         if (countEl) countEl.textContent = (query || classification || risk) ? visible + ' of ' + cards.length + ' systems shown' : '';
+        writeUrl();
+    }
+    function writeUrl() {
+        var params = new URLSearchParams();
+        [['q', 'system-filter-q'], ['classification', 'system-filter-classification'], ['risk', 'system-filter-risk']].forEach(function (f) {
+            var v = (($(f[1]) || {}).value || '').trim();
+            if (v) params.set(f[0], v);
+        });
+        var qs = params.toString();
+        history.replaceState(history.state, '', window.location.pathname + (qs ? '?' + qs : ''));
     }
     document.addEventListener('htmx:afterSettle', function (evt) {
         if (evt.detail.target && evt.detail.target.id === 'systems-grid') filterCards();
     });
+    // Arriving with filters in the address: the page drew them; show the cards they leave.
+    TIDE.page('#system-filter-q', function (input) { if (window.location.search) filterCards(); });
 
     function openTransfer(e, el) {
         var mode = el.dataset.mode;

@@ -77,6 +77,6 @@ description = "Thousands of files on the we9041srv share are read and rewritten 
 name = "Wayne Enterprises office"
 description = "Staff desktops and the file server they share."
 hosts = [
-  { name = "we8105desk", ip = "192.168.250.100", os = "Windows 10" },
+  { name = "we8105desk", ip = "192.168.250.100", os = "Windows 7" },
   { name = "we9041srv", ip = "192.168.250.20", os = "Windows Server 2012 R2" },
 ]

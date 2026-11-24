@@ -70,7 +70,7 @@
     <div class="metric-tip" role="tooltip">Rule is disabled, or only where this system isn't measured{{ metric_change_tip(changes.not_counted) }}</div>
 {% endcall %}
 
-{# Wazuh devices (D15): their findings and CIS benchmark scores, only while the system has such devices
+{# Wazuh devices: their findings and CIS benchmark scores, only while the system has such devices
    (wazuh_assets.system_figures). #}
 {% set wz = wazuh | default(none) %}
 {% if wz %}

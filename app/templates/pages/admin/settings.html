@@ -8,6 +8,12 @@
 {% block settings_subtitle %}Your profile, how you sign in, how TIDE looks, and your API keys.{% endblock %}
 
 {% block settings_tab_content %}
+{% set must_change = user and user.must_change_password %}
+{% if must_change %}
+{# An admin reset this TIDE account's password: nothing else opens until it chooses its own (AuthMiddleware). #}
+<div class="alert alert-warning mb-md" role="alert"><p class="m-0">An admin reset your password. Choose a new one under
+    <strong>Change password</strong> to carry on: TIDE opens nothing else until you do.</p></div>
+{% endif %}
 <div class="profile-grid">
     {% include "partials/profile_identity.html" %}
 
@@ -38,7 +44,7 @@
         </dl>
 
         {% if user and not via_sso %}
-        <details class="profile-credentials">
+        <details class="profile-credentials"{% if must_change %} open{% endif %}>
             <summary class="cursor-pointer fw-600">Change email or password</summary>
             <div class="preferences-grid preferences-grid--two">
                 <div class="overview-section m-0">
@@ -106,7 +112,7 @@
     </section>
 </div>
 
-{% if not user or user.can_read('page:settings') %}
+{% if not must_change and (not user or user.can_read('page:settings')) %}
 <div class="profile-api-keys">
     <div class="preference-card">
         <div class="preference-header">
@@ -115,65 +121,7 @@
             </svg>
             <h3>API key management</h3>
         </div>
-        <p class="preference-desc">Manage API keys for the external query endpoint (<code>/api/external/query</code>). Keys authenticate external applications to run read-only SQL queries against TIDE data.</p>
-
-        <div class="alert mt-ms mr-0 mb-md ml-0 fs-md">
-            <p><strong>External Query API (HTTPS)</strong></p>
-            <p class="mt-xs">Query endpoint: <code>POST /api/external/query</code></p>
-            <p class="mt-xs">List tenants: <code>GET /api/external/clients</code></p>
-            <p class="mt-xs">Header: <code>X-TIDE-API-KEY: &lt;your key&gt;</code></p>
-            <p class="mt-xs">Request body: <code>{"sql": "SELECT ...", "client_id": "TENANT_ID"}</code></p>
-            <p class="mt-xs text-muted">The API key inherits your tenant access. If you have access to one tenant, <code>client_id</code> is optional. Use <code>/api/external/clients</code> to discover your available tenants.</p>
-        </div>
-
-        <details class="mt-0 mr-0 mb-md ml-0">
-            <summary class="cursor-pointer fw-600">Security constraints</summary>
-            <ul class="mt-sm mr-0 mb-0 ml-md fs-md text-muted">
-                <li>Only <code>SELECT</code> and <code>WITH</code> (CTE) statements are allowed</li>
-                <li>Blocked keywords include <code>DROP</code>, <code>DELETE</code>, <code>INSERT</code>, <code>UPDATE</code>, <code>INSTALL</code>, and other mutating/admin operations</li>
-                <li>Maximum SQL length: <code>4000</code> characters</li>
-                <li>Queries run against isolated tenant databases — each API key can only access tenants assigned to its owner</li>
-                <li>Each query is also parsed by DuckDB before it runs, and may read only that tenant database's own tables and views: no files, other databases or SIEM settings</li>
-                <li>Keys are stored as SHA-256 hashes; raw key is shown only once at creation</li>
-            </ul>
-        </details>
-
-        <details class="mt-0 mr-0 mb-md ml-0">
-            <summary class="cursor-pointer fw-600">Common query tables</summary>
-            <div class="mt-sm fs-md text-muted leading-normal">
-                <p><code>detection_rules</code>, <code>threat_actors</code>, <code>mitre_techniques</code>, <code>systems</code>, <code>hosts</code>, <code>software_inventory</code>, <code>vuln_detections</code>, <code>applied_detections</code>, <code>blind_spots</code>, <code>playbooks</code>, <code>playbook_steps</code>, <code>step_techniques</code>, <code>step_detections</code>, <code>system_baselines</code>, <code>classifications</code>, <code>app_settings</code></p>
-            </div>
-        </details>
-
-        <details class="mt-0 mr-0 mb-md ml-0">
-            <summary class="cursor-pointer fw-600">cURL examples and responses</summary>
-            <div class="mt-sm">
-                <p class="fs-md text-muted mb-sm"><strong>List your tenants</strong></p>
-<pre class="bg-surface p-sm rounded-sm overflow-auto fs-sm">curl -s https://your-tide-host/api/external/clients \
-  -H "X-TIDE-API-KEY: YOUR_KEY_HERE"</pre>
-<pre class="bg-surface p-sm rounded-sm overflow-auto fs-sm mt-sm">{"clients":[{"id":"1b650e71-...","name":"Primary Client","slug":"primary"}]}</pre>
-
-                <p class="fs-md text-muted mt-ms mr-0 mb-sm ml-0"><strong>Count all rules (single tenant — client_id optional)</strong></p>
-<pre class="bg-surface p-sm rounded-sm overflow-auto fs-sm">curl -s -X POST https://your-tide-host/api/external/query \
-  -H "Content-Type: application/json" \
-  -H "X-TIDE-API-KEY: YOUR_KEY_HERE" \
-  -d '{"sql":"SELECT COUNT(*) AS total_rules FROM detection_rules"}'</pre>
-<pre class="bg-surface p-sm rounded-sm overflow-auto fs-sm mt-sm">{"columns":["total_rules"],"rows":[{"total_rules":239}],"row_count":1}</pre>
-
-                <p class="fs-md text-muted mt-ms mr-0 mb-sm ml-0"><strong>Query a specific tenant</strong></p>
-<pre class="bg-surface p-sm rounded-sm overflow-auto fs-sm">curl -s -X POST https://your-tide-host/api/external/query \
-  -H "Content-Type: application/json" \
-  -H "X-TIDE-API-KEY: YOUR_KEY_HERE" \
-  -d '{"sql":"SELECT rule_id, name, severity, score FROM detection_rules ORDER BY score DESC LIMIT 5", "client_id":"1b650e71-..."}'</pre>
-
-                <p class="fs-md text-muted mt-ms mr-0 mb-sm ml-0"><strong>Error examples</strong></p>
-<pre class="bg-surface p-sm rounded-sm overflow-auto fs-sm">401: {"detail":"Invalid or missing API key."}
-400: {"detail":"Only SELECT statements are allowed."}
-400: {"detail":"client_id is required when the API key owner has access to multiple tenants..."}
-403: {"detail":"API key does not have access to the requested tenant."}
-400: {"detail":"Forbidden SQL keyword: DROP"}</pre>
-            </div>
-        </details>
+        <p class="preference-desc">API keys let other tools run read-only SQL queries against your clients' data in TIDE. How to call it, what a query may do and examples: <a href="/settings/docs/api">External Query API</a> in Documentation.</p>
 
         <!-- Create key form -->
         <form name="Submit Keys" hx-post="/api/settings/api-keys" hx-target="#api-key-section" hx-swap="innerHTML"

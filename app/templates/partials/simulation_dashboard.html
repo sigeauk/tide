@@ -3,12 +3,14 @@
   over time (score_chart: a step line each, in the player's colour, .sim-series-N), the board, how each
   question went, and (for the Sim Admin) the rules' alerts. On the Simulations page
   (api.simulations.simulation_dashboard) and, for a player, on Simulation (player_dashboard, player
-  true, me: them). Asked for again (poll_url, into target) every 15 s while the simulation runs.
+  true, me: them). Asked for again (poll_url, into target) every 15 s while the simulation runs; its
+  sections stay folded as they were left (its own data-fold-store, the page's key). A question is its
+  number, its words on hover.
 #}
 {% from "macros/icons.html" import icon %}
 {% from "components/window_ui.html" import section_head %}
 {% set s = sim %}
-<div {% if live %}hx-get="{{ poll_url }}" hx-trigger="every 15s" hx-target="{{ target }}" hx-swap="innerHTML"{% endif %}>
+<div data-fold-store="{{ 'tide.simulationFolds' if player else 'tide.simulationsFolds' }}"{% if live %} hx-get="{{ poll_url }}" hx-trigger="every 15s" hx-target="{{ target }}" hx-swap="innerHTML"{% endif %}>
 <div class="metrics-grid mb-lg">
     <div class="metric-card">
         <div class="metric-label">{{ icon('activity', '16') }} State</div>
@@ -84,7 +86,7 @@
             <tbody>
             {% for sc, q, st in items %}
                 <tr>
-                    <td><span class="text-secondary">{% if several %}{{ sc.title or sc.label }} {% endif %}{{ q.n }}.</span> {{ (q.text | md | striptags) | truncate(110, true, '…') }}</td>
+                    <td class="sim-qtable__n" title="{{ q.text | md | striptags }}">{% if several %}<span class="text-secondary">{{ sc.title or sc.label }}</span> {% endif %}{{ q.n }}</td>
                     <td>{{ st.solved or 0 }} of {{ players }}</td>
                     <td>{% if st.first %}{{ st.first }} <span class="text-secondary text-sm">{{ st.first_at.strftime('%H:%M:%S') }}</span>{% else %}—{% endif %}</td>
                     <td>{{ st.hints or 0 }}</td>

@@ -1,0 +1,12 @@
+{#
+  A simulation question's write-up (api.simulations.answer_parts), as the Answers tab and a player's
+  answered question show it (#126): its answer set apart in TIDE's blue, then how to find it, its
+  searches each in its own box named for its language (KQL, ES|QL, EQL) and coloured as a rule's query
+  is (highlight_code), and any notes.
+#}
+{% macro answer_body(parts) -%}
+{% if parts.answer %}
+<div class="sim-answer__answer"><span class="sim-answer__answer-label">Answer</span><div class="sim-answer__answer-value">{{ parts.answer_md | md }}</div></div>
+{% endif %}
+<div class="sim-answer__writeup">{{ parts.rest | md | highlight_code }}</div>
+{%- endmacro %}

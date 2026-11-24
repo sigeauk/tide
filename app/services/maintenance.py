@@ -6,8 +6,8 @@ order and one client at a time:
      already running). Each is a run in Diagnostics -> Sync activity, by "maintenance window".
   2. Back up: the backup Management -> Backups makes (it replaces the daily backup schedule while
      the window is on and runs this step).
-  3. Reclaim space: a database file with RECLAIM_PCT of it or more empty (and at least
-     RECLAIM_MIN_FILE big) is compacted. That needs the files closed, so the window announces a
+  3. Reclaim space: a database file (at least RECLAIM_MIN_FILE big) that compacting would make
+     RECLAIM_PCT smaller or more (``reclaimable``) is compacted. That needs the files closed, so the window announces a
      restart RESTART_NOTICE ahead: every signed-in page shows "TIDE will restart for scheduled
      maintenance" with Delay (DELAY each, up to MAX_DELAY in all; then Postpone to the next
      window). At the restart TIDE ends and Docker starts it again; at startup, before any
@@ -30,6 +30,7 @@ import os
 import re
 import threading
 import time
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
@@ -44,10 +45,12 @@ DAY_NAMES = dict(zip(DAYS, ("Monday", "Tuesday", "Wednesday", "Thursday", "Frida
 STEPS = (("sync", "Sync every client"), ("backup", "Back up"), ("reclaim", "Reclaim space"))
 DEFAULT_SCHEDULE = {"enabled": False, "days": list(DAYS), "time": "02:00",
                     "steps": {"sync": True, "backup": True, "reclaim": True}}
-RECLAIM_PCT = 30                          # a file this much empty space or more is compacted...
+RECLAIM_PCT = 30                          # a file compacting would make this much smaller or more is compacted...
 RECLAIM_MIN_FILE = 200 * 1024 * 1024      # ...when it is at least this big
-GROWN_PCT = 50                            # at every start, a file at least RECLAIM_MIN_FILE of which this much
-                                          # is space no table holds is compacted, window or not (#116)
+GROWN_PCT = 50                            # at every start, a file at least RECLAIM_MIN_FILE that compacting would
+                                          # make this much smaller is compacted, window or not (#116)
+TRIAL_AGAIN = 1.5                         # a file a copy found not worth compacting is copied again once it is this
+                                          # many times the size it was then (#121)
 RESTART_NOTICE = timedelta(minutes=15)    # how long signed-in pages are told before the restart
 DELAY = timedelta(minutes=30)             # what Delay adds
 MAX_DELAY = timedelta(hours=2)            # in all; after that, Postpone to the next window
@@ -56,6 +59,7 @@ _TIME = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 
 _lock = threading.Lock()                  # one window at a time
 _state_lock = threading.Lock()            # the pending restart's file
+_trials_lock = threading.Lock()           # the copies' file
 
 
 def _data_dir() -> Path:
@@ -128,16 +132,109 @@ def summary(schedule: Optional[Dict[str, Any]] = None) -> str:
 
 # ── what to reclaim ──────────────────────────────────────────────────────────
 
+def _pct(part: int, whole: int) -> int:
+    return part * 100 // whole if whole else 0
+
+
+def _sql_text(value: str) -> str:
+    return value.replace("'", "''")
+
+
 def measure(path: str, conn) -> Dict[str, Any]:
-    """How much of a database file is empty space, from its open connection: ``{name, path, size,
-    reclaim, pct}``, as Diagnostics works it out."""
-    block, used, free = conn.execute(
-        "SELECT block_size, used_blocks, free_blocks FROM pragma_database_size() "
+    """How much of a database file compacting would give back, from its open connection (its database the
+    default one): ``{name, path, size, reclaim, pct, most}``. ``reclaim`` (``pct`` of the file) is its free
+    blocks, which compacting surely gives back. ``most`` is the most it could, in % of the file: every block
+    that holds no table's data and none of the file's own records. Besides the free ones, such a block is an
+    index's, which compacting doesn't give back (about half of a TIDE file freshly compacted is), or lost,
+    held by nothing: a client's file of 1.8 GB held 26 MB in 79 of its 7,018 blocks, with 49% of them free
+    (#116). Only a copy of the file tells the two apart (``reclaimable``)."""
+    block, total, used, free = conn.execute(
+        "SELECT block_size, total_blocks, used_blocks, free_blocks FROM pragma_database_size() "
         "WHERE database_name = current_database()").fetchone()
+    held = {b for (b,) in conn.execute("SELECT block_id FROM pragma_metadata_info(current_database())").fetchall()}
+    for (table,) in conn.execute("SELECT table_name FROM duckdb_tables() "
+                                 "WHERE database_name = current_database()").fetchall():
+        held.update(b for (b,) in conn.execute(
+            f"SELECT DISTINCT block_id FROM pragma_storage_info('{_sql_text(table)}') WHERE block_id >= 0").fetchall())
     size = os.path.getsize(path)
     reclaim = max(0, min(free * block, size - used * block))
+    most = max(reclaim, min(size, (total - len(held)) * block))
     return {"name": os.path.basename(path), "path": str(path), "size": size, "reclaim": reclaim,
-            "pct": reclaim * 100 // size if size else 0}
+            "pct": _pct(reclaim, size), "most": _pct(most, size)}
+
+
+def trial(conn, scratch: str) -> int:
+    """How big a database would be compacted, from its open connection (its database the default one): it
+    is copied into ``scratch`` as compacting copies it, then the copy removed. Takes about as long as the
+    database's data takes to copy, so least for a file that has most to give back."""
+    source = conn.execute("SELECT current_database()").fetchone()[0].replace('"', '""')
+    alias = f"tide_trial_{uuid.uuid4().hex[:12]}"
+    files = (scratch, scratch + ".wal")
+    for p in files:
+        with contextlib.suppress(OSError):
+            os.remove(p)
+    try:
+        conn.execute(f"ATTACH '{_sql_text(scratch)}' AS {alias}")
+        try:
+            conn.execute(f'COPY FROM DATABASE "{source}" TO {alias}')
+        finally:
+            conn.execute(f"DETACH {alias}")
+        return sum(os.path.getsize(p) for p in files if os.path.exists(p))
+    finally:
+        for p in files:
+            with contextlib.suppress(OSError):
+                os.remove(p)
+
+
+def _trials() -> Dict[str, Dict[str, Any]]:
+    """The last copy of each file that measured it (``reclaimable``): ``{name: {size, pct, at}}``."""
+    return _read("maintenance_trials.json") or {}
+
+
+def _remember(name: str, size: int, pct: int) -> None:
+    """What compacting would give back of a file of ``size`` (0 once it is compacted)."""
+    try:
+        with _trials_lock:
+            trials = _trials()
+            trials[name] = {"size": size, "pct": pct, "at": datetime.now().isoformat(timespec="seconds")}
+            _write("maintenance_trials.json", trials)
+    except OSError:
+        logger.warning("Could not record what compacting %s would give back", name, exc_info=True)
+
+
+def reclaimable(path: str, conn, bar: int, scratch: Optional[str] = None, remember: bool = True) -> Dict[str, Any]:
+    """``measure``, settled for a file of RECLAIM_MIN_FILE or more that it leaves in doubt (its free blocks
+    under ``bar``, the most it could give back ``bar`` or more): by a copy of it (``trial``, into ``scratch``,
+    by default beside the file), or by the last copy while the file is under TRIAL_AGAIN times the size it
+    was then (with ``remember``, each copy is kept for the next time). ``pct`` and ``reclaim`` are then what
+    the copy found, unless its free blocks say more since; ``copied_at`` says when it was made. A copy that
+    can't be made leaves the free blocks' figure, said in the log."""
+    m = measure(path, conn)
+    if m["size"] < RECLAIM_MIN_FILE or m["pct"] >= bar or m["most"] < bar:
+        return m
+    last = _trials().get(m["name"]) if remember else None
+    if last and m["size"] < last["size"] * TRIAL_AGAIN:
+        pct, at = last["pct"], last["at"]
+    else:
+        started = time.time()
+        try:
+            pct = _pct(max(0, m["size"] - trial(conn, scratch or path + ".trial")), m["size"])
+        except Exception as exc:                # noqa: BLE001 - its free blocks still say what is sure
+            from app.services import db_fatal
+            if db_fatal.is_fatal(exc):
+                raise
+            logger.warning("Could not copy %s to see what compacting would give back; going by its free blocks",
+                           m["name"], exc_info=True)
+            return m
+        at = datetime.now().isoformat(timespec="seconds")
+        logger.info("Copied %s (%s MB) to see what compacting would give back: %d%%, in %ds",
+                    m["name"], m["size"] // 2**20, pct, round(time.time() - started))
+        if remember:
+            _remember(m["name"], m["size"], pct)
+    if pct > m["pct"]:
+        m.update(pct=pct, reclaim=m["size"] * pct // 100)
+    m["copied_at"] = at
+    return m
 
 
 def worth_compacting(m: Dict[str, Any]) -> bool:
@@ -254,6 +351,7 @@ def reclaim_at_startup(compact: Optional[Callable[[str, bool], int]] = None, now
         ok = code == 0
         if ok:
             _keep_newest_original(path)
+            _remember(f["name"], after, 0)
         done.append({"name": f["name"], "ok": ok, "before": before, "after": after if ok else before,
                      "seconds": round(time.time() - started), "note": "" if ok else out.getvalue().strip()[-300:]})
         logger.info("Maintenance window: compacted %s: %s", f["name"], "ok" if ok else out.getvalue().strip()[-300:])
@@ -264,31 +362,21 @@ def reclaim_at_startup(compact: Optional[Callable[[str, bool], int]] = None, now
     return done
 
 
-def unheld(path: str) -> Dict[str, Any]:
-    """How much of a closed database file is space no table holds: its free blocks, and blocks it counts
-    as used that no table's data is in. ``measure`` sees only the first; a client's file of 1.8 GB held
-    26 MB of data in 79 of its 7,018 blocks with only 49% of them free (#116). ``{name, path, size, pct}``."""
+def reclaimable_closed(path: str, bar: int) -> Dict[str, Any]:
+    """``reclaimable`` for a database file no connection has open (opened read-only for it)."""
     import duckdb
-    conn = duckdb.connect(path, read_only=True)
+    conn = duckdb.connect(":memory:")
     try:
-        total = conn.execute("SELECT total_blocks FROM pragma_database_size() "
-                             "WHERE database_name = current_database()").fetchone()[0] or 0
-        held = set()
-        for (table,) in conn.execute("SELECT table_name FROM duckdb_tables() "
-                                     "WHERE database_name = current_database()").fetchall():
-            quoted = table.replace("'", "''")
-            held.update(b for (b,) in conn.execute(
-                f"SELECT DISTINCT block_id FROM pragma_storage_info('{quoted}') WHERE block_id >= 0").fetchall())
+        conn.execute(f"ATTACH '{_sql_text(path)}' AS tide_file (READ_ONLY)")
+        conn.execute("USE tide_file")
+        return reclaimable(path, conn, bar)
     finally:
         conn.close()
-    size = os.path.getsize(path)
-    return {"name": os.path.basename(path), "path": path, "size": size,
-            "pct": (total - len(held)) * 100 // total if total else 0}
 
 
 def compact_grown_at_startup(data_dir: Optional[str] = None, compact: Optional[Callable[[str, bool], int]] = None) -> List[Dict[str, Any]]:
     """At every start, before any database is opened: compact each database file in the data folder, of
-    at least RECLAIM_MIN_FILE, of which GROWN_PCT or more is space no table holds (``unheld``), as the
+    at least RECLAIM_MIN_FILE, that compacting would make GROWN_PCT smaller or more (``reclaimable``), as the
     maintenance window compacts at its restart (#116). Such a file makes every sync's checkpoint slow
     (18 s for 15 rules on the client's 1.8 GB file; 0.01 s once compacted). Each is checked table by
     table and the original kept as <file>.pre-compact-<time> (only the newest); one that doesn't check
@@ -302,7 +390,7 @@ def compact_grown_at_startup(data_dir: Optional[str] = None, compact: Optional[C
         try:
             if os.path.getsize(path) < RECLAIM_MIN_FILE:
                 continue
-            m = unheld(path)
+            m = reclaimable_closed(path, GROWN_PCT)
         except Exception:                       # noqa: BLE001 - a file that can't be measured is left alone
             logger.warning("Could not measure %s for compacting", path, exc_info=True)
             continue
@@ -317,8 +405,9 @@ def compact_grown_at_startup(data_dir: Optional[str] = None, compact: Optional[C
         after = os.path.getsize(path) if os.path.exists(path) else m["size"]
         if ok:
             _keep_newest_original(path)
-            logger.info("Compacted %s at startup: %s MB to %s MB in %ds (%d%% of it was space no table held)",
-                        m["name"], m["size"] // 2**20, after // 2**20, round(time.time() - started), m["pct"])
+            _remember(m["name"], after, 0)
+            logger.info("Compacted %s at startup: %s MB to %s MB in %ds",
+                        m["name"], m["size"] // 2**20, after // 2**20, round(time.time() - started))
         else:
             logger.warning("Could not compact %s at startup, left as it was: %s", m["name"], out.getvalue().strip()[-300:])
         done.append({"name": m["name"], "ok": ok, "before": m["size"], "after": after if ok else m["size"], "pct": m["pct"]})

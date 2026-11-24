@@ -1,4 +1,4 @@
-"""Wazuh agents as a system's devices, with their vulnerabilities and alerts (Wazuh_integration.md phase 3).
+"""Wazuh agents as a system's devices, with their vulnerabilities and alerts.
 
 A system says which of the client's Wazuh destinations supply its devices (**Wazuh agents…** on its page:
 ``system_wazuh_agents``, one row per destination, with an optional name pattern). At each sync, and when
@@ -44,11 +44,11 @@ DDL = (
     """CREATE TABLE IF NOT EXISTS host_alert_counts (
         host_id VARCHAR NOT NULL, day DATE NOT NULL, alerts INTEGER NOT NULL, PRIMARY KEY (host_id, day))""",
     # Every agent of a destination as of its last complete read, a device of a system or not: Rule
-    # Monitoring's Wazuh agents disconnected (phase 5, D13) looks at the whole group.
+    # Monitoring's Wazuh agents disconnected looks at the whole group.
     """CREATE TABLE IF NOT EXISTS wazuh_agents (
         siem_id VARCHAR NOT NULL, space VARCHAR NOT NULL, agent_id VARCHAR NOT NULL, name VARCHAR, status VARCHAR,
         last_seen TIMESTAMP, synced_at TIMESTAMP, PRIMARY KEY (siem_id, space, agent_id))""",
-    # How each destination's last read of agents, findings and SCA went: Wazuh read incomplete (D13).
+    # How each destination's last read of agents, findings and SCA went: Wazuh read incomplete.
     """CREATE TABLE IF NOT EXISTS wazuh_destination_reads (
         siem_id VARCHAR NOT NULL, space VARCHAR NOT NULL, read_at TIMESTAMP NOT NULL, agents INTEGER,
         error VARCHAR, PRIMARY KEY (siem_id, space))""",
@@ -367,7 +367,7 @@ def kev_matches_by_host(conn) -> Dict[str, Dict[str, List[str]]]:
     return out
 
 
-# ── A destination's agents and reads, for Rule Monitoring (phase 5, D13) ─────
+# ── A destination's agents and reads, for Rule Monitoring ─────
 
 def destination_reads(conn) -> Dict[Tuple[str, str], Dict[str, Any]]:
     """How each Wazuh destination's last read of agents, findings and SCA went: ``{(siem_id, space):
@@ -395,7 +395,7 @@ def disconnected_agents(conn, siem_id: str, space: str, hours: int,
     return out
 
 
-# ── A system's Wazuh figures, for its cards and its report (phase 5, D14, D15) ─
+# ── A system's Wazuh figures, for its cards and its report ─
 
 def _system_wazuh_hosts(conn, system_id: str) -> List[str]:
     if "host_agents" not in _tables(conn):
@@ -478,7 +478,7 @@ def system_vulnerability_report(conn, system_id: str, shown: int = 10) -> Option
     return {**figures, "devices_list": devices, "top": top[:shown], "distinct": len(top)}
 
 
-# ── SCA / CIS: hardening (phase 4) ────────────────────────────────────────────
+# ── SCA / CIS: hardening ────────────────────────────────────────────
 # A device's SCA policies (score, passed / failed / not applicable) and their checks, as Wazuh last ran
 # them. The checks are read again only when a policy's end_scan changed: one API call per device per
 # policy otherwise. A baseline technique can name hardening checks (``step_hardening``, D6): shown
@@ -498,7 +498,7 @@ SCA_DDL = (
         policy_id VARCHAR NOT NULL, check_id VARCHAR NOT NULL, title VARCHAR, cis_ids VARCHAR[], note VARCHAR,
         created_at TIMESTAMP DEFAULT now(), created_by VARCHAR)""",
     # Each policy's score as TIDE recorded it after each new scan: the Dashboard's Hardening card compares
-    # with an earlier day from this (phase 5, D15).
+    # with an earlier day from this.
     """CREATE TABLE IF NOT EXISTS host_sca_history (
         host_id VARCHAR NOT NULL, policy_id VARCHAR NOT NULL, recorded_at TIMESTAMP NOT NULL, end_scan TIMESTAMP,
         score INTEGER, PRIMARY KEY (host_id, policy_id, recorded_at))""",
@@ -621,7 +621,7 @@ def system_hardening(conn, system_id: str, shown: int = 10) -> List[Dict[str, An
     return out
 
 
-# ── A baseline technique's hardening checks (D6) ─────────────────────────────
+# ── A baseline technique's hardening checks ─────────────────────────────
 
 def _check_states(conn, system_id: str, keys: Iterable[Tuple[str, str]]) -> Dict[Tuple[str, str], Dict[str, int]]:
     """``{(policy_id, check_id): {passed, failed, not_applicable, devices}}`` over the system's devices."""

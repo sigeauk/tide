@@ -13,10 +13,11 @@ A simulation is started and ended by a **Sim Admin**: a role beside Admin, Analy
 **Simulations** in the sidebar has three tabs:
 
 - **Run** starts simulations and lists the client's, newest first. Choose a row to open it below the list.
-- **Dashboard** shows how a simulation's players are doing: each player's score over time, the **Board**, how each question went (how many solved it, who first, the hints taken and the wrong answers), and how many alerts each rule raised. It updates itself while the simulation runs.
-- **Answers** shows a simulation's questions, each with its answer, the searches that find it in that simulation's data, and what its rules do with that step. Players never see the notes on the rules.
+- **Dashboard** shows how a simulation's players are doing: each player's score over time, the **Board**, how each question went, by its number with its words on hover (how many solved it, who first, the hints taken and the wrong answers), and how many alerts each rule raised. It updates itself while the simulation runs.
+- **Answers** shows a simulation's questions, each with its answer (in blue), the searches that find it in that simulation's data (each in a box named for its language, KQL, ES|QL or EQL, and coloured as a rule's query is), and what its rules do with that step. Players never see the notes on the rules.
+  - **Save in Kibana** saves a question's KQL and ES|QL searches in the simulation's space, named after the question, so they open in Discover on the simulation's data and its time so far. Saving them again replaces them, and cleaning the simulation up deletes them with its space. Discover can't save an EQL search; copy it into the Correlation tab of a Timeline in Kibana instead.
 
-**Dashboard** and **Answers** open on the simulation that is running, or the latest; **Simulation** above them picks another.
+**Dashboard** and **Answers** open on the simulation that is running, or the latest; **Simulation** above them picks another. A simulation you start shows there straight away. Their sections, and each question on **Answers**, fold by their heading, and stay as you left them.
 
 ### Start a simulation
 
@@ -37,7 +38,9 @@ Until it is cleaned up, the simulation is part of the client like anything else:
 
 - Its space is one of the client's destinations, named *Simulation* and its id, and its rules are synced in, so they show in **Rule Health**, **Rule Monitoring** and the dashboards.
 - Each scenario's attack is a baseline, such as *Web defacement: Po1s0n1vy*, and the systems it hit are systems, such as *imreallynotbatman.com*, with their devices. Their names end with the simulation's id.
-- Each system has the baseline applied and counts the simulation's destination as its coverage. Each of the scenario's rules is mapped to the technique it is there to catch, and a step nothing catches is recorded as a known gap. A system's **Covered** and **Effective** figures then show how much of the attack the rules catch.
+- Each system has the baseline applied and counts the simulation's destination as its coverage. Each of the scenario's rules is mapped to the technique it is there to catch, and a step nothing catches is recorded as a known gap. A system's **Covered** and **Effective** figures then show how much of the attack the rules catch. As on any SIEM, a rule that is disabled doesn't count, and one that **Rule Monitoring** finds can't work isn't effective.
+- Elastic's rules are copies under rule ids of their own, as **Deploy** makes them, so Elastic's own rules can still be installed in the space.
+- Where a scenario names its attacker, as the TIDE demo does, the attacker is a threat actor on **Threat Landscape**, marked SIM, with the attack's techniques. A threat sync leaves it there, and Clean up removes it.
 
 Everything it adds counts in the client's figures, so keep a client for exercises and run simulations there. The simulation lists what it set up under **In TIDE**, with any problem it met.
 
@@ -47,6 +50,10 @@ An open simulation shows what it is doing (setting up, replaying, playing once t
 
 One simulation at a time can set up, replay or clean up on a SIEM. If TIDE restarts during one, it shows as *Interrupted*: end it (or clean it up) again.
 
+### Replaying its data
+
+Once the replay is done, **Replay data** sends the simulation's logs again, stamped with the time they are sent. Detection rules only look a few minutes back, so a rule made or fixed after the first replay never saw the attack: replaying the data shows whether it catches it now. The players can go on answering meanwhile. Kibana keeps every replay, and the field `botes.replay.run_id` tells them apart. Once it is done, the simulation's rules are synced again, as after the first replay.
+
 ### Ending it, and cleaning up
 
 **End simulation** stops the replay if it is still running, stops the players answering (their **Simulation** goes), and counts each rule's alerts. Everything else stays: its space with its rules, logs and alerts on the SIEM, and what it set up in the client, so you can go through it with the players afterwards.
@@ -55,9 +62,22 @@ One simulation at a time can set up, replay or clean up on a SIEM. If TIDE resta
 
 The results (the board, the answers given, the rules and their alerts) stay in TIDE until you **Clear results**, once it is cleaned up.
 
+## The TIDE demo
+
+*TIDE demo: rogue root certificate* is a scenario for showing TIDE to others rather than for training, so it has no questions. A banking trojan, opened from an invoice on a finance desktop, adds its own root certificate and points the browser at its proxy, hidden in the routine traffic of the same morning. Its system, *Finance workstations*, starts as many do:
+
+- one rule that works, and one that raises far too many alerts on routine PowerShell;
+- a rule someone left disabled, with a space after its name;
+- rules that look fine in Kibana but can't work: one searches a field the data doesn't have, another data the SIEM never receives, with gaps between its runs;
+- a technique done two ways with a rule for only one, recorded as a known gap, so it is partly covered;
+- two techniques with no rule at all;
+- the interception itself, which nothing can see, recorded as a known gap with its reason and a review date.
+
+Start it before your audience arrives, with **Noise** *Normal*, **Speed** 10 and one player: setting up and the first replay take a few minutes. Begin on **Threat Landscape** with its attacker, *Banking trojan crew*: its techniques are the attack's, and it counts most of them as covered because a rule is tagged with each. Then show what TIDE finds that Kibana doesn't, in **Rule Monitoring**, **Rule Tuning** and the system's **Covered** and **Effective** figures. Fix each rule in its window, and for each technique without a rule, **Deploy** one of Elastic's rules or **Convert** a Sigma rule from the technique's window, then map it. **Replay data** sends the attack again: every fixed rule fires on it, and the system shows 7 of its 8 techniques covered and effective, with the interception still a known gap on record.
+
 ## Playing a simulation
 
-**Simulation** appears in the sidebar as soon as a simulation you are a player in starts, and goes when it ends. While it sets up you can read the questions; answers open when the replay starts. It has two tabs: **Questions** shows each scenario's story, **Open the space in Kibana**, and its questions; **Dashboard** shows each player's score over time, the **Board**, and how many players have solved each question.
+**Simulation** appears in the sidebar as soon as a simulation you are a player in starts, and goes when it ends. While it sets up you can read the questions; answers open when the replay starts. It has two tabs: **Questions** shows each scenario's story, **Open the space in Kibana**, and its questions, each of which folds by its text and stays as you left it; **Dashboard** shows each player's score over time, the **Board**, and how many players have solved each question.
 
 - Type your answer and choose **Answer**. Answers aren't case-sensitive, and quotes and extra spaces don't matter. Wait a moment between answers.
 - **Hint** shows one of the question's hints, and costs a quarter of its points, whether you answer it or not.

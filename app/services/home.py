@@ -68,7 +68,7 @@ def monitoring_list(data: Dict[str, Any], moved: Optional[Dict[str, Any]], now: 
 
 def monitoring(db, client_id: str, now: datetime) -> Dict[str, Any]:
     from app.services import past_figures, rule_issues
-    filters = {"show": "open", "group": "issue"}
+    filters = {"show": "open", "group": "issue", "kind": ["health"]}     # Rule Tuning's are its own card (#122)
     destinations = db.get_client_siems(client_id) or []
     with db.get_connection() as conn:
         data = rule_issues.view(conn, destinations, filters, now=now, client_id=client_id)

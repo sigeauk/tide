@@ -1,6 +1,7 @@
 {#
   One simulation, for a Sim Admin (api.simulations._detail): its state and the replay's progress (asked
-  again every 3 s while it sets up, replays or ends), its space in Kibana, End and Clear, what it set up
+  again every 3 s while it sets up, replays or ends), its space in Kibana, Replay data (once the replay
+  is done: its data sent again), End, Clean up and Clear, what it set up
   in the client's TIDE, the players' board, and its rules and how many alerts each raised. Its scores
   over time are in the Dashboard tab, its questions with their answers in the Answers tab.
 #}
@@ -18,7 +19,8 @@
     <div class="sys-section__body">
         {% if note %}<div class="alert alert-success">{{ note }}</div>{% endif %}
         {% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
-        {% if s.state == 'failed' and s.error %}<div class="alert alert-danger">Could not run it: {{ s.error }}</div>{% endif %}
+        {% if s.state == 'failed' and s.error %}<div class="alert alert-danger">Could not run it: {{ s.error }}</div>
+        {% elif s.error %}<div class="alert alert-danger">Could not send its data again: {{ s.error }}</div>{% endif %}
 
         {% set p = s.progress or {} %}
         <div class="metrics-grid mb-lg">
@@ -42,6 +44,7 @@
         <p class="text-secondary text-sm">
             Noise {{ s.noise }}, {{ (s.speed | round(1) ~ '× speed') if s.speed else 'as fast as the SIEM takes it' }}, on the space <code>{{ s.space }}</code>
             (data streams <code>logs-*-{{ s.namespace }}</code>). Started by {{ s.created_by }}{% if s.created_at %} at {{ s.created_at.strftime('%Y-%m-%d %H:%M') }}{% endif %}{% if s.ended_by %}; ended by {{ s.ended_by }}{% endif %}.
+            {% if (p.pass or 1) > 1 %}Its data has been sent {{ p.pass }} times (Replay data); the figures above are the latest pass's.{% endif %}
             {% if p.first_refusal %}First refusal: {{ p.first_refusal }}{% endif %}
         </p>
 
@@ -50,6 +53,14 @@
         <div class="modal-actions">
             {% if kibana %}
             <a name="Open in Kibana" class="btn btn-secondary" href="{{ kibana }}" target="_blank" rel="noopener">{{ icon('external-link', '15') }} Open its space in Kibana</a>
+            {% endif %}
+            {% if s.state == 'playing' %}
+            <button name="Replay Data" type="button" class="btn btn-secondary" hx-post="/api/simulations/{{ s.id }}/replay"
+                    hx-target="#sim-detail" hx-swap="innerHTML"
+                    title="Send its data again, stamped now, so rules made or fixed since the last pass see it"
+                    hx-confirm="Send the simulation's data again, stamped now? Rules made or fixed since the last pass will see it, and the players go on answering. Kibana keeps both passes: botes.replay.run_id tells them apart.">
+                {{ icon('rotate-ccw', '15') }} Replay data
+            </button>
             {% endif %}
             {% if s.state not in ('ended', 'cleaning_up') %}
             <button name="End Simulation" type="button" class="btn btn-primary" hx-post="/api/simulations/{{ s.id }}/end"
@@ -87,8 +98,9 @@
         <ul class="sim-in-tide">
             {% for o in made %}
             <li>
-                <span class="text-secondary">{{ {'destination': 'Destination', 'baseline': 'Baseline', 'system': 'System'}[o.kind] }}</span>
+                <span class="text-secondary">{{ {'destination': 'Destination', 'baseline': 'Baseline', 'system': 'System', 'actor': 'Threat actor'}[o.kind] }}</span>
                 {% if o.state == 'made' and o.kind == 'system' %}<a href="/systems/{{ o.object_id }}">{{ o.name }}</a>
+                {% elif o.state == 'made' and o.kind == 'actor' %}<a href="/threats?search={{ ('"' ~ o.name ~ '"') | urlencode }}">{{ o.name }}</a>
                 {% elif o.state == 'made' and o.kind == 'baseline' %}<a href="/baselines?baseline_id={{ o.object_id | urlencode }}&group=baseline">{{ o.name }}</a>
                 {% else %}{{ o.name }}{% endif %}
                 {% if o.state == 'removed' %}<span class="text-secondary text-sm">removed</span>{% endif %}
@@ -96,7 +108,7 @@
             {% endfor %}
         </ul>
         {% elif s.state == 'setting_up' %}
-        <p class="rm-empty">Being set up: its space linked to the client, its rules synced in, its baselines and systems made.</p>
+        <p class="rm-empty">Being set up: its space linked to the client, its rules synced in, its baselines, systems and threat actor made.</p>
         {% else %}
         <p class="rm-empty">Nothing set up in TIDE.</p>
         {% endif %}

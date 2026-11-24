@@ -210,7 +210,7 @@ def _subs(card: dict) -> List[str]:
 
 
 def _coverage_metrics(items: List[dict], first: dict, second: dict, avg_tip: str) -> List[dict]:
-    """The metric strip of a kind scored by coverage_of, four cards (UX.md 9.3): its own first card
+    """The metric strip of a kind scored by coverage_of, four cards: its own first card
     with its second beneath, fully covered with partly beneath, not covered, then the average
     coverage of those with techniques to cover. Coverage is a share, not a fault: none is red."""
     levels = {k: 0 for k in COVERAGE_LEVELS}
@@ -414,7 +414,7 @@ def _techniques_metrics(items: List[dict]) -> List[dict]:
     subs = sum(1 for it in items if it["is_sub"])
     used_gaps = sum(1 for it in items if it["coverage"]["level"] != "full" and it["group_count"])
     pct = round(100 * levels["full"] / len(items)) if items else None
-    # Four cards (UX.md 9.3): coverage is a share, not a fault, so none is red.
+    # Four cards: coverage is a share, not a fault, so none is red.
     return [
         {"value": len(items), "label": "Techniques", "sub": f"{len(items) - subs} techniques, {subs} sub-techniques"},
         {"value": levels["full"], "label": "Covered",

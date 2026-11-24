@@ -571,6 +571,7 @@ class AuthService:
         client_role_map = db.get_user_role_map(db_user["id"])
         user = User.from_db(db_user, db_roles, client_roles=client_role_map)
         user.permissions = db.get_user_permissions(db_user["id"])
+        user.must_change_password = User.password_change_due(db_user)
         return user
 
     def get_dev_user(self) -> User:

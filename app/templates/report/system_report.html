@@ -21,7 +21,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
-<title>{{ report.system.name }} — {% if technical %}Technical Deep Dive{% else %}CISO Executive Summary{% endif %}</title>
+<title>{{ report.system.name }} — {% if technical %}Technical deep dive{% else %}CISO executive summary{% endif %}</title>
 {% include "report/system_report_style.html" %}
 </head>
 <body>
@@ -46,7 +46,7 @@
         <span class="cover-logo">TIDE</span>
         <div class="cover-tagline">Threat Informed Detection Engine</div>
         <hr class="cover-rule"/>
-        <div class="cover-title">System Coverage Report</div>
+        <div class="cover-title">System coverage report</div>
         <div class="cover-system">{{ report.system.name }}</div>
         {% if report.system.description %}<div class="cover-subtitle">{{ report.system.description }}</div>{% endif %}
         {% if report.system.classification %}
@@ -73,27 +73,27 @@
      ══════════════════════════════════════════════════════ -->
 {%- set toc = [] -%}
 {%- if show_baselines -%}
-  {%- set _ = toc.append(('sec-summary', 'Executive Summary')) -%}
+  {%- set _ = toc.append(('sec-summary', 'Executive summary')) -%}
   {%- set _ = toc.append(('sec-baselines', 'Baselines')) -%}
-  {%- set _ = toc.append(('sec-gaps', 'Priority Gaps')) -%}
+  {%- set _ = toc.append(('sec-gaps', 'Priority gaps')) -%}
   {%- set _ = toc.append(('sec-siem', 'Coverage by SIEM')) -%}
-  {%- if report.trend -%}{%- set _ = toc.append(('sec-trend', 'Coverage Trend')) -%}{%- endif -%}
+  {%- if report.trend -%}{%- set _ = toc.append(('sec-trend', 'Coverage trend')) -%}{%- endif -%}
 {%- endif -%}
-{%- if show_devices -%}{%- set _ = toc.append(('sec-devices', 'Device Exposure')) -%}{%- endif -%}
+{%- if show_devices -%}{%- set _ = toc.append(('sec-devices', 'Device exposure')) -%}{%- endif -%}
 {%- if report.wazuh -%}
   {%- set _ = toc.append(('sec-wazuh', 'Vulnerabilities')) -%}
   {%- set _ = toc.append(('sec-hardening', 'Hardening')) -%}
 {%- endif -%}
 {%- if technical and show_baselines -%}
-  {%- set _ = toc.append(('sec-matrix', 'Coverage Matrix')) -%}
-  {%- if report.detailed_techniques -%}{%- set _ = toc.append(('sec-detail', 'Technique Detail')) -%}{%- endif -%}
+  {%- set _ = toc.append(('sec-matrix', 'Coverage matrix')) -%}
+  {%- if report.detailed_techniques -%}{%- set _ = toc.append(('sec-detail', 'Technique detail')) -%}{%- endif -%}
 {%- endif -%}
 {%- if technical and show_devices and report.total_cves -%}
-  {%- set _ = toc.append(('sec-cves', 'CVE Breakdown — By Vulnerability')) -%}
-  {%- set _ = toc.append(('sec-hosts', 'CVE Breakdown — By Host')) -%}
+  {%- set _ = toc.append(('sec-cves', 'CVE breakdown — by vulnerability')) -%}
+  {%- set _ = toc.append(('sec-hosts', 'CVE breakdown — by host')) -%}
 {%- endif -%}
 <div class="section-banner avoid-break" style="margin-top:0;">
-    <div class="section-banner-title">Table of Contents</div>
+    <div class="section-banner-title">Table of contents</div>
 </div>
 <div style="margin-bottom:8mm;">
     {% for anchor, label in toc %}
@@ -108,7 +108,7 @@
      EXECUTIVE SUMMARY  (the system page's metric strip)
      ══════════════════════════════════════════════════════ -->
 <div class="section-banner avoid-break" id="sec-summary">
-    <div class="section-banner-title">Executive Summary</div>
+    <div class="section-banner-title">Executive summary</div>
     <div class="section-banner-sub">Detection coverage for {{ report.system.name }} across {{ 'all its baselines' if report.all_baselines else 'the selected baselines' }}</div>
 </div>
 
@@ -187,7 +187,7 @@
      PRIORITY GAPS
      ══════════════════════════════════════════════════════ -->
 <div class="section-banner avoid-break" id="sec-gaps">
-    <div class="section-banner-title">Priority Gaps</div>
+    <div class="section-banner-title">Priority gaps</div>
     <div class="section-banner-sub">Techniques with no coverage or a known gap, highest priority first</div>
 </div>
 
@@ -283,7 +283,7 @@
      ══════════════════════════════════════════════════════ -->
 <div class="page-break"></div>
 <div class="section-banner avoid-break" id="sec-matrix">
-    <div class="section-banner-title">Coverage Matrix</div>
+    <div class="section-banner-title">Coverage matrix</div>
     <div class="section-banner-sub">Every technique by baseline and ATT&amp;CK tactic. Rules shown in red don't count: they are disabled, or mapped outside this system's SIEM coverage.</div>
 </div>
 
@@ -328,7 +328,7 @@
      ══════════════════════════════════════════════════════ -->
 <div class="page-break"></div>
 <div class="section-banner avoid-break" id="sec-detail">
-    <div class="section-banner-title">Technique Detail</div>
+    <div class="section-banner-title">Technique detail</div>
     <div class="section-banner-sub">{% if report.technique_scope == 'gaps' %}Techniques with no coverage or a known gap: what{% else %}Every technique: what{% endif %} covers each, when it was added, and its ATT&amp;CK techniques</div>
 </div>
 

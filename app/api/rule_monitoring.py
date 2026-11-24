@@ -25,7 +25,9 @@ DEFAULTS = {"rules": "enabled", "show": "open", "group": "issue"}
 
 
 def filters_from(params) -> Dict[str, Any]:
-    """The page's filters from a query string (the page's address, or the filter bar)."""
+    """The page's filters from a query string (the page's address, or the filter bar). Rule Monitoring
+    lists whether rules work, the health findings, and has no Kind filter: whether they are worth their
+    alerts is Rule Tuning's (#122), which asks for ``kind=tuning`` when it raises an issue through here."""
     def one(name, choices, default):
         value = params.get(name) or default
         return value if value in {c for c, _ in choices} else default
@@ -39,7 +41,7 @@ def filters_from(params) -> Dict[str, Any]:
         "severity": many("severity", {s for s, _ in rule_issues.SEVERITIES}),
         "fixer": rule_issues.fixer_values(params.getlist("fixer")),
         "issue": many("issue", set(rule_issues.KNOWN)),
-        "kind": many("kind", {k for k, _ in rule_issues.KINDS}),
+        "kind": many("kind", {k for k, _ in rule_issues.KINDS}) or ["health"],
         "rules": one("rules", rule_issues.RULES, DEFAULTS["rules"]),
         "show": one("show", rule_issues.SHOW, DEFAULTS["show"]),
         "group": one("group", rule_issues.GROUPS, DEFAULTS["group"]),
@@ -72,14 +74,13 @@ def page_context(db, client_id: str, params, user=None) -> Dict[str, Any]:
     for node in _causes(data["groups"]):
         found = {i["id"]: i for k in _keys([node]) for i in raised.get(k, []) if gitlab_issues.shown(i)}
         node["gitlab_issues"] = sorted(found.values(), key=lambda i: i["created_at"], reverse=True)
-    issues = sorted(rule_issues.KNOWN.values(), key=lambda i: i.title)
+    issues = sorted((i for i in rule_issues.KNOWN.values() if i.kind == "health"), key=lambda i: i.title)
     return {
         "filters": filters, "filter_defaults": DEFAULTS, **data,
         "client_siems": destinations,
         "scope_options": [("", "Any")] + [(f"{d['id']}|{d.get('space') or 'default'}", d.get("name") or d.get("space"))
                                                 for d in destinations],
         "severity_options": list(rule_issues.SEVERITIES),
-        "kind_options": list(rule_issues.KINDS),
         "fixer_options": list(rule_issues.FIXERS.items()),
         "issue_options": [(i.id, i.title) for i in issues],
         "issue_titles": {i.id: i.meaning for i in issues},
@@ -91,7 +92,7 @@ def page_context(db, client_id: str, params, user=None) -> Dict[str, Any]:
         # What every request from the page sends along: the filter bar's fields only (a dialog's
         # fields can share their names: the Mute dialog's issue, cause).
         "filter_include": ", ".join(f"#rmon-filters [name='{n}']" for n in
-                                    ("search", "scope", "kind", "severity", "fixer", "issue", "rules", "show", "group")),
+                                    ("search", "scope", "severity", "fixer", "issue", "rules", "show", "group")),
     }
 
 
@@ -305,7 +306,9 @@ def _selection(db, client_id: str, params, user) -> Dict[str, Any]:
     its cause nodes, their Markdown and the page's context, and ``rule`` (the rule, or None)."""
     from starlette.datastructures import QueryParams
     rule_key = _rule_of(params)
-    ctx = page_context(db, client_id, QueryParams({"rules": "all", "scope": f"{rule_key[1]}|{rule_key[2]}"})
+    # A rule's issue holds everything found on it, whether it works and whether it is worth its alerts.
+    ctx = page_context(db, client_id, QueryParams([("rules", "all"), ("scope", f"{rule_key[1]}|{rule_key[2]}"),
+                                                   ("kind", "health"), ("kind", "tuning")])
                        if rule_key else params, user)
     every = not rule_key and params.get("all") == "1"
     issue, rule = None, None
@@ -394,10 +397,14 @@ def _footer(user, now, sel: Dict[str, Any]) -> str:
             f"{get_settings().app_url.rstrip('/')}/{path}")
 
 
-def _note(form) -> str:
-    """What the person raising an issue for a rule wrote (#106), to go above what TIDE writes."""
-    note = str(form.get("note") or "").strip()
-    return f"{note}\n\n" if note else ""
+MAX_DESCRIPTION = 100_000     # characters of a description edited in Raise issue (GitLab takes far more)
+
+
+def _description(form, sel: Dict[str, Any]) -> str:
+    """The issue's description, or a comment's text: the Markdown as the person left it in Raise issue
+    (#124: they may change it, or write above it what needs doing), else what TIDE writes."""
+    text = str(form.get("description") or "").replace("\r\n", "\n").strip()[:MAX_DESCRIPTION]
+    return text or sel["text"]
 
 
 @router.get("/copy", response_class=HTMLResponse)
@@ -445,8 +452,8 @@ def _gitlab_done(request: Request, html: str, kind: str = "success", sel: Option
 
 @router.post("/gitlab-issue", response_class=HTMLResponse)
 async def raise_gitlab_issue(request: Request, db: DbDep, user: RequireUser, client_id: ActiveClient):
-    """Raise what Raise issue shows (the posted selection) as an issue in the chosen GitLab
-    issues project; TIDE keeps which causes it was raised for (gitlab_issues)."""
+    """Raise what Raise issue shows (the posted selection, its Markdown as the person left it) as an
+    issue in the chosen GitLab issues project; TIDE keeps which causes it was raised for (gitlab_issues)."""
     from html import escape
     from starlette.concurrency import run_in_threadpool
     from app.services import gitlab
@@ -465,8 +472,7 @@ async def raise_gitlab_issue(request: Request, db: DbDep, user: RequireUser, cli
     assignee_id = int(assignee) if assignee.isdigit() else None
     try:
         issue = await run_in_threadpool(gitlab.create_issue, link, title,
-                                        (_note(form) if sel["rule"] else "") + sel["text"] + _footer(user, sel["ctx"]["now"], sel),
-                                        labels, assignee_id)
+                                        _description(form, sel) + _footer(user, sel["ctx"]["now"], sel), labels, assignee_id)
     except gitlab.GitLabError as exc:
         return _gitlab_done(request, f"Nothing raised. {escape(str(exc))}", "danger")
     with db.get_connection() as conn:
@@ -521,8 +527,7 @@ async def comment_gitlab_issue(request: Request, db: DbDep, user: RequireUser, c
                                       sel["nodes"] and set(raised["causes"]) & set(_keys(sel["nodes"]))):
         return _gitlab_done(request, "No comment added: that issue isn't one raised for this.", "danger")
     found = "As TIDE finds the rule" if sel["rule"] else "Still found by TIDE"
-    text = ((_note(form) if sel["rule"] else "") + f"{found} on {sel['ctx']['now']:%Y-%m-%d %H:%M}:\n\n{sel['text']}"
-            + _footer(user, sel["ctx"]["now"], sel))
+    text = f"{found} on {sel['ctx']['now']:%Y-%m-%d %H:%M}:\n\n{_description(form, sel)}" + _footer(user, sel["ctx"]["now"], sel)
     try:
         await run_in_threadpool(gitlab.add_comment, link, raised["iid"], text)
     except gitlab.GitLabError as exc:

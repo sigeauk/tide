@@ -65,7 +65,7 @@
                   hx-target="#elastic-list" hx-trigger="input delay:300ms, submit">
                 <div class="browser-filter browser-filter--wide">
                     <label class="form-label" for="elastic-q">Search</label>
-                    <input type="text" id="elastic-q" class="form-input" name="q" placeholder="Name, description, rule id, tag…">
+                    <input type="text" id="elastic-q" class="form-input" name="q" placeholder="Name, description, rule id, tag…" value="{{ search_q }}">
                 </div>
                 <div class="browser-filter">
                     <label class="form-label" for="elastic-technique">MITRE technique</label>
@@ -113,6 +113,5 @@
 </div>
 {% endif %}
 
-<div id="slide-panel-container"></div>
 </div>
 {% endblock %}

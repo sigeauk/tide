@@ -705,7 +705,7 @@ def _fetch_wazuh(db, client_id: str, siem: dict, spaces: list, weights, frames: 
     except Exception as exc:
         logger.warning("Could not remove the rules a Wazuh destination no longer holds", exc_info=True)
         sync_runs.step_failed("Wazuh rules no longer held", exc)
-    # The destinations' agents as the systems' devices, with their vulnerabilities and alerts (phase 3).
+    # The destinations' agents as the systems' devices, with their vulnerabilities and alerts.
     if not result["error"]:
         from app.services import wazuh, wazuh_assets
         s = wazuh.settings(full)
@@ -717,7 +717,7 @@ def _fetch_wazuh(db, client_id: str, siem: dict, spaces: list, weights, frames: 
                 logger.warning("Could not refresh the devices of Wazuh destination %s", space, exc_info=True)
                 sync_runs.step_failed(f"Wazuh devices of {space}", exc)
                 continue
-            if assets["error"]:    # kept on the destination: Rule Monitoring's Wazuh read incomplete (D13)
+            if assets["error"]:    # kept on the destination: Rule Monitoring's Wazuh read incomplete
                 logger.warning("Wazuh destination %s: %s", space, assets["error"])
             elif assets["hosts"]:
                 logger.info("Wazuh destination %s: %d device(s), %d vulnerabilit%s, %d removed.", space, assets["hosts"],

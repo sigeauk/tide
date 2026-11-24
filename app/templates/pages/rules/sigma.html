@@ -97,7 +97,7 @@
                   hx-target="#rules-list" hx-trigger="input delay:300ms, submit">
                 <div class="browser-filter browser-filter--wide">
                     <label class="form-label" for="rule-search">Search</label>
-                    <input type="text" id="rule-search" class="form-input" name="q" placeholder="Title, description, technique…">
+                    <input type="text" id="rule-search" class="form-input" name="q" placeholder="Title, description, technique…" value="{{ search_q }}">
                 </div>
                 <div class="browser-filter">
                     <label class="form-label" for="technique-filter">MITRE technique</label>
@@ -157,7 +157,5 @@
 
 <div id="sigma-convert-response" aria-hidden="true"></div>
 
-<!-- Slide panel for technique details -->
-<div id="slide-panel-container"></div>
 </div>
 {% endblock %}

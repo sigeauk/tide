@@ -40,6 +40,10 @@ class TokenData(BaseModel):
         return role in self.roles
 
 
+# Where a TIDE account whose password an admin reset chooses its own (User.must_change_password).
+PASSWORD_CHANGE_PAGE = "/settings/profile"
+
+
 class User(BaseModel):
     """Application user model."""
     id: str  # Internal DB user ID
@@ -65,6 +69,10 @@ class User(BaseModel):
     display_name: Optional[str] = None
     avatar_version: Optional[str] = None
 
+    # An admin reset this TIDE account's password: until it chooses its own, its session opens
+    # Profile only (AuthMiddleware). Set when a session is read (AuthService._session_user).
+    must_change_password: bool = False
+
     # Session info
     authenticated_at: Optional[datetime] = None
 
@@ -79,6 +87,13 @@ class User(BaseModel):
         or one letter for a one-word name ("hulk" -> "H")."""
         words = (self.label or "?").split()
         return (words[0][0] + (words[-1][0] if len(words) > 1 else "")).upper()
+
+    @staticmethod
+    def password_change_due(db_user: Optional[dict]) -> bool:
+        """Must this account choose a new password before anything else? A TIDE account whose password
+        an admin reset; never a single sign-on account (Keycloak holds its password)."""
+        return bool(db_user and db_user.get("change_on_next_login")
+                    and (db_user.get("auth_provider") or "local").lower() == "local")
 
     @staticmethod
     def _profile(db_user: dict) -> dict:

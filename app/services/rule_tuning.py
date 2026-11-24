@@ -254,7 +254,7 @@ def people(conn, keys: Iterable[Key], since: datetime, until: Optional[datetime]
 def detail(conn, keys: Iterable[Key], since: datetime, until: Optional[datetime] = None) -> Dict[Key, Dict[str, Any]]:
     """Each rule's outcomes from ``since`` (to ``until``), from Kibana (``rule_outcomes``, by the alerts'
     days) and from people: ``{key: {counts, source, by_source, none, in_closed_case}}``. Kibana's decide
-    ``counts`` when the rule has any, else people's do (D10); ``source`` says which ("kibana", "people" or
+    ``counts`` when the rule has any, else people's do; ``source`` says which ("kibana", "people" or
     ""). ``by_source`` holds each source's own (``kibana_reason``, ``kibana_tag``, ``kibana_case``,
     ``person``); ``none`` the closed alerts with no outcome, ``in_closed_case`` those left open in a closed case."""
     from app.services import rule_outcomes

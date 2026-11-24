@@ -27,6 +27,7 @@ except ModuleNotFoundError:
 from app.services import errors
 from app.services.tls import Session as TlsSession, describe_error as describe_tls_error, siem_verify
 from app.models.rules import RULE_TYPES, rule_type_name
+from app.scoring import FOUND, MISSING, NOT_NEEDED
 
 import logging
 
@@ -267,7 +268,7 @@ def test_elastic_connection_full(
     if not ok:      # the code of the first space that decided it
         result["checks"][-1]["code"] = next((str(c) for o, c in deciding if not o and c), None)
 
-    # ── Check 4: Cases read, for rule tuning's outcomes (R35). Reported, never failing the test: a key
+    # ── Check 4: Cases read, for rule tuning's outcomes. Reported, never failing the test: a key
     # without it still syncs, and Rule Monitoring says Cases couldn't be read on the destination.
     def _check_cases(sp):
         r, err, _ms = _do("GET", f"/s/{sp}/api/cases/configure?owner=securitySolution")
@@ -612,6 +613,212 @@ def extract_kuery_lucene(query):
     fields.update(re.findall(r'\b_(?:exists|missing)_\s*:\s*(' + _KQL_FIELD_NAME + r')', masked))
     fields = {f for f in fields if f.lower() not in ("_exists_", "_missing_")}
     return {f for f in fields if f.lower() not in _KQL_KEYWORDS and not f[0].isdigit()}
+
+
+# ── A KQL or Lucene query's and/or/not structure (#128) ──────────────────────────────────────
+
+_CLAUSE_START = re.compile(r'(' + _KQL_FIELD_NAME + r')\s*(==|!=|<=|>=|<|>|:(?!:))\s*')
+_BOOL_WORD = re.compile(r'(?i)(and|or|not)(?=[\s(]|$)')
+_CLOSERS = {'(': ')', '[': ']', '{': '}'}
+
+
+def _skip_value(q: str, i: int) -> int:
+    """The end of the value that starts at ``q[i]``: a quoted string, a Lucene /regex/, a group in
+    brackets (balanced, quotes respected), or a run up to whitespace or a closing bracket."""
+    if i >= len(q):
+        return i
+    ch = q[i]
+    if ch == '"':
+        return _string_end(q, i, False)
+    if ch == '/':
+        m = re.match(r'/(?:\\.|[^/\\\n])*/', q[i:])
+        return i + (m.end() if m else 1)
+    if ch in _CLOSERS:
+        depth, j = 0, i
+        while j < len(q):
+            c = q[j]
+            if c == '"':
+                j = _string_end(q, j, False)
+                continue
+            if c == '\\':
+                j += 2
+                continue
+            if c in _CLOSERS:
+                depth += 1
+            elif c in _CLOSERS.values():
+                depth -= 1
+                if depth == 0:
+                    return j + 1
+            j += 1
+        return j
+    j = i
+    while j < len(q) and not q[j].isspace() and q[j] not in '()':
+        j += 2 if q[j] == '\\' else 1
+    return j
+
+
+def _kql_lucene_tokens(query: str):
+    """``[(kind, value)]``: ``(``, ``)``, ``AND``, ``OR``, ``NOT``, ``REQ`` (Lucene's ``+``), and
+    ``atom`` (a clause, its field or None for a bare term). None when the query can't be read."""
+    q, i, out = strip_query_comments(query or ''), 0, []
+    while i < len(q):
+        ch = q[i]
+        if ch.isspace():
+            i += 1
+        elif ch in '()':
+            out.append((ch, None))
+            i += 1
+        elif q.startswith('&&', i) or q.startswith('||', i):
+            out.append(('AND' if ch == '&' else 'OR', None))
+            i += 2
+        elif ch == '!' and not q.startswith('!=', i):
+            out.append(('NOT', None))
+            i += 1
+        elif ch == '-' and i + 1 < len(q) and not q[i + 1].isspace():
+            out.append(('NOT', None))           # Lucene's prohibit operator
+            i += 1
+        elif ch == '+':
+            out.append(('REQ', None))           # Lucene's required operator
+            i += 1
+        elif _BOOL_WORD.match(q, i) and (i == 0 or not (q[i - 1].isalnum() or q[i - 1] in '._@')):
+            m = _BOOL_WORD.match(q, i)
+            out.append((m.group(1).upper(), None))
+            i = m.end()
+        else:
+            m = _CLAUSE_START.match(q, i)
+            if m and (i == 0 or not (q[i - 1].isalnum() or q[i - 1] in '._@')):
+                field, end = m.group(1), _skip_value(q, m.end())
+                if field.lower() in ('_exists_', '_missing_'):
+                    field = q[m.end():end].strip() or None
+                out.append(('atom', field))
+                i = end
+            else:
+                end = _skip_value(q, i)
+                if end <= i:
+                    return None
+                out.append(('atom', None))
+                i = end
+    return out
+
+
+def _lucene_mixes_or(tokens) -> bool:
+    """Whether a bracket level of a Lucene query has OR beside AND, NOT or ``+``. Lucene gives
+    those no precedence: each marks its clauses required, optional or excluded, so ``a OR b AND c``
+    requires ``c`` and ``a OR NOT b`` requires ``a``, unlike the tree, which reads them as KQL does.
+    A level with OR alone, or without OR, means the same either way."""
+    levels = [set()]
+    for kind, _value in tokens:
+        if kind == '(':
+            levels.append(set())
+        elif kind == ')':
+            if len(levels) == 1:
+                return True                     # unbalanced: the tree refuses it anyway
+            done = levels.pop()
+            if 'OR' in done and done & {'AND', 'NOT', 'REQ'}:
+                return True
+        elif kind in ('AND', 'OR', 'NOT', 'REQ'):
+            levels[-1].add(kind)
+    return any('OR' in level and level & {'AND', 'NOT', 'REQ'} for level in levels)
+
+
+def _kql_lucene_tree(query: str, lucene: bool = False):
+    """The query as ``("or"|"and", [nodes])``, ``("not", node)`` or ``("atom", field)``; clauses side
+    by side with no operator count as AND. None when it can't be read whole, or (``lucene``) when a
+    bracket level mixes OR with AND, NOT or ``+``, which Lucene reads otherwise (``_lucene_mixes_or``)."""
+    tokens = _kql_lucene_tokens(query)
+    if not tokens or (lucene and _lucene_mixes_or(tokens)):
+        return None
+    pos = 0
+
+    def peek():
+        return tokens[pos][0] if pos < len(tokens) else None
+
+    def take():
+        nonlocal pos
+        pos += 1
+        return tokens[pos - 1]
+
+    def or_expr():
+        parts = [and_expr()]
+        while peek() == 'OR':
+            take()
+            parts.append(and_expr())
+        return parts[0] if len(parts) == 1 else ('or', parts)
+
+    def and_expr():
+        parts = [unary()]
+        while peek() not in (None, 'OR', ')'):
+            if peek() == 'AND':
+                take()
+            parts.append(unary())
+        return parts[0] if len(parts) == 1 else ('and', parts)
+
+    def unary():
+        if peek() == 'NOT':
+            take()
+            return ('not', unary())
+        if peek() == 'REQ':                     # a required clause, as any other
+            take()
+            return unary()
+        kind, value = take() if peek() is not None else (None, None)
+        if kind == 'atom':
+            return ('atom', value)
+        if kind == '(':
+            inner = or_expr()
+            if peek() != ')':
+                raise ValueError('unbalanced')
+            take()
+            return inner
+        raise ValueError(f'unexpected {kind}')
+
+    try:
+        tree = or_expr()
+    except (ValueError, IndexError, TypeError):
+        return None
+    return tree if pos == len(tokens) else None
+
+
+def query_alternative_fields(query: str, missing, language: str = "kuery") -> set:
+    """Of the ``missing`` fields (no index the rule searches maps them), those a KQL or Lucene query
+    can match without: its OR alternatives, such as Sigma's ``OriginalFileName`` beside ``Image``.
+    Each clause on a missing field never matches, so a missing field is an alternative when the query
+    can still match with all of them false. One under NOT is never an alternative (the rule's
+    exclusion no longer excludes), and nothing is when the query can't be read whole, or is Lucene
+    mixing OR with other operators unbracketed."""
+    missing = {str(f) for f in missing or ()}
+    tree = _kql_lucene_tree(query, lucene=normalize_rule_language(language) == "lucene") if missing else None
+    if tree is None:
+        return set()
+    seen, negated = set(), set()
+
+    def walk(node, under_not):
+        kind = node[0]
+        if kind == 'atom':
+            if node[1]:
+                seen.add(node[1])
+                if under_not:
+                    negated.add(node[1])
+        elif kind == 'not':
+            walk(node[1], True)
+        else:
+            for child in node[1]:
+                walk(child, under_not)
+
+    def can_be(node, want: bool) -> bool:
+        kind = node[0]
+        if kind == 'atom':
+            return (node[1] not in missing) if want else True
+        if kind == 'not':
+            return can_be(node[1], not want)
+        children = node[1]
+        if (kind == 'and') == want:             # AND true, or OR false: every part
+            return all(can_be(c, want) for c in children)
+        return any(can_be(c, want) for c in children)
+
+    walk(tree, False)
+    if not (missing & seen) or (missing & extract_kuery_lucene(query)) - seen or not can_be(tree, True):
+        return set()
+    return (missing & seen) - negated
 
 
 def extract_filter_fields(filters):
@@ -1008,6 +1215,18 @@ def extract_eql(query):
     return clean_fields, event_cats
 
 
+def eql_optional_fields(query) -> set:
+    """The fields an EQL query marks optional (``?field``) and never names without the mark. Where no
+    index maps one, Elasticsearch searches it as null instead of refusing the query, so its absence
+    isn't a fault of the rule (strings excluded)."""
+    if not query:
+        return set()
+    masked = _strip_string_literals(strip_query_comments(query))
+    marked = set(re.findall(r'(?<![\w.@?])\?(' + _FIELD_NAME + r')', masked))
+    plain = set(re.findall(r'(?<![\w.@?])(' + _FIELD_NAME + r')', masked))
+    return marked - plain
+
+
 def get_esql_index(query):
     if not query: return []
     query = strip_query_comments(query)
@@ -1029,6 +1248,46 @@ def get_esql_index(query):
 # TIDE's note on its copy of a rule that searches a data view: ``{"id", "name"}``. Sync puts the
 # data view's index patterns in the data view's place (``_process_rules``), so this is how TIDE knows.
 DATA_VIEW_NOTE = "tide_data_view"
+# TIDE's note on its copy of a rule with no index patterns and no data view (#129): the index patterns
+# Kibana searches for it instead, its space's default security indexes, which its fields are checked in.
+DEFAULT_INDEX_NOTE = "tide_default_index"
+# Kibana's own securitySolution:defaultIndex, for a space that doesn't set it (its Security app's
+# DEFAULT_INDEX_PATTERN): what a rule with no index patterns and no data view searches there.
+KIBANA_DEFAULT_INDEX = ("apm-*-transaction*", "auditbeat-*", "endgame-*", "filebeat-*", "logs-*", "packetbeat-*",
+                        "traces-apm*", "winlogbeat-*", "-*elastic-cloud-logs-*")
+
+
+def needs_default_index(rule: dict) -> bool:
+    """Whether Kibana searches its space's default security indexes for this rule: it names no index
+    patterns (no ``index`` at all: an empty list searches every index instead) and no data view, and
+    isn't an ES|QL or machine learning rule."""
+    return (rule.get("index") is None and not rule.get("data_view_id") and not rule.get("dataViewId")
+            and normalize_rule_language(rule.get("language", "kuery")) != "esql" and rule.get("type") != "machine_learning")
+
+
+def fetch_default_index(session, base_url: str, space: str, timeout: float = 30) -> Optional[list]:
+    """A space's default security indexes (its securitySolution:defaultIndex advanced setting, Kibana's
+    own when it doesn't set one), without exclusions; None when Kibana can't be asked."""
+    try:
+        res = session.get(f"{_space_api_prefix(base_url, space)}/api/kibana/settings", timeout=timeout)
+        if res.status_code != 200:
+            return None
+        value = ((res.json().get("settings") or {}).get("securitySolution:defaultIndex") or {}).get("userValue")
+    except Exception:
+        return None
+    patterns = value if isinstance(value, list) and value else KIBANA_DEFAULT_INDEX
+    return [str(p).strip() for p in patterns if str(p).strip() and not str(p).strip().startswith("-")]
+
+
+def space_default_index(kibana_url: str, api_key: str, space: str, timeout: float = 5) -> Optional[list]:
+    """``fetch_default_index`` for one destination, asked briefly (a form waits on it); None when
+    Kibana doesn't answer."""
+    if not (kibana_url and api_key):
+        return None
+    try:
+        return fetch_default_index(_make_session(api_key, kibana_url), kibana_url.rstrip("/"), space, timeout)
+    except Exception:
+        return None
 
 
 def get_data_view_indices(session, base_url, space, rule):
@@ -1397,7 +1656,7 @@ def fetch_closed_cases(kibana_url, api_key, space, days=ALERT_DAYS, session=None
     """The Security cases of ``space`` closed in the last ``days`` (rule tuning, R27): ``{"ok": True,
     "cases": {id: {closed_at, tags, category, fields: {custom field key: value}}}, "fields": {key: label}}``
     or ``{"ok": False, "status", "error"}``. Only what an outcome could be read from is kept: never a
-    title, description, comment or name (R39). Needs Cases read on the key (403 without it)."""
+    title, description, comment or name. Needs Cases read on the key (403 without it)."""
     session = session or _new_session(api_key, kibana_url)
     prefix = _space_api_prefix(kibana_url.rstrip("/"), space)
     since = datetime.now(timezone.utc) - timedelta(days=int(days))
@@ -1575,6 +1834,15 @@ def _process_rules(session, base_url, all_rules, check_mappings=True, catalogue=
                     dv_results[rule_idx] = None
         log_info(f"[perf] Resolved {len(dv_tasks)} data view lookups in parallel")
 
+    # A rule with no index patterns and no data view searches its space's default security indexes
+    # (#129): read once per space that has one, and its fields are checked there.
+    default_index: Dict[str, list] = {}
+    if check_mappings and session is not None:
+        for space in sorted({str(r.get('space_id') or 'default') for r in all_rules if needs_default_index(r)}):
+            found = fetch_default_index(session, base_url, space)
+            if found:
+                default_index[space] = found
+
     rule_meta_list = []
     wanted_patterns = set()
     wanted_newest: Dict[str, set] = {}     # index pattern -> the timestamp fields rules search it by
@@ -1600,6 +1868,11 @@ def _process_rules(session, base_url, all_rules, check_mappings=True, catalogue=
             esql_indices = get_esql_index(query)
             if esql_indices:
                 indices = esql_indices
+        defaults = default_index.get(str(r.get('space_id') or 'default')) if needs_default_index(r) else None
+        r.pop(DEFAULT_INDEX_NOTE, None)
+        if not indices and not data_view and defaults:
+            indices = defaults
+            r[DEFAULT_INDEX_NOTE] = list(defaults)
 
         clean_indices = [str(i).strip() for i in indices if i and str(i).strip().lower() not in IGNORED_INDICES]
         threat_indices, threat_fields = [], set()
@@ -1628,14 +1901,14 @@ def _process_rules(session, base_url, all_rules, check_mappings=True, catalogue=
                 if by_timestamp and r.get('enabled'):        # how late its events arrive matters to it
                     wanted_delay.add(p)
 
-        fields, created = set(), set()
+        fields, created, optional = set(), set(), set()
         if check_mappings:
             if language in ["kuery", "lucene"]:
                 fields = extract_kuery_lucene(query)
             elif language == "esql":
                 fields, created = _esql_names(query)
             elif language == "eql":
-                fields = extract_eql(query)[0]
+                fields, optional = extract_eql(query)[0], eql_optional_fields(query)
 
             # UI-built rules can have an empty ``query`` and put every
             # selection criterion into ``filters`` (the rule named
@@ -1660,7 +1933,8 @@ def _process_rules(session, base_url, all_rules, check_mappings=True, catalogue=
                 p for p in clean_indices + threat_indices if not p.startswith(('_', '-')) and p.lower() not in IGNORED_INDICES
             )
 
-        rule_meta_list.append({"raw": r, "fields": fields, "created": created, "indices": clean_indices, "sample": sample,
+        rule_meta_list.append({"raw": r, "fields": fields, "created": created, "optional": optional,
+                               "indices": clean_indices, "sample": sample,
                                "threat_indices": threat_indices, "threat_fields": threat_fields})
 
     if check_mappings and wanted_patterns:
@@ -1707,6 +1981,20 @@ def _process_rules(session, base_url, all_rules, check_mappings=True, catalogue=
         results, field_facts, aux_facts = [], None, {}
         if check_mappings:
             field_facts, results = catalogue.check(meta["indices"], meta["fields"])
+            # A field no index maps that the rule doesn't need: an optional EQL field (``?field``),
+            # searched as null, or a KQL or Lucene OR alternative the query matches without (#128).
+            # Its lines show N/A, saying which: it is neither missing nor marked down. Mapped, it is
+            # checked as any other field.
+            missing = {f for f in meta["fields"] if (field_facts.get(f) or {}).get("state") == MISSING}
+            needed = set(extract_filter_fields(r.get("filters"))) | set(aggregate_fields) | set(meta["threat_fields"])
+            not_needed = {f: "optional" for f in meta["optional"] if (field_facts.get(f) or {}).get("state") != FOUND}
+            if rule_language in ("kuery", "lucene") and missing:
+                not_needed.update({f: "alternative" for f in
+                                   query_alternative_fields(r.get('query', ''), missing, rule_language) - needed})
+            if not_needed:
+                results = [(row[0], row[1], NOT_NEEDED, not_needed[row[1]]) if row[1] in not_needed else row
+                           for row in results]
+                field_facts = {f: v for f, v in field_facts.items() if f not in not_needed}
             if meta["threat_fields"]:
                 threat_facts, threat_rows = catalogue.check(meta["threat_indices"], meta["threat_fields"])
                 results = list(results) + list(threat_rows)

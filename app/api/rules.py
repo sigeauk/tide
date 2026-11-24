@@ -385,6 +385,7 @@ def _rule_form_values(rule, username: str = "", prefill: Optional[dict] = None) 
             "timestamp_override": timestamp_override,
             "highlighted_fields": ", ".join(_split_csv(highlighted_fields)),
             "reason": str(prefill.get("reason") or ""),
+            "building_block": bool(prefill.get("building_block_type") or raw.get("building_block_type")),
             **_type_setting_values(prefill),
         }
 
@@ -409,6 +410,8 @@ def _rule_form_values(rule, username: str = "", prefill: Optional[dict] = None) 
         "timestamp_override": str(raw.get("timestamp_override") or ("" if rule else "event.ingested")),
         "highlighted_fields": ", ".join(_split_csv(raw.get("investigation_fields", {}).get("field_names", []) if isinstance(raw.get("investigation_fields"), dict) else raw.get("investigation_fields") or [])),
         "reason": "",
+        # Kibana's building block (#125): its alerts are marked as such, kept off the Alerts page.
+        "building_block": bool(raw.get("building_block_type")),
         **_data_view_values(raw),
         **_type_setting_values(raw),
     }
@@ -457,6 +460,28 @@ def _data_view_values(raw: dict) -> dict:
     return {"uses_data_view": uses, "data_view": str(note.get("name") or "") if isinstance(note, dict) else ""}
 
 
+def _offer_space_defaults(scope_options: list, siems: list) -> None:
+    """A destination with no Default index of its own offers its space's default index patterns, the
+    ones Kibana searches for a rule without any (#129), so a new rule starts with what a rule made in
+    Kibana would. Asked of each Kibana briefly, side by side; one that doesn't answer offers none, and
+    the form asks for them."""
+    from concurrent.futures import ThreadPoolExecutor
+    from app import elastic_helper
+    creds = {(s.get("id"), s.get("space") or "default"): s for s in siems}
+    wanted = [o for o in scope_options if not o["default_index"]]
+    if not wanted:
+        return
+
+    def ask(option):
+        siem = creds.get((option["siem_id"], option["space"])) or {}
+        return elastic_helper.space_default_index(siem.get("kibana_url"), siem.get("api_token_enc"), option["space"])
+
+    with ThreadPoolExecutor(max_workers=min(4, len(wanted))) as pool:
+        for option, found in zip(wanted, pool.map(ask, wanted)):
+            if found:
+                option["default_index"] = ", ".join(found)
+
+
 def _build_rule_form_context(db, client_id: str, username: str, form_action: str, submit_label: str,
                              title: str, rule=None, scope_locked: bool = False,
                              prefill: Optional[dict] = None) -> dict:
@@ -474,6 +499,8 @@ def _build_rule_form_context(db, client_id: str, username: str, form_action: str
         if s.get("id") and (s.get("space") is not None)
     ]
     form_values = _rule_form_values(rule, username=username, prefill=prefill)
+    if not rule and not str(form_values.get("index") or "").strip():
+        _offer_space_defaults(scope_options, siems)
     # Rule type: a new rule can be any type the form edits. An existing rule (or Elastic's or Sigma's,
     # being deployed) switches only between the types its query language decides, as TIDE always has;
     # any other type keeps its own, as on Kibana's Edit page.
@@ -618,6 +645,8 @@ def _build_rule_payload(form_data, technique_lookup: dict[str, dict], default_au
         payload["history_window_start"] = rts.history_window_start(form_data.get("history_window") or "")
     if timestamp_override:
         payload["timestamp_override"] = timestamp_override
+    if str(form_data.get("building_block") or "").lower() in ("1", "true", "on"):
+        payload["building_block_type"] = "default"      # Kibana's only kind (#125)
     if language == "esql":
         # ES|QL rules source their index from the query's FROM clause —
         # Kibana's esql rule schema doesn't accept a separate "index" field.
@@ -643,12 +672,21 @@ def _as_form(values: dict):
 
 
 # Optional fields the Edit form can clear: a field it shows empty that the rule has is removed.
-_CLEARABLE = ("timestamp_override", "investigation_fields")
+_CLEARABLE = ("timestamp_override", "investigation_fields", "building_block_type")
 # Rule types whose type follows the query language. Others keep their own type: the form edits the
 # settings of those in _FORM_TYPES too (rule_type_settings); of the rest (machine learning, saved
 # query) only the common fields, leaving their own settings as Kibana has them.
 _LANGUAGE_TYPES = ("query", "eql", "esql")
 _FORM_TYPES = ("threshold", "new_terms", "threat_match")
+# Types that take no index patterns: ES|QL names its indexes in its query, machine learning has a job.
+# Any other is refused an empty list, which Kibana takes as every index (#129).
+_NO_INDEX_TYPES = ("esql", "machine_learning")
+_INDEX_NEEDED = "Give the index patterns the rule searches. With none, Kibana would search every index."
+
+
+def _index_missing(rule: dict) -> bool:
+    """Whether a new rule lacks the index patterns its type needs (``_NO_INDEX_TYPES`` take none)."""
+    return rule.get("type") not in _NO_INDEX_TYPES and not rule.get("index")
 
 
 def _form_changes(rule, form, technique_lookup: dict, username: str) -> tuple[dict, tuple, str]:
@@ -699,6 +737,8 @@ def changes_against(shown: dict, rule_type: str, form, technique_lookup: dict, u
             if not after.get("index"):
                 return {}, (), "Give the index patterns to search, or untick Use index patterns instead."
             changes["index"] = after["index"]
+    elif "index" in changes and not changes["index"] and after["type"] not in _NO_INDEX_TYPES:
+        return {}, (), _INDEX_NEEDED       # an empty list searches every index (#129)
 
     if "language" in changes:
         if rule_type in _LANGUAGE_TYPES:
@@ -805,6 +845,7 @@ _FIELD_LABELS = {
     "from": "lookback",
     "index": "index",
     "timestamp_override": "timestamp override",
+    "building_block_type": "building block",
     "investigation_fields": "custom highlighted fields",
     "mitre_ids": "MITRE techniques",
     "threat_index": "indicator index patterns",
@@ -839,6 +880,13 @@ def _summarize_rule_changes(old_payload: dict, new_payload: dict) -> tuple[str, 
                 changed.append(label)
                 changed_diffs.append({"field": label, "before": mapping_text(old_payload.get(key)),
                                       "after": mapping_text(new_payload.get(key))})
+            continue
+
+        if key == "building_block_type":
+            if bool(old_payload.get(key)) != bool(new_payload.get(key)):
+                changed.append(label)
+                changed_diffs.append({"field": label, "before": "Yes" if old_payload.get(key) else "No",
+                                      "after": "Yes" if new_payload.get(key) else "No"})
             continue
 
         if key == "name":
@@ -1956,19 +2004,11 @@ async def get_create_form(
     """Render the create-rule modal form."""
     try:
         templates = request.app.state.templates
-        return templates.TemplateResponse(
-            request,
-            "components/rule_create_form.html",
-            _build_rule_form_context(
-                db,
-                client_id,
-                user.username,
-                "/api/rules/create",
-                "Create rule",
-                "Create rule",
-                prefill=_extract_prefill(prefill),
-            ),
-        )
+        # In the threadpool: a destination without a default index has its space's read from Kibana.
+        context = await run_in_threadpool(_build_rule_form_context, db, client_id, user.username,
+                                          "/api/rules/create", "Create rule", "Create rule",
+                                          prefill=_extract_prefill(prefill))
+        return templates.TemplateResponse(request, "components/rule_create_form.html", context)
     except Exception as e:
         return HTMLResponse(errors.could_not_alert("open the form", e), status_code=500)
 
@@ -1997,6 +2037,8 @@ async def create_rule(
             problem = settings_problem(rule_data)
             if problem:
                 return _form_error(problem)
+        if _index_missing(rule_data):
+            return _form_error(_INDEX_NEEDED)
         if not siem_id or not space:
             return _form_error("Select a target SIEM/space pair.")
 
@@ -2370,6 +2412,7 @@ def _build_rule_details(rule) -> dict:
         "lookback": str(raw.get("from") or "").strip(),
         "risk_score": raw.get("risk_score"),
         "max_signals": raw.get("max_signals"),
+        "building_block": bool(raw.get("building_block_type")),     # #125
         "indexes": indexes,
         "guide": str(raw.get("note") or "").strip(),
         "guide_html": _render_guide_markdown(str(raw.get("note") or "").strip()) if str(raw.get("note") or "").strip() else "",
@@ -2545,6 +2588,38 @@ def _index_patterns(db, siem_id: str, rule) -> list:
     except Exception:
         logger.warning("Could not read index patterns for rule %s", getattr(rule, "rule_id", "?"), exc_info=True)
         return []
+
+
+def _raw(rule) -> dict:
+    """TIDE's copy of a rule as Kibana holds it, or {}."""
+    raw = getattr(rule, "raw_data", None)
+    return raw if isinstance(raw, dict) else {}
+
+
+def _mapping_groups(rule, patterns: list) -> list:
+    """The rule's field mappings grouped by index pattern (#128), in the order of ``patterns``
+    (``_index_patterns``), then any other pattern its lines name. Each group: its pattern, ``state``
+    (found, no_index, unknown), its fields (``state`` found, missing, unknown, or ``na``: one the rule
+    doesn't need, ``note`` saying why) and how many of the fields it needs the pattern has."""
+    from app.scoring import NOT_NEEDED
+    rows = [r for r in (getattr(rule, "field_mappings", None) or []) if isinstance(r, (list, tuple)) and len(r) >= 4]
+    states = {p["pattern"]: p for p in patterns}
+    order = [p["pattern"] for p in patterns] + sorted({str(r[0]) for r in rows} - set(states))
+    groups = []
+    for pattern in order:
+        fields = []
+        for _idx, field, has, typ in (r[:4] for r in rows if str(r[0]) == pattern):
+            has, typ = str(has), str(typ or "")
+            state = ("found" if has in ("Yes", "True") else "na" if has == NOT_NEEDED
+                     else "unknown" if has == "?" else "missing")
+            fields.append({"field": str(field), "state": state, "type": typ if state == "found" else "",
+                           "note": typ if state == "na" else ""})
+        needed = [f for f in fields if f["state"] != "na"]
+        state = (states.get(pattern) or {}).get("state") or ("no_index" if fields and all(
+            str(r[3]) == "no index" for r in rows if str(r[0]) == pattern and str(r[2]) == "-") else "unknown")
+        groups.append({"pattern": pattern, "state": state, "error": (states.get(pattern) or {}).get("error", ""),
+                       "fields": fields, "needed": len(needed), "found": sum(f["state"] == "found" for f in needed)})
+    return groups
 
 
 # Kibana's last_execution.status -> what the Last run section says, and its colour.
@@ -2780,7 +2855,13 @@ def _build_rule_modal_context(
         "just_validated": just_validated,
         "flash": flash,
         "mapping_info": None if wazuh_rule else _mapping_info(db, actual_siem, rule),
-        "index_patterns": [] if wazuh_rule else _index_patterns(db, actual_siem, rule),
+        "index_patterns": (patterns := [] if wazuh_rule else _index_patterns(db, actual_siem, rule)),
+        "mapping_groups": [] if wazuh_rule else _mapping_groups(rule, patterns),
+        # #129: no index patterns of its own: the space's defaults Kibana searches (checked there), or, for an
+        # empty list, every index (nothing to check).
+        "default_index_note": [] if wazuh_rule else list(_raw(rule).get("tide_default_index") or []),
+        "searches_everything": (not wazuh_rule and _raw(rule).get("index") == [] and not _raw(rule).get("data_view_id")
+                                and _raw(rule).get("type") not in ("esql", "machine_learning")),
         "last_run": None if wazuh_rule else _last_run(rule),
         "is_wazuh": wazuh_rule,
         "wazuh": _wazuh_window(db, client_id, rule, actual_siem, space) if wazuh_rule else None,
@@ -3092,6 +3173,7 @@ async def edit_rule(
         payload = {k: v for k, v in {**cached, **changes}.items() if k not in removed}
         if "index" in changes:
             payload.pop(elastic_helper.DATA_VIEW_NOTE, None)
+            payload.pop(elastic_helper.DEFAULT_INDEX_NOTE, None)
         if not db.update_cached_rule(rule_id, actual_siem_id, space, payload):
             return _form_error("TIDE couldn't save its copy of this rule. Nothing was changed.", 500)
         update_message = "Saved in TIDE only: Kibana no longer has this rule."

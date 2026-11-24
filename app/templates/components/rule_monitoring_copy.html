@@ -10,9 +10,10 @@
   query, posted back so the issue holds exactly what is shown). Assign to loads the chosen project's
   members (partials/rule_monitoring_assignees.html), Nobody chosen. Raise issue, beside Close,
   submits the form (form="rmon-gitlab-form"); it and Add as a comment answer into #rmon-gitlab-result.
-  For a rule (``rule``, from Rule Health, #106): the Markdown is the rule and its problems, Description
-  is what you write above it (in the issue, and in a comment), and from its window (``from_window``)
-  Back to rule (``back_url``) opens the window again, with the issue raised.
+  The Markdown can be changed before it is copied, raised or added as a comment (#124): what the box
+  holds is what goes (name="description", in the GitLab form by form= and in a comment by hx-include).
+  For a rule (``rule``, from Rule Health, #106): the Markdown is the rule and its problems, and from its
+  window (``from_window``) Back to rule (``back_url``) opens the window again, with the issue raised.
 #}
 {% from "macros/icons.html" import icon, icon_text %}
 {% from "macros/modal.html" import close_button, empty_state %}
@@ -31,7 +32,8 @@
             {%- if rule %} <strong>{{ rule.name }}</strong>{% if causes %} and its {{ causes }} {{ 'problem' if causes == 1 else 'problems' }}{% endif %}
             {%- elif every %} the {{ issues }} {{ 'issue' if issues == 1 else 'issues' }} shown
             {%- elif issue %} {{ issue }}, {{ causes }} {{ 'cause' if causes == 1 else 'causes' }}
-            {%- else %} this cause{% endif %}, to raise in GitLab or paste into a ticket or a chat.</p>
+            {%- else %} this cause{% endif %}, to raise in GitLab or paste into a ticket or a chat. You can change it
+            first, for example to say what needs doing.</p>
         {% if audiences %}
         <form class="mb-md" hx-get="/api/rule-monitoring/copy" hx-trigger="change" hx-target="#modal-container" hx-swap="innerHTML">
             {% for name, value in selection %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
@@ -42,7 +44,8 @@
         </form>
         {% endif %}
         <div class="rmon-md-box">
-            <pre class="rmon-md" id="rmon-md">{{ text }}</pre>
+            <textarea class="rmon-md" id="rmon-md" name="description" aria-label="Markdown" spellcheck="false"
+                      {%- if gitlab and gitlab.projects %} form="rmon-gitlab-form"{% endif %}>{{ text }}</textarea>
             <button name="Copy Markdown" type="button" class="btn btn-secondary btn-sm rmon-md-box__copy" data-rm-copy="#rmon-md"
                     data-copied="Copied. Paste it into a ticket or a chat." title="Copy the Markdown">{{ icon_text('copy', 'Copy', '12') }}</button>
         </div>
@@ -60,10 +63,10 @@
                     {% else %}<span class="badge badge-warning badge--xs">Gone from GitLab</span>{% endif %}
                     {% if r.usable %}
                     <form hx-post="/api/rule-monitoring/gitlab-comment" hx-target="#rmon-gitlab-result" hx-swap="innerHTML"
-                          hx-disabled-elt="find button" class="rmon-gitlab__comment"{% if rule %} hx-include="#rmon-gitlab-note"{% endif %}>
+                          hx-disabled-elt="find button" class="rmon-gitlab__comment" hx-include="#rmon-md">
                         {{ selection_fields() }}<input type="hidden" name="raised_id" value="{{ r.id }}">
                         <button name="Add GitLab Comment" type="submit" class="btn btn-secondary btn-xs"
-                                title="Comment on it with the Markdown above: what TIDE finds now">{{ icon_text('plus', 'Add as a comment', '12') }}</button>
+                                title="Comment on it with the Markdown above">{{ icon_text('plus', 'Add as a comment', '12') }}</button>
                     </form>
                     {% endif %}
                 </li>
@@ -78,14 +81,6 @@
                     <label class="form-label" for="rmon-gitlab-issue-title">Title</label>
                     <input type="text" name="title" id="rmon-gitlab-issue-title" class="form-input" maxlength="255" value="{{ gitlab.title }}" required>
                 </div>
-                {% if rule %}
-                <div>
-                    <label class="form-label" for="rmon-gitlab-note">Description</label>
-                    <textarea name="note" id="rmon-gitlab-note" class="form-input" rows="3" maxlength="5000"
-                              placeholder="What needs doing, for example: too noisy since the October change, please tune it."></textarea>
-                    <p class="text-muted fs-sm">TIDE adds the rule and its problems, as above, below what you write.</p>
-                </div>
-                {% endif %}
                 <div class="rmon-gitlab__pair">
                     <div>
                         <label class="form-label" for="rmon-gitlab-project">Project</label>

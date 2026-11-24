@@ -3507,6 +3507,8 @@ def _rule_telemetry(rule) -> Dict:
             ok += 1
         elif row[2] == "?":
             unknown += 1
+        elif row[2] == "N/A":          # scoring.NOT_NEEDED: a field the rule doesn't need (#128)
+            continue
         else:
             missing += 1
             missing_fields.append(f"{row[1]} ({row[0]})")

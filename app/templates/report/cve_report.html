@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-    TIDE CVE Audit Report — PDF Template  (v5 — Unified Print-Friendly)
+    TIDE CVE audit report — PDF Template  (v5 — Unified Print-Friendly)
     ─────────────────────────────────────────────────────────────────────
     Cover page + TOC + white body background — fully printer-friendly.
     Airgap-safe: NO external fonts, images or URLs.
@@ -10,7 +10,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
-<title>{{ report.cve_id }} — CVE Audit Report</title>
+<title>{{ report.cve_id }} — CVE audit report</title>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -119,12 +119,12 @@ td { color:var(--text-2); }
         <span class="cover-logo">TIDE</span>
         <div class="cover-tagline">Threat Informed Detection Engine</div>
         <hr class="cover-rule"/>
-        <div class="cover-title">CVE Vulnerability Audit</div>
+        <div class="cover-title">CVE vulnerability audit</div>
         <div class="cover-subtitle">{{ report.cve_id }}{% if report.vulnerability_name %} — {{ report.vulnerability_name }}{% endif %}</div>
         <div class="cover-clf-badge">{{ report.classification or 'Official' }}</div>
         {% if report.known_ransomware %}
         <div style="margin-top:4mm;">
-            <span style="display:inline-block;background:#3d1414;color:#ffa198;font-size:7pt;font-weight:600;padding:1.5mm 4mm;border-radius:3mm;border:1px solid #8b322c;">Ransomware Campaign</span>
+            <span style="display:inline-block;background:#3d1414;color:#ffa198;font-size:7pt;font-weight:600;padding:1.5mm 4mm;border-radius:3mm;border:1px solid #8b322c;">Ransomware campaign</span>
         </div>
         {% endif %}
         {% if report.is_kev %}
@@ -141,15 +141,15 @@ td { color:var(--text-2); }
      TABLE OF CONTENTS
      ══════════════════════════════════════════════════════ -->
 <div class="section-banner avoid-break" style="margin-top:0;">
-    <div class="section-banner-title">Table of Contents</div>
+    <div class="section-banner-title">Table of contents</div>
 </div>
 <div style="margin-bottom:7mm;">
-    <div class="toc-item"><span class="toc-num">1</span><span class="toc-text">Executive Summary</span></div>
-    <div class="toc-item"><span class="toc-num">2</span><span class="toc-text">CVE Details</span></div>
-    <div class="toc-item"><span class="toc-num">3</span><span class="toc-text">MITRE ATT&amp;CK Techniques</span></div>
-    <div class="toc-item"><span class="toc-num">4</span><span class="toc-text">Applied Detection Rules</span></div>
-    {% if report.technique_rules %}<div class="toc-item"><span class="toc-num">5</span><span class="toc-text">SIEM Rules Mapped via MITRE</span></div>{% endif %}
-    <div class="toc-item"><span class="toc-num">6</span><span class="toc-text">Impact Matrix — Affected Systems &amp; Hosts</span></div>
+    <div class="toc-item"><span class="toc-num">1</span><span class="toc-text">Executive summary</span></div>
+    <div class="toc-item"><span class="toc-num">2</span><span class="toc-text">CVE details</span></div>
+    <div class="toc-item"><span class="toc-num">3</span><span class="toc-text">MITRE ATT&amp;CK techniques</span></div>
+    <div class="toc-item"><span class="toc-num">4</span><span class="toc-text">Applied detection rules</span></div>
+    {% if report.technique_rules %}<div class="toc-item"><span class="toc-num">5</span><span class="toc-text">SIEM rules mapped via MITRE</span></div>{% endif %}
+    <div class="toc-item"><span class="toc-num">6</span><span class="toc-text">Impact matrix — affected systems &amp; hosts</span></div>
 </div>
 <div class="page-break"></div>
 
@@ -157,7 +157,7 @@ td { color:var(--text-2); }
      SECTION 1 — EXECUTIVE SUMMARY
      ══════════════════════════════════════════════════════ -->
 <div class="section-banner avoid-break">
-    <div class="section-banner-title">Executive Summary</div>
+    <div class="section-banner-title">Executive summary</div>
     <div class="section-banner-sub">CVE impact and detection coverage overview</div>
 </div>
 
@@ -169,27 +169,27 @@ td { color:var(--text-2); }
 <div class="summary-grid avoid-break">
     <div class="stat-card">
         <span class="stat-value">{{ report.total_systems }}</span>
-        <span class="stat-label">Affected Systems</span>
+        <span class="stat-label">Affected systems</span>
     </div>
     <div class="stat-card">
         <span class="stat-value {% if report.total_hosts > 0 %}danger{% else %}success{% endif %}">{{ report.total_hosts }}</span>
-        <span class="stat-label">Affected Hosts</span>
+        <span class="stat-label">Affected hosts</span>
     </div>
     <div class="stat-card">
         <span class="stat-value danger">{{ report.red_count }}</span>
-        <span class="stat-label">At Risk Hosts</span>
+        <span class="stat-label">At Risk hosts</span>
     </div>
     <div class="stat-card">
         <span class="stat-value warning">{{ report.amber_count }}</span>
-        <span class="stat-label">Monitored Hosts</span>
+        <span class="stat-label">Monitored hosts</span>
     </div>
     <div class="stat-card">
         <span class="stat-value">{{ report.detections|length }}</span>
-        <span class="stat-label">Detection Rules</span>
+        <span class="stat-label">Detection rules</span>
     </div>
     <div class="stat-card">
         <span class="stat-value">{{ report.techniques|length }}</span>
-        <span class="stat-label">MITRE Techniques</span>
+        <span class="stat-label">MITRE techniques</span>
     </div>
 </div>
 
@@ -197,7 +197,7 @@ td { color:var(--text-2); }
      SECTION 2 — CVE DETAILS
      ══════════════════════════════════════════════════════ -->
 <div class="section-banner avoid-break">
-    <div class="section-banner-title">CVE Details</div>
+    <div class="section-banner-title">CVE details</div>
     <div class="section-banner-sub">{{ report.cve_id }}{% if report.vulnerability_name %} — {{ report.vulnerability_name }}{% endif %}</div>
 </div>
 
@@ -208,15 +208,15 @@ td { color:var(--text-2); }
     {% endif %}
     <div class="info-grid">
         <div class="info-item">
-            <div class="info-label">Vendor / Product</div>
+            <div class="info-label">Vendor / product</div>
             <div class="info-value">{{ report.vendor_project }} / {{ report.product }}</div>
         </div>
         <div class="info-item">
-            <div class="info-label">Date Added</div>
+            <div class="info-label">Date added</div>
             <div class="info-value">{{ report.date_added }}</div>
         </div>
         <div class="info-item">
-            <div class="info-label">Due Date</div>
+            <div class="info-label">Due date</div>
             <div class="info-value">{{ report.due_date }}</div>
         </div>
         <div class="info-item">
@@ -227,7 +227,7 @@ td { color:var(--text-2); }
     {% if report.notes %}
     <div style="margin-top:3mm;padding-top:3mm;border-top:1px solid var(--border);">
         <div class="info-item">
-            <div class="info-label">Required Action</div>
+            <div class="info-label">Required action</div>
             <div class="info-value" style="color:var(--text-3);">{{ report.notes }}</div>
         </div>
     </div>
@@ -235,15 +235,15 @@ td { color:var(--text-2); }
 </div>
 
 <!-- ══════════════════════════════════════════════════════
-     SECTION 3 — MITRE ATT&CK Techniques
+     SECTION 3 — MITRE ATT&CK techniques
      ══════════════════════════════════════════════════════ -->
 {% if report.techniques %}
 <div class="section-banner avoid-break">
-    <div class="section-banner-title">MITRE ATT&amp;CK Techniques</div>
+    <div class="section-banner-title">MITRE ATT&amp;CK techniques</div>
 </div>
 
 <table>
-    <thead><tr><th>Technique ID</th><th>Name</th><th>Detection Status</th><th>Rule Count</th></tr></thead>
+    <thead><tr><th>Technique ID</th><th>Name</th><th>Detection status</th><th>Rule count</th></tr></thead>
     <tbody>
         {% for t in report.techniques %}
         <tr>
@@ -261,12 +261,12 @@ td { color:var(--text-2); }
      SECTION 4 — APPLIED DETECTION RULES
      ══════════════════════════════════════════════════════ -->
 <div class="section-banner avoid-break">
-    <div class="section-banner-title">Applied Protections — Detection Rules</div>
+    <div class="section-banner-title">Applied protections — detection rules</div>
 </div>
 
 {% if report.detections %}
 <table>
-    <thead><tr><th>Rule / Reference</th><th>Note</th><th>Source</th></tr></thead>
+    <thead><tr><th>Rule / reference</th><th>Note</th><th>Source</th></tr></thead>
     <tbody>
         {% for d in report.detections %}
         <tr>
@@ -288,11 +288,11 @@ td { color:var(--text-2); }
      ══════════════════════════════════════════════════════ -->
 {% if report.technique_rules %}
 <div class="section-banner avoid-break">
-    <div class="section-banner-title">SIEM Rules Mapped via MITRE Techniques</div>
+    <div class="section-banner-title">SIEM rules mapped via MITRE techniques</div>
 </div>
 
 <table>
-    <thead><tr><th>Technique</th><th>Rule Name</th><th>Severity</th></tr></thead>
+    <thead><tr><th>Technique</th><th>Rule name</th><th>Severity</th></tr></thead>
     <tbody>
         {% for tid, rules in report.technique_rules.items() %}
         {% for r in rules %}
@@ -317,7 +317,7 @@ td { color:var(--text-2); }
 <div class="page-break"></div>
 
 <div class="section-banner avoid-break">
-    <div class="section-banner-title">Impact Matrix — Affected Systems &amp; Hosts</div>
+    <div class="section-banner-title">Impact matrix — affected systems &amp; hosts</div>
 </div>
 
 {% if report.grouped_systems %}
@@ -330,7 +330,7 @@ td { color:var(--text-2); }
 
     <table style="margin-bottom:0;">
         <thead>
-            <tr><th>Hostname</th><th>IP Address</th><th>OS</th><th>Status</th><th>Active Rule(s)</th></tr>
+            <tr><th>Hostname</th><th>IP address</th><th>OS</th><th>Status</th><th>Active rule(s)</th></tr>
         </thead>
         <tbody>
             {% for h in sys.hosts %}

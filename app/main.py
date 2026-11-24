@@ -30,6 +30,7 @@ except Exception:  # pragma: no cover
 
 from app.config import get_settings
 from app.api.deps import CurrentUser, DbDep, ActiveClient, OptionalClient
+from app.models.auth import PASSWORD_CHANGE_PAGE as _PASSWORD_CHANGE_PAGE
 from app.services import errors, keycloak_config
 from app.api import auth, rules, heatmap, threats, promotion, sigma, elastic as elastic_api, rule_upstream as rule_upstream_api, hunting as hunting_api, settings as settings_api, inventory, external_sharing, clients as clients_api, management as management_api, mitre as mitre_api, bulk_edit as bulk_edit_api, diagnostics as diagnostics_api, dashboard as dashboard_api, rule_monitoring as rule_monitoring_api, rule_tuning as rule_tuning_api, maintenance as maintenance_api, backlog as backlog_api, simulations as simulations_api
 
@@ -315,7 +316,7 @@ async def lifespan(app: FastAPI):
             raise errors.TideError(errors.T460)
 
     # The maintenance window's restart (#82): compact the files it chose before any is opened. Then any
-    # database file mostly space no table holds, window or not (#116): it slows every sync's checkpoint.
+    # database file compacting would halve, window or not (#116): it slows every sync's checkpoint.
     try:
         from app.services import maintenance
         maintenance.reclaim_at_startup()
@@ -861,7 +862,7 @@ async def _run_maintenance_window(trigger: str = "scheduled", by: str = "mainten
         out = []
         for d in backups._databases(db):
             with get_pool().acquire(str(d["path"])) as conn:
-                out.append(maintenance.measure(str(d["path"]), conn))
+                out.append(maintenance.reclaimable(str(d["path"]), conn, maintenance.RECLAIM_PCT))
         return out
 
     async def measure_files() -> list:
@@ -1020,6 +1021,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/api/settings/profile/avatar",
     }
 
+    # While an admin's reset waits to be changed (User.must_change_password), a session reaches this
+    # page and its own settings only (/api/settings/profile/...: the password, name, email, picture).
+    PASSWORD_CHANGE_PAGE = _PASSWORD_CHANGE_PAGE
+
     @staticmethod
     def resource_for(path: str, table: Dict[str, str]) -> Optional[str]:
         """The resource guarding ``path``: an exact entry, else the most specific entry it starts
@@ -1062,6 +1067,18 @@ class AuthMiddleware(BaseHTTPMiddleware):
         
         def _check_page_permission(user):
             """Check if user has permission to access this path. Returns 403 response or None."""
+            if user and user.must_change_password and path != self.PASSWORD_CHANGE_PAGE \
+                    and not path.startswith("/api/settings/profile/"):
+                # Anything else goes to Profile, to choose a new password; an API call is refused.
+                if is_api and not is_htmx:
+                    return errors.json_response(request, errors.A403, "Choose a new password first: "
+                                                "an admin reset yours.", 403)
+                if is_htmx:
+                    from fastapi.responses import Response
+                    resp = Response(content="", status_code=200)
+                    resp.headers["HX-Redirect"] = self.PASSWORD_CHANGE_PAGE
+                    return resp
+                return RedirectResponse(url=self.PASSWORD_CHANGE_PAGE, status_code=302)
             if path in self.SELF_SERVICE_PATHS:
                 return None
             user = _scope_user_to_active_client(user)
@@ -1611,9 +1628,9 @@ def create_app() -> FastAPI:
         # Apply highlighting
         text = re.sub(keywords, r'<span class="hl-kw">\1</span>', text, flags=re.IGNORECASE)
         
-        # Highlight strings
-        text = re.sub(r'(&quot;[^&]*&quot;)', r'<span class="hl-str">\1</span>', text)
-        text = re.sub(r"('[^']*')", r'<span class="hl-str">\1</span>', text)
+        # Highlight strings: escape() writes a quote as &#34; or &#39; (an older escape as &quot;).
+        text = re.sub(r'((?:&#34;|&quot;).*?(?:&#34;|&quot;))', r'<span class="hl-str">\1</span>', text)
+        text = re.sub(r"(&#39;.*?&#39;)", r'<span class="hl-str">\1</span>', text)
         
         # Highlight field names (word.word:)
         text = re.sub(r'([a-zA-Z_][a-zA-Z0-9_\.]*)(\s*:)', r'<span class="hl-field">\1</span><span class="hl-op">\2</span>', text)
@@ -1637,14 +1654,22 @@ def create_app() -> FastAPI:
     _MD_TAGS = {"p", "br", "hr", "h1", "h2", "h3", "h4", "h5", "h6", "strong", "em", "b", "i", "code",
                 "pre", "blockquote", "ul", "ol", "li", "a", "table", "thead", "tbody", "tr", "th", "td",
                 "dl", "dt", "dd", "abbr", "sup", "sub"}
-    _MD_ATTRS = {"a": {"href", "title"}, "abbr": {"title"}}
+    _MD_ATTRS = {"a": {"href", "title"}, "abbr": {"title"}, "code": {"class"}}
+
+    def _md_attr(tag: str, attr: str, value: str):
+        """A code block keeps only its language (```kql: class="language-kql"), which a page may name
+        it by (a simulation's searches, #126); any other class goes."""
+        if tag == "code" and attr == "class":
+            return value if _re.fullmatch(r"language-[a-z0-9]+", value) else None
+        return value
 
     def md_filter(text: str) -> Markup:
         """Convert Markdown text to safe HTML."""
         if not text:
             return Markup("")
         html = _md_lib.markdown(str(text), extensions=["extra", "nl2br", "sane_lists"])
-        html = _nh3.clean(html, tags=_MD_TAGS, attributes=_MD_ATTRS, url_schemes={"http", "https", "mailto"})
+        html = _nh3.clean(html, tags=_MD_TAGS, attributes=_MD_ATTRS, attribute_filter=_md_attr,
+                          url_schemes={"http", "https", "mailto"})
         # After cleaning: the ATT&CK links below gain TIDE's own hx-* attributes, built from a checked id.
 
         def _rewrite_attack_href(match) -> str:
@@ -1677,6 +1702,22 @@ def create_app() -> FastAPI:
         return Markup(html)
 
     templates.env.filters["md"] = md_filter
+
+    # A Markdown block's searches coloured as a rule's query is (#126): each ```kql, ```esql and ```eql
+    # block of md's output, which md has already made safe, in TIDE's query box (.query-display).
+    _CODE_BLOCK = _re.compile(r'<pre><code class="language-(kql|esql|eql)">(.*?)</code></pre>', _re.S)
+    _HL_LANGUAGE = {"kql": "kuery", "esql": "esql", "eql": "eql"}
+
+    def highlight_code_filter(html) -> Markup:
+        from html import unescape
+
+        def coloured(m) -> str:
+            lang = m.group(1)
+            return (f'<pre class="query-display"><code class="language-{lang}">'
+                    f'{highlight_query(unescape(m.group(2)), _HL_LANGUAGE[lang])}</code></pre>')
+        return Markup(_CODE_BLOCK.sub(coloured, str(html)))
+
+    templates.env.filters["highlight_code"] = highlight_code_filter
     from app.services.mitre_catalog import plain_summary as _attack_plain
     templates.env.filters["attack_plain"] = _attack_plain
     from app.models.rules import rule_language_name as _rule_language_name, rule_type_name as _rule_type_name
@@ -2147,7 +2188,7 @@ def create_app() -> FastAPI:
         qp = request.query_params
         search_q = qp.get("search") or ""
         space_q = qp.get("space") or ""
-        # Rule Health opens on the enabled rules (UX.md 9.5): most of a client's rules can be disabled,
+        # Rule Health opens on the enabled rules: most of a client's rules can be disabled,
         # and they'd fill the first screen. An address with any filter (a link to find a rule by its
         # name), or with "enabled=" (empty, as the page keeps it when Status is All), shows them all.
         filtered = any(qp.get(k) for k in ("search", "space", "state", "linked_to", "upstream", "rule_type", "language",
@@ -2511,6 +2552,8 @@ def create_app() -> FastAPI:
                 "metrics_error": metrics_error,
                 "origins": origins,
                 "sources": sources,
+                # The list's filters are kept in the address (#119): a reload or a link shows the same.
+                "tl": {k: request.query_params.get(k, "") for k in ("search", "origin", "source", "sort_by")},
                 "last_sync": rule_issues.freshness(db, _cid),
             }
         )
@@ -2743,9 +2786,10 @@ def create_app() -> FastAPI:
         db: DbDep,
         technique: str = "",
         rule: str = "",
+        q: str = "",
     ):
-        """Sigma Convert page. The browser's filters can be given in the address as its list takes
-        them (``?product=windows&level=high``)."""
+        """Sigma Convert page. The browser's search and filters can be given in the address as its list
+        takes them (``?q=mimikatz&product=windows&level=high``); the page keeps them there (library.js)."""
         from app import sigma_helper as sigma_mod
         from app.api.sigma import picked_filters
 
@@ -2759,7 +2803,7 @@ def create_app() -> FastAPI:
         # The rule browser's first rows (filtered by technique when the URL gives one)
         from app.api.sigma import rules_list_context as _sigma_rows
         filters = picked_filters(request)
-        rows = _sigma_rows(technique=technique, filters=filters)
+        rows = _sigma_rows(query=q, technique=technique, filters=filters)
 
         # Resolve active client and pin tenant context BEFORE any
         # detection_rules read — rules are per-tenant since 4.1.13 and the
@@ -2795,6 +2839,7 @@ def create_app() -> FastAPI:
                 "backends": backends,
                 "pipelines": pipelines,
                 "formats": formats,
+                "search_q": q,
                 "technique_filter": technique,
                 "selected_rule_id": rule,
                 "covered_ttps": covered_ttps,
@@ -2814,9 +2859,11 @@ def create_app() -> FastAPI:
         technique: str = "",
         rule: str = "",
         hunt: str = "",
+        q: str = "",
     ):
-        """Elastic Rules page: Elastic's detection rules bundled in the image. The browser's filters
-        can be given in the address as its list takes them (``?platform=windows&severity=high``)."""
+        """Elastic Rules page: Elastic's detection rules bundled in the image. The browser's search and
+        filters can be given in the address as its list takes them (``?q=lsass&platform=windows&severity=high``);
+        the page keeps them there (library.js)."""
         from app.api.elastic import picked_filters, rules_list_context
         from app.services import elastic_rules as er
 
@@ -2845,7 +2892,8 @@ def create_app() -> FastAPI:
                 "destinations": [{"value": f"{s['id']}|{s.get('space') or 'default'}",
                                   "label": s.get("name") or s.get("space") or s.get("label")}
                                  for s in db.get_client_siems(client_id) or []],
-                **rules_list_context(db, client_id, technique=technique, filters=filters, selected=rule),
+                "search_q": q,
+                **rules_list_context(db, client_id, q=q, technique=technique, filters=filters, selected=rule),
             },
         )
 
@@ -2858,9 +2906,12 @@ def create_app() -> FastAPI:
         technique: str = "",
         source: str = "",
         hunt: str = "",
+        q: str = "",
+        platform: str = "",
     ):
         """Hunting page: Elastic's hunting queries and SigmaHQ's threat-hunting rules, bundled in the
-        image. ``hunt`` (``<source>/<id>``) opens one on arrival."""
+        image. ``hunt`` (``<source>/<id>``) opens one on arrival; the list's search and filters can be
+        given in the address too, and the page keeps them there (library.js)."""
         from app.api.hunting import list_context
         from app import sigma_helper
         from app.services import elastic_rules as er
@@ -2882,12 +2933,14 @@ def create_app() -> FastAPI:
                 "active_page": "hunting",
                 "technique_filter": technique,
                 "source_filter": source,
+                "search_q": q,
+                "platform_filter": platform,
                 "sources": hunting.SOURCES,
                 "counts": counts,
                 "platforms": platforms,
                 "elastic_commit": er.commit(),
                 "run": run,
-                **list_context(db, client_id, technique=technique, source=source, selected=hunt),
+                **list_context(db, client_id, q=q, technique=technique, platform=platform, source=source, selected=hunt),
             },
         )
 

@@ -55,7 +55,8 @@ def _compute(db, client_id: str, card: dict) -> dict:
         return view
     if source == "rule_monitoring":
         from app.services import rule_issues
-        filters = {"show": "open", "group": "issue", **f}
+        # Whether rules work: the tuning findings are Rule Tuning's (#122), whatever a section saved.
+        filters = {"show": "open", "group": "issue", **f, "kind": ["health"]}
         destinations = db.get_client_siems(client_id) or []
         with db.get_connection() as conn:
             data = rule_issues.view(conn, destinations, filters, client_id=client_id)

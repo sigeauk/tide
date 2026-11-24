@@ -1,0 +1,28 @@
+{#
+  The Simulations page's Dashboard or Answers tab (part), on the page and drawn again (api.simulations.
+  simulations_tab) whenever a simulation starts, ends, is cleaned up or cleared (simulationsChanged), so a
+  new one shows without reloading: Simulation picks one, opening on the one running, else the latest
+  (focus); its dashboard or answers load beneath it (#sim-<part>, the page's fold store). Context: part,
+  sims, focus, names, states.
+#}
+{% from "macros/modal.html" import empty_state %}
+{% from "components/ui/loading_state.html" import loading_state %}
+{% if sims %}
+<div class="filter-group sim-pick">
+    <label class="form-label" for="sim-pick-{{ part }}">Simulation</label>
+    <select id="sim-pick-{{ part }}" class="form-input" data-change="ui.load" data-url="/api/simulations/{id}/{{ part }}"
+            data-target="#sim-{{ part }}">
+        {% for s in sims %}
+        <option value="{{ s.id }}"{% if s.id == focus %} selected{% endif %}>{% for sid in s.scenarios %}{{ names.get(sid, sid) }}{% if not loop.last %}, {% endif %}{% endfor %}, {{ s.created_at.strftime('%Y-%m-%d %H:%M') if s.created_at else '' }} ({{ states.get(s.state, s.state) | lower }})</option>
+        {% endfor %}
+    </select>
+</div>
+<div id="sim-{{ part }}" data-fold-store="tide.simulationsFolds" hx-get="/api/simulations/{{ focus }}/{{ part }}" hx-trigger="load" hx-swap="innerHTML">
+    {{ loading_state('Loading…') }}
+</div>
+{% else %}
+{% call empty_state('crosshair') %}
+<h3>No simulations yet</h3>
+<p>Start one under Run to see {{ 'its scores' if part == 'dashboard' else 'its questions with their answers' }} here.</p>
+{% endcall %}
+{% endif %}

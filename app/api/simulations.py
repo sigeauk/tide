@@ -32,6 +32,7 @@ QUESTION = "partials/simulation_question.html"
 BOARD = "partials/simulation_board.html"
 DASHBOARD = "partials/simulation_dashboard.html"
 ANSWERS_TAB = "partials/simulation_answers.html"
+TAB = "partials/simulation_tab.html"
 STATES = {"setting_up": "Setting up", "replaying": "Replaying", "playing": "Playing", "ending": "Ending",
           "ended": "Ended", "cleaning_up": "Cleaning up", "failed": "Failed"}
 ANSWERS = {"right": "Right", "wrong": "Not right: try again.", "solved": "You've answered it already.",
@@ -111,6 +112,30 @@ def player_writeup(text: str, namespace: str) -> str:
     return for_namespace("\n\n".join(kept), namespace)
 
 
+def answer_parts(writeup: str) -> Dict[str, str]:
+    """A write-up as the Answers tab and a player's answered question show it (#126): its ``title`` (its
+    "### N." heading), its ``answer`` (the "**Answer: …**" line, set apart from the searches), and the
+    ``rest``: how to find it, its searches and, for the Sim Admin, the notes on TIDE's rules. ``answer_md``
+    is the answer as the box shows it: the value in bold, then what the line adds after it ("(6.17)",
+    ", looked up at 16:48:12")."""
+    lines = writeup.strip().splitlines()
+    title = lines.pop(0)[4:].strip() if lines and lines[0].startswith("### ") else ""
+    text = "\n".join(lines)
+    m = re.search(r"^\*\*Answer:\s*(.+?)\*\*(.*)$", text, re.M)
+    if not m:
+        return {"title": title, "answer": "", "answer_md": "", "rest": text.strip()}
+    value, more = m.group(1).strip(), m.group(2).rstrip()
+    value = value[:-1] if value.endswith(".") else value      # "**Answer: 23.22.63.114.** It is also…"
+    return {"title": title, "answer": value, "answer_md": f"**{value}**{more}",
+            "rest": (text[:m.start()] + text[m.end():]).strip()}
+
+
+def saved_searches(writeup: str) -> List[tuple]:
+    """The searches in a question's write-up a Sim Admin can save in Kibana (#126): ``[(language,
+    search)]``, its KQL and ES|QL ones. Discover can't save an EQL search."""
+    return [(lang, body.strip()) for lang, body in re.findall(r"^```(esql|kql)\n(.*?)^```", writeup, re.M | re.S)]
+
+
 # ── The Simulations page (Sim Admins) ──────────────────────────────────────────────────────────
 
 TABS = ("run", "dashboard", "answers")
@@ -138,12 +163,17 @@ def _live(sim: dict) -> bool:
 
 
 def _questions(sim: dict) -> list:
-    """Each of the simulation's scenarios with its questions and their write-ups, for its own data."""
+    """Each of the simulation's scenarios with its questions, each with its write-up for its own data
+    (``answer_parts``) and how many of its searches can be saved in Kibana."""
     out = []
     for sid in sim["scenarios"]:
         try:
             sc = packs.scenario(sid)
-            out.append((sc, [(q, for_namespace(q.writeup, sim["namespace"])) for q in game.questions(sc)]))
+            items = []
+            for q in game.questions(sc):
+                text = for_namespace(q.writeup, sim["namespace"])
+                items.append((q, answer_parts(text), len(saved_searches(text))))
+            out.append((sc, items))
         except packs.PackError:
             continue
     return out
@@ -229,6 +259,18 @@ def _sim_or_404(db, client_id: str, sim_id: str):
     return sim
 
 
+# Before the routes by a simulation's id, which would take "tab" for one.
+@router.get("/api/simulations/tab/{part}", response_class=HTMLResponse)
+def simulations_tab(part: str, request: Request, db: DbDep, client_id: ActiveClient, user: RequireUser):
+    """The Dashboard or Answers tab drawn again when a simulation starts, ends, is cleaned up or cleared
+    (simulationsChanged), on the one running, else the latest: a new one shows without reloading."""
+    if part not in ("dashboard", "answers"):
+        raise HTTPException(status_code=404, detail="There is no such tab.")
+    sims = simulation.list_all(_store(db, client_id))
+    return request.app.state.templates.TemplateResponse(request, TAB, {
+        "part": part, "sims": sims, "focus": _focus(sims), "names": _names(), "states": STATES})
+
+
 @router.get("/api/simulations/{sim_id}/dashboard", response_class=HTMLResponse)
 def simulation_dashboard(sim_id: str, request: Request, db: DbDep, client_id: ActiveClient, user: RequireUser):
     """The Dashboard tab for one simulation: its figures, its scores over time, the board, how each
@@ -242,7 +284,7 @@ def _dashboard(request: Request, store, sim: dict, me: Optional[str], poll_url: 
     sim_id = sim["id"]
     board = simulation.board(store, sim_id)
     stats = simulation.question_stats(store, sim_id)
-    items = [(sc, q, stats.get(q.key, {})) for sc, qs in _questions(sim) for q, _ in qs]
+    items = [(sc, q, stats.get(q.key, {})) for sc, qs in _questions(sim) for q, *_ in qs]
     return request.app.state.templates.TemplateResponse(request, DASHBOARD, {
         "sim": sim, "names": _names(), "states": STATES, "board": board, "me": me, "player": me is not None,
         "items": items, "chart": score_chart(simulation.timeline(store, sim_id)), "live": _live(sim),
@@ -257,7 +299,55 @@ def simulation_answers(sim_id: str, request: Request, db: DbDep, client_id: Acti
     """The Answers tab for one simulation: its questions, each with its answer and how to find it in its
     own data, and the notes on its rules (for the Sim Admin)."""
     sim = _sim_or_404(db, client_id, sim_id)
-    return request.app.state.templates.TemplateResponse(request, ANSWERS_TAB, {"sim": sim, "questions": _questions(sim)})
+    return request.app.state.templates.TemplateResponse(request, ANSWERS_TAB, {
+        "sim": sim, "questions": _questions(sim), "can_save": _can_save(sim, user)})
+
+
+def _can_save(sim: dict, user) -> bool:
+    """Save in Kibana (#126): who can run simulations, while the simulation's space is there."""
+    return ((user is None or user.can_write("page:simulations")) and not sim["cleaned"]
+            and sim["state"] not in ("setting_up", "cleaning_up", "failed"))
+
+
+@router.post("/api/simulations/{sim_id}/saved-searches", response_class=HTMLResponse)
+async def save_question_searches(sim_id: str, request: Request, db: DbDep, client_id: ActiveClient, user: RequireUser):
+    """Save in Kibana (#126): a question's KQL and ES|QL searches as saved searches in the simulation's
+    space, on its Simulation logs data view and its time so far, so Discover opens on them there. Saving
+    again replaces them; cleaning the simulation up deletes them with its space."""
+    from html import escape
+    from starlette.concurrency import run_in_threadpool
+    from app.services.sim.replay import ElasticError
+    sim = _sim_or_404(db, client_id, sim_id)
+    if not _can_save(sim, None) or (user is not None and not user.can_write("page:simulations")):
+        why = ("it needs the right to run simulations" if user is not None and not user.can_write("page:simulations")
+               else "the simulation has no space in Kibana now")
+        return HTMLResponse(f'<div class="alert alert-danger">Could not save them: {why}.</div>')
+    form = await request.form()
+    scenario, n = str(form.get("scenario") or ""), str(form.get("n") or "")
+    question = None
+    if scenario in sim["scenarios"]:
+        try:
+            question = next((q for q in game.questions(packs.scenario(scenario)) if str(q.n) == n), None)
+        except packs.PackError:
+            question = None
+    if question is None:
+        return HTMLResponse('<div class="alert alert-danger">Could not save them: there is no such question.</div>')
+    text = for_namespace(question.writeup, sim["namespace"])
+    searches = saved_searches(text)
+    if not searches:
+        return HTMLResponse('<div class="alert alert-danger">Could not save them: this question has no KQL or ES|QL search.</div>')
+    title = answer_parts(text)["title"] or f"Question {question.n}"
+    try:
+        siem = simulation.siem_for(db, sim["siem_id"])
+        saved = await run_in_threadpool(simulation.save_searches, siem, sim, scenario, question.n, title, searches)
+    except (simulation.SimError, ElasticError) as exc:
+        return HTMLResponse(f'<div class="alert alert-danger">Could not save them: {escape(str(exc))}</div>')
+    base = ((db.get_siem_inventory_item(sim["siem_id"]) or {}).get("kibana_url") or "").rstrip("/")
+    links = ", ".join(f'<a href="{escape(base)}/s/{escape(sim["space"])}/app/discover#/view/{escape(oid)}" '
+                      f'target="_blank" rel="noopener">{escape(name)}</a>' for name, oid in saved)
+    logger.info("Simulation %s: %s saved %d search(es) of %s question %s in Kibana", sim_id, _who(user)[1],
+                len(saved), scenario, question.n)
+    return HTMLResponse(f'<div class="alert alert-success">Saved in Discover, in the simulation\'s space: {links}.</div>')
 
 
 def _list(request: Request, db, client_id: str) -> HTMLResponse:
@@ -320,6 +410,14 @@ def end_simulation(sim_id: str, request: Request, db: DbDep, client_id: ActiveCl
                 lambda store, siem, sim: simulation.end(store, siem, sim["id"], _who(user)[1]))
 
 
+@router.post("/api/simulations/{sim_id}/replay", response_class=HTMLResponse)
+def replay_simulation_data(sim_id: str, request: Request, db: DbDep, client_id: ActiveClient, user: RequireUser):
+    """Replay data: send its data again, stamped now, so rules made or fixed since the last pass see it."""
+    return _act(request, db, client_id, sim_id, user, "replay",
+                "Replaying its data again: rules made or fixed since the last pass will see it.",
+                lambda store, siem, sim: simulation.replay_data(store, siem, sim["id"]))
+
+
 @router.post("/api/simulations/{sim_id}/clean-up", response_class=HTMLResponse)
 def clean_up_simulation(sim_id: str, request: Request, db: DbDep, client_id: ActiveClient, user: RequireUser):
     """Remove what it set up in TIDE and delete what it made on the SIEM (its space among it)."""
@@ -359,7 +457,7 @@ def _play(db, client_id: str, sim: dict, user_id: str) -> Dict[str, Any]:
             continue
         parts.append({"scenario": sc, "story": for_namespace(_story(sc), sim["namespace"]),
                       "questions": [{"q": q, "mine": mine.get(q.key, {}),
-                                     "writeup": player_writeup(q.writeup, sim["namespace"])}
+                                     "parts": answer_parts(player_writeup(q.writeup, sim["namespace"]))}
                                     for q in game.questions(sc)]})
     return {"sim": sim, "parts": parts, "board": simulation.board(store, sim["id"]), "me": user_id,
             "kibana": _kibana_link(db, client_id, sim), "states": STATES}

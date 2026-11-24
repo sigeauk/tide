@@ -7,6 +7,8 @@ It then links the space to the client as a destination and sets the scenarios up
 (client.py: the rules synced in, each scenario's baseline and systems, the rules mapped), and replays
 the scenarios into the namespace sim<id> (replay.py). That runs in a thread the start begins, as a
 sync does; the pages read its progress. Once the replay is done the players go on answering.
+Replay data (replay_data()): once the replay is done, its data can be sent again, stamped now, as the
+next pass; it is replaying again meanwhile, then playing.
 End (end()): the replay stops if it hasn't finished, the players stop answering, and each rule's
 alerts are counted; the space, its data and rules stay, and so does what it set up in TIDE. Clean up
 (clean_up()): what it set up in TIDE is removed (its systems, baselines, destination and rules), and
@@ -26,11 +28,12 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from app.services.sim import client, game, kibana, packs, replay, rules
@@ -298,6 +301,55 @@ def _ending(sim_id: str) -> bool:
         return bool(w and w["ending"])
 
 
+# ── Replay data ────────────────────────────────────────────────────────────────────────────────
+
+def replay_data(store, siem: Siem, sim_id: str, max_eps: float = replay.MAX_EPS) -> None:
+    """Send a playing simulation's data again (Replay data, #127): the same scenarios at the same noise
+    level and speed, stamped now, as a new run (botes.replay.run_id) and the next pass
+    (botes.replay.loop), in a thread. Rules made or fixed since the last pass see it, because a rule
+    only looks a few minutes back; the players go on answering; the client's TIDE is synced again
+    once it is in, as after the first pass."""
+    sim = _check(get(store, sim_id), siem)
+    if sim["state"] != "playing":
+        raise SimError("its data can be sent again once its replay is done, until it ends")
+    try:
+        scenarios = [packs.scenario(s) for s in sim["scenarios"]]
+    except packs.PackError as exc:
+        raise SimError(str(exc)) from None
+    with _LOCK:
+        if any(w["siem_id"] == siem.id for w in _WORKERS.values()):
+            raise SimError(f"another simulation is setting up, replaying or cleaning up on {siem.label}: "
+                           f"wait for it to finish")
+    _set(store, sim_id, only_if=("playing",), state="replaying", error=None)
+    if (get(store, sim_id) or {}).get("state") != "replaying":
+        raise SimError("it was ended meanwhile")
+    _spawn(sim_id, siem.id, _again, store, siem, sim, scenarios, float(max_eps))
+
+
+def _again(store, siem: Siem, sim: dict, scenarios: list[packs.Scenario], max_eps: float) -> None:
+    sim_id = sim["id"]
+    n = int((sim["progress"] or {}).get("pass") or 1) + 1
+    try:
+        rp = replay.Replay(siem.es(), replay.plan(scenarios, sim["noise"]), namespace=sim["namespace"],
+                           speed=sim["speed"], max_eps=max_eps, loop=n,
+                           on_progress=lambda s: _set(store, sim_id, progress=json.dumps({**s, "pass": n})))
+        if not _register(sim_id, rp):
+            return                                         # ended before it began
+        summary = rp.run()
+        _set(store, sim_id, progress=json.dumps({**summary, "pass": n}), replayed_at=_now())
+        if not summary.get("stopped"):
+            try:
+                store.resync_client(sim_id)
+            except Exception:  # noqa: BLE001 - the rules' field checks catch up at the next sync
+                logger.exception("Simulation %s: could not sync its rules again", sim_id)
+        _set(store, sim_id, only_if=("replaying",), state="playing")
+    except Exception as exc:  # noqa: BLE001 - the simulation goes on; its page says why the pass stopped
+        logger.exception("Simulation %s: could not send its data again", sim_id)
+        _set(store, sim_id, only_if=("replaying",), state="playing", error=str(exc)[:500])
+    finally:
+        _done(sim_id)
+
+
 def _run(store, siem: Siem, sim_id: str, scenarios: list[packs.Scenario], noise: str, speed: float,
          max_eps: float, actor: Optional[str] = None) -> None:
     space, namespace = f"sim-{sim_id}", f"sim{sim_id}"
@@ -321,9 +373,9 @@ def _run(store, siem: Siem, sim_id: str, scenarios: list[packs.Scenario], noise:
             for spec in rules.specs(sc):
                 try:
                     kb.create_rule(space, rules.body(spec, namespace))
-                    made.append([sim_id, sc.id, spec.rule_id, siem.id, space, spec.name, "created", None])
+                    made.append([sim_id, sc.id, spec.kibana_id, siem.id, space, spec.name, "created", None])
                 except (packs.PackError, replay.ElasticError) as exc:
-                    made.append([sim_id, sc.id, spec.rule_id, siem.id, space, spec.name, "failed", str(exc)[:500]])
+                    made.append([sim_id, sc.id, spec.kibana_id, siem.id, space, spec.name, "failed", str(exc)[:500]])
         if made:
             with store.connect() as conn:
                 conn.executemany("INSERT INTO simulation_rules (sim_id, scenario, rule_id, siem_id, space, name, "
@@ -472,6 +524,68 @@ def clear(store, sim_id: str) -> None:
         for table in TABLES:
             column = "id" if table == "simulations" else "sim_id"
             conn.execute(f"DELETE FROM {table} WHERE {column} = ?", [sim_id])   # nosec B608 # TABLES is fixed
+
+
+# ── Saved searches (#126) ──────────────────────────────────────────────────────────────────────
+
+SEARCH_LABELS = {"kql": "KQL", "esql": "ES|QL"}
+SINCE_MARGIN = timedelta(minutes=5)       # a saved search opens a little before the simulation began
+
+
+def esql_data_view(query: str) -> dict:
+    """The ad hoc data view Discover makes for an ES|QL query, as it keeps it in a saved search: on the
+    query's FROM sources (joined by commas), with @timestamp as its time field, and the id Discover gives
+    it (the SHA-256 of "esql-" and that pattern)."""
+    import hashlib
+    m = re.match(r"(?is)\s*FROM\s+([^|]+?)(\s+METADATA[^|]*)?\s*(\||$)", query)
+    pattern = ",".join(s.strip() for s in m.group(1).split(",")) if m else ""
+    return {"id": hashlib.sha256(f"esql-{pattern}".encode()).hexdigest(), "title": pattern, "name": pattern,
+            "timeFieldName": "@timestamp", "type": "esql", "sourceFilters": [], "fieldFormats": {},
+            "runtimeFieldMap": {}, "allowNoIndex": False, "allowHidden": False}
+
+
+def search_saving(sim: dict, scenario: str, n: int, title: str, searches: list, view_id: str) -> list:
+    """What save_searches saves: ``[(object id, attributes, references)]``, one for each of a question's
+    searches (``[(language, search)]``, KQL and ES|QL), named after its question and language, opening on
+    the simulation's time so far (its events are stamped as they are replayed). A KQL search is on the
+    space's Simulation logs data view (``view_id``); an ES|QL one names its own data streams."""
+    since = sim["created_at"] if isinstance(sim["created_at"], datetime) else datetime.fromisoformat(str(sim["created_at"]))
+    time_range = {"from": (since - SINCE_MARGIN).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"), "to": "now"}
+    totals = {lang: sum(1 for x, _ in searches if x == lang) for lang, _ in searches}
+    seen: dict = {}
+    out = []
+    for i, (lang, query) in enumerate(searches, 1):
+        seen[lang] = seen.get(lang, 0) + 1
+        label = SEARCH_LABELS[lang] + (f" {seen[lang]}" if totals[lang] > 1 else "")
+        attributes = {"title": f"{title} ({label})", "description": f"Made by TIDE for simulation {sim['id']}.",
+                      "columns": [], "sort": [["@timestamp", "desc"]] if lang == "kql" else [], "grid": {},
+                      "hideChart": False, "isTextBasedQuery": lang == "esql", "timeRestore": True,
+                      "timeRange": time_range, "refreshInterval": {"pause": True, "value": 60000}}
+        if lang == "kql":
+            source = {"query": {"query": query, "language": "kuery"}, "filter": [],
+                      "indexRefName": "kibanaSavedObjectMeta.searchSourceJSON.index"}
+            references = [{"name": "kibanaSavedObjectMeta.searchSourceJSON.index", "type": "index-pattern", "id": view_id}]
+        else:
+            # Discover keeps an ES|QL search's data view in it, made from the query's FROM as Discover makes
+            # it, and reads it on opening: without it, "Cannot read properties of undefined (reading 'id')".
+            source, references = {"query": {"esql": query}, "filter": [], "index": esql_data_view(query)}, []
+        attributes["kibanaSavedObjectMeta"] = {"searchSourceJSON": json.dumps(source)}
+        object_id = re.sub(r"[^a-z0-9-]+", "-", f"tide-{sim['id']}-{scenario}-q{n}-{i}".lower())
+        out.append((object_id, attributes, references))
+    return out
+
+
+def save_searches(siem: Siem, sim: dict, scenario: str, n: int, title: str, searches: list) -> list:
+    """Save a question's searches in the simulation's space (search_saving): ``[(name, saved object
+    id)]``. Saving them again replaces them; cleaning the simulation up deletes them with its space."""
+    kb = siem.kibana()
+    view_id = ""
+    if any(lang == "kql" for lang, _ in searches):
+        view_id = kb.data_view_id(sim["space"], f"logs-*-{sim['namespace']}")
+        if not view_id:
+            raise SimError("its space has no Simulation logs data view.")
+    return [(attributes["title"], kb.save_search(sim["space"], object_id, attributes, references))
+            for object_id, attributes, references in search_saving(sim, scenario, n, title, searches, view_id)]
 
 
 # ── Reading ────────────────────────────────────────────────────────────────────────────────────

@@ -45,7 +45,7 @@ Most pages have a filter bar across the top: a **Search** box and a dropdown for
 - On Rule Health, the number beside each option is how many rules it holds.
 - On Rule Health, Rule Monitoring and the rule libraries, the filters you'll use less are under **Filters**, which says how many of them are set. It stays open or closed as you left it.
 - Only one list is open at a time. Click elsewhere or press **Esc** to close it.
-- Filters apply as soon as you choose. Most pages keep your filters in the address bar, so a refresh, a bookmark or a link you share shows the same view.
+- Filters apply as soon as you choose. Every list page keeps its search, filters and sort in the address bar, so a refresh, a bookmark or a link you share shows the same view.
 
 ### Searching
 

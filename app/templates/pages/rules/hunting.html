@@ -40,17 +40,17 @@
                   hx-target="#hunting-list" hx-trigger="input delay:300ms, submit">
                 <div class="browser-filter browser-filter--wide">
                     <label class="form-label" for="hunting-q">Search</label>
-                    <input type="text" id="hunting-q" class="form-input" name="q" placeholder="Name, description, query…">
+                    <input type="text" id="hunting-q" class="form-input" name="q" placeholder="Name, description, query…" value="{{ search_q }}">
                 </div>
                 <div class="browser-filter">
                     <label class="form-label" for="hunting-technique">MITRE technique</label>
                     <input type="text" id="hunting-technique" class="form-input" name="technique" placeholder="e.g., T1059" value="{{ technique_filter }}">
                 </div>
-                {% set active = 1 if source_filter else 0 %}
+                {% set active = (1 if source_filter else 0) + (1 if platform_filter else 0) %}
                 {% call more_filters('browser-filters', active) %}
                     {{ filter_choice('hunting-source', 'source', 'Source', [('', 'Any')] + sources | list, source_filter, wrap='browser-filter') }}
                     {% set plat_opts = [('', 'Any')] %}{% for p in platforms %}{% set _ = plat_opts.append((p, p | replace('_', ' '))) %}{% endfor %}
-                    {{ filter_choice('hunting-platform', 'platform', 'Platform', plat_opts, '', wrap='browser-filter') }}
+                    {{ filter_choice('hunting-platform', 'platform', 'Platform', plat_opts, platform_filter, wrap='browser-filter') }}
                 {% endcall %}
                 <input type="hidden" name="selected" value="{{ selected_id }}">
             </form>
@@ -71,6 +71,5 @@
 </div>
 {% endif %}
 
-<div id="slide-panel-container"></div>
 </div>
 {% endblock %}

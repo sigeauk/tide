@@ -515,12 +515,11 @@
 
         // A link from another page can open a rule's window here (Diagnostics, for a rule of another client
         // it switched to): ?open=<rule_id>|<siem_id>|<space>. Taken out of the address, so a reload doesn't.
+        // Only a rule's: the other pages this runs on keep their own ?open= (a MITRE catalogue's, <id>).
         var params = new URLSearchParams(location.search), open = (params.get('open') || '').split('|');
-        if (params.has('open')) {
+        if (open.length === 3 && open[0]) {
             params.delete('open');
             history.replaceState(history.state, '', location.pathname + (params.toString() ? '?' + params : ''));
-        }
-        if (open.length === 3 && open[0]) {
             htmx.ajax('GET', '/api/rules/' + encodeURIComponent(open[0]) + '/history-modal?space=' + encodeURIComponent(open[2])
                 + '&siem_id=' + encodeURIComponent(open[1]), { target: '#modal-container', swap: 'innerHTML' });
         }

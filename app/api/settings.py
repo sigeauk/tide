@@ -306,6 +306,11 @@ async def update_profile_password(request: Request, db: DbDep, user: RequireUser
         <div hx-swap-oob="afterbegin:#toast-container">
             <div class="toast toast-warning">Current password is incorrect.</div>
         </div>""")
+    if new_password == current_password:
+        return HTMLResponse("""
+        <div hx-swap-oob="afterbegin:#toast-container">
+            <div class="toast toast-warning">Choose a new password, not the one you have now.</div>
+        </div>""")
 
     pw_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
     db.update_user(user.id, password_hash=pw_hash, change_on_next_login=False)
@@ -315,6 +320,8 @@ async def update_profile_password(request: Request, db: DbDep, user: RequireUser
     <div hx-swap-oob="afterbegin:#toast-container">
         <div class="toast toast-success">Password updated. You've been signed out everywhere else.</div>
     </div>""")
+    if User.password_change_due(db_user):
+        response.headers["HX-Redirect"] = "/"     # an admin's reset, now changed: the rest of TIDE opens
     if request.cookies.get("session_token"):
         from app.config import get_settings
         from app.services.auth import get_auth_service
@@ -580,37 +587,66 @@ def toggle_user_active(request: Request, user_id: str, db: DbDep,
     return HTMLResponse(_render_user_table(db, client_id, user))
 
 
+def _reset_refusal(user, target: dict) -> str:
+    """Why ``user`` may not reset ``target``'s password, or '': not their own (Profile has it), and
+    only a TIDE account's (Keycloak holds a single sign-on account's)."""
+    if target["id"] == user.id:
+        return "Change your own password on your Profile."
+    if (target.get("auth_provider") or "local").lower() != "local":
+        return f"{escape(target.get('username') or 'That user')} signs in with single sign-on: reset their password in Keycloak."
+    return ""
+
+
+def _warning_toast(message: str) -> HTMLResponse:
+    return HTMLResponse(f"""
+        <div hx-swap-oob="afterbegin:#toast-container">
+            <div class="toast toast-warning">{message}</div>
+        </div>""")
+
+
+@router.get("/users/{user_id}/reset-password", response_class=HTMLResponse)
+def reset_password_dialog(request: Request, user_id: str, db: DbDep, user: RequireAdmin):
+    """Settings → Users' Reset password dialog, for a user the admin manages (deps.can_manage_user)."""
+    target = require_manageable_user(db, user, user_id)
+    refusal = _reset_refusal(user, target)
+    if refusal:
+        return _warning_toast(refusal)
+    return request.app.state.templates.TemplateResponse(request, "components/user_reset_password.html",
+                                                        {"target": target})
+
+
 @router.post("/users/{user_id}/reset-password", response_class=HTMLResponse)
 async def reset_user_password(request: Request, user_id: str, db: DbDep, user: RequireAdmin):
-    """Reset a user's local password: a super admin for anyone, a client admin only for users
-    whose every client they administer (deps.can_manage_user), never a Platform Admin."""
+    """Reset a TIDE account's password to a temporary one: a super admin for anyone, a client admin
+    only for users whose every client they administer (deps.can_manage_user), never a Platform Admin,
+    never their own or a single sign-on account (_reset_refusal). The user's sessions end, and unless
+    ``change_on_next_login`` is off their next session opens only Profile until they choose their own
+    (User.must_change_password). Closes the dialog (#modal-container) when it's done."""
     from app.services.log_context import audit_log
     target_user = require_manageable_user(db, user, user_id)
+    refusal = _reset_refusal(user, target_user)
+    if refusal:
+        return _warning_toast(refusal)
     form = await request.form()
     new_password = str(form.get("new_password", ""))
+    confirm = form.get("confirm_password")
     change_on_next_login = str(form.get("change_on_next_login", "on")).lower() in {"on", "true", "1"}
     if len(new_password) < 8:
-        return HTMLResponse("""
-        <div hx-swap-oob="afterbegin:#toast-container">
-            <div class="toast toast-warning">Password must be at least 8 characters.</div>
-        </div>""")
+        return _warning_toast("Password must be at least 8 characters.")
+    if confirm is not None and str(confirm) != new_password:
+        return _warning_toast("The two passwords don't match.")
 
     import bcrypt
     pw_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
-    provider = (target_user.get("auth_provider") or "local").lower()
-    update_fields = {
-        "password_hash": pw_hash,
-        "change_on_next_login": change_on_next_login,
-    }
-    # Preserve SSO while enabling local login when admin sets a local hash.
-    if provider == "keycloak":
-        update_fields["auth_provider"] = "hybrid"
-    db.update_user(user_id, **update_fields)
+    db.update_user(user_id, password_hash=pw_hash, change_on_next_login=change_on_next_login)
     db.end_user_sessions(user_id)   # a reset password ends the sessions the old one opened (#30)
     audit_log("password_reset", actor_id=user.id, actor_username=user.username, target_id=user_id,
               target_username=target_user.get("username"), change_on_next_login=change_on_next_login)
-    status_text = "Password reset. User must change it at next login." if change_on_next_login else "Password reset successfully."
+    name = escape(target_user.get("username") or "")
+    status_text = (f"Password reset. {name} chooses a new one when they next sign in."
+                   if change_on_next_login else f"Password reset for {name}.")
     return HTMLResponse(f"""
+    <div id="modal-container" hx-swap-oob="innerHTML"></div>
     <div hx-swap-oob="afterbegin:#toast-container">
         <div class="toast toast-success">{status_text}</div>
     </div>""")

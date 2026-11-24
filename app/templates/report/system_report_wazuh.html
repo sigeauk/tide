@@ -11,7 +11,7 @@
 <div class="summary-grid avoid-break">
     <div class="stat-card">
         <span class="stat-value">{{ w.devices }}</span>
-        <span class="stat-label">Wazuh Devices</span>
+        <span class="stat-label">Wazuh devices</span>
     </div>
     <div class="stat-card">
         <span class="stat-value {% if w.vulnerabilities %}danger{% else %}success{% endif %}">{{ w.vulnerabilities }}</span>
@@ -27,11 +27,11 @@
     </div>
     <div class="stat-card">
         <span class="stat-value {% if w.kev %}danger{% else %}success{% endif %}">{{ w.kev }}</span>
-        <span class="stat-label">Known Exploited</span>
+        <span class="stat-label">Known exploited</span>
     </div>
     <div class="stat-card">
         <span class="stat-value {% if w.affected %}warning{% else %}success{% endif %}">{{ w.affected }}</span>
-        <span class="stat-label">Devices Affected</span>
+        <span class="stat-label">Devices affected</span>
     </div>
 </div>
 
@@ -73,7 +73,7 @@
 </div>
 <table>
     <thead>
-        <tr><th>Device</th><th>IP Address</th><th>Agent</th><th>Critical</th><th>High</th><th>Medium</th><th>Low</th><th>Known exploited</th></tr>
+        <tr><th>Device</th><th>IP address</th><th>Agent</th><th>Critical</th><th>High</th><th>Medium</th><th>Low</th><th>Known exploited</th></tr>
     </thead>
     <tbody>
         {% for d in w.devices_list %}

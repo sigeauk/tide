@@ -13,19 +13,20 @@
 
 {% if cves %}
 
-{# ── Filter bar: search, systems, coverage, matched, sort (cve_overview.js asks for the cards) ── #}
+{# ── Filter bar: search, systems, coverage, matched, sort (cve_overview.js asks for the cards, and keeps them
+   in the address, which cf draws them from: a reload or a link shows the same, #119) ── #}
 <div class="filters-bar cve-filters">
     <div class="filter-group grow">
         <label class="form-label" for="kev-search">Search</label>
         <input name="Kev Search" id="kev-search" type="search" placeholder="Search CVE ID, name, vendor…"
-               class="form-input" data-input="cves.filter">
+               class="form-input" value="{{ cf.search }}" data-input="cves.filter">
     </div>
 
     {% if systems %}
     {% call filter_dropdown('sys-filter', 'System', 'Any') %}
         {% for s in systems %}
         <label class="rh-checkbox-row">
-            <input name="System Filter Checkbox" type="checkbox" class="sys-filter-cb" value="{{ s.id }}" data-change="cves.filter" checked>
+            <input name="System Filter Checkbox" type="checkbox" class="sys-filter-cb" value="{{ s.id }}" data-change="cves.filter"{% if not cf.system or s.id in cf.system %} checked{% endif %}>
             <span>{{ s.name }}</span>
         </label>
         {% endfor %}
@@ -39,7 +40,7 @@
     {% call filter_dropdown('cov-filter', 'Coverage', 'Any') %}
         {% for value, text in [('detected', 'Has rules'), ('nocover', 'No rules'), ('available', 'Available'), ('unaffected', 'Unaffected')] %}
         <label class="rh-checkbox-row">
-            <input name="{{ value }}" type="checkbox" class="cov-filter-cb" value="{{ value }}" data-change="cves.filter" checked>
+            <input name="{{ value }}" type="checkbox" class="cov-filter-cb" value="{{ value }}" data-change="cves.filter"{% if not cf.coverage or value in cf.coverage %} checked{% endif %}>
             <span>{{ text }}</span>
         </label>
         {% endfor %}
@@ -49,12 +50,12 @@
         </div>
     {% endcall %}
 
-    {{ filter_choice('filter-matched', 'matched', 'Show', [('', 'All CVEs'), ('matched', 'Matched only')], '', attrs='data-change="cves.filter"') }}
+    {{ filter_choice('filter-matched', 'matched', 'Show', [('', 'All CVEs'), ('matched', 'Matched only')], cf.matched, attrs='data-change="cves.filter"') }}
 
     {# Sort by names the order too, as Threat Landscape's does: "field:direction" (cve_overview.js) #}
     {{ filter_choice('sort-field', 'sort', 'Sort by', [('cve_id:desc', 'CVE ID (newest)'), ('cve_id:asc', 'CVE ID (oldest)'),
                      ('name:asc', 'Vulnerability (A → Z)'), ('vendor:asc', 'Vendor (A → Z)'), ('date_added:desc', 'Date added (newest)'),
-                     ('due_date:asc', 'Due date (soonest)'), ('matched:desc', 'Matched first')], 'cve_id:desc', attrs='data-change="cves.sort"') }}
+                     ('due_date:asc', 'Due date (soonest)'), ('matched:desc', 'Matched first')], cf.sort, attrs='data-change="cves.sort"') }}
 
     <div class="filter-group self-end">
         <span class="fs-md text-muted">

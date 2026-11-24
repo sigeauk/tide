@@ -1606,6 +1606,29 @@ def _check_app_host() -> None:
         print(f"  app log           : {log_file} (not found)")
 
 
+def _measure_file(f: str, path: str, conn) -> None:
+    """A file's empty space, measured on its snapshot as the maintenance window measures it: its free
+    blocks, or, for a big file they leave in doubt, a copy of the snapshot (#121)."""
+    from app.services import maintenance as mx
+    snap = os.path.join(_SNAPS[path][1], "snap.duckdb")
+    if os.path.getsize(snap) >= mx.RECLAIM_MIN_FILE:
+        print(f"  (measuring {f}; a big file may be copied to see what compacting gives back ...)")
+    try:
+        m = mx.reclaimable(snap, conn, mx.RECLAIM_PCT, scratch=snap + ".trial", remember=False)
+    except Exception as exc:                          # noqa: BLE001 - one file's figure, not the whole report
+        _warn(f"{f}: could not measure its empty space: {exc}")
+        return
+    size, reclaim = m["size"], m["reclaim"]
+    print(f"    in use {_human(size - reclaim)}, empty space inside the file {_human(reclaim)} ({m['pct']}%)"
+          + (", measured by copying it" if m.get("copied_at") else ""))
+    if m["most"] > m["pct"] and not m.get("copied_at"):
+        print(f"    up to {m['most']}% holds no table's data: mostly indexes, or space lost (only a copy tells, "
+              f"made for a file of {mx.RECLAIM_MIN_FILE // 2**20} MB or more)")
+    if mx.worth_compacting(m):
+        _warn(f"{f}: {m['pct']}% of the {_human(size)} file is empty space. Compaction would reclaim about "
+              f"{_human(reclaim)} (stop tide-app, then run python -m app.scripts.compact_duckdb {path} --apply)")
+
+
 def _check_database_files() -> None:
     _line("15. Database files")
     data_dir = _data_dir()
@@ -1636,16 +1659,7 @@ def _check_database_files() -> None:
         conn = _snapshot(path)
         if conn is None:
             continue
-        sizes = _rows(conn, "PRAGMA database_size")
-        if sizes:
-            _n, _sz, block, total, used, free, *_rest = sizes[0]
-            live = used * block
-            reclaim = min(free * block, max(0, size - live))
-            free_pct = reclaim * 100 // size if size else 0
-            print(f"    in use {_human(live)}, empty space inside the file {_human(reclaim)} ({free_pct}%)")
-            if size > 200 * 1024 * 1024 and free_pct >= 35:
-                _warn(f"{f}: {free_pct}% of the {_human(size)} file is empty space. Compaction would reclaim about "
-                      f"{_human(reclaim)} (stop tide-app, then run python -m app.scripts.compact_duckdb {path} --apply)")
+        _measure_file(f, path, conn)
         tables = _tables(conn)
         counts = {}
         for t in tables:

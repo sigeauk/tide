@@ -53,7 +53,7 @@ SOURCES: Dict[str, Source] = {
     "rule_monitoring": Source("Rule Monitoring", "triangle-alert", (
         ("rules", "Rules needing action"), ("errors", "Errors"), ("warnings", "Warnings"), ("info", "Info"),
         ("causes", "Things to fix"), ("resolved", "Resolved"), ("last_synced", "Last synced"),
-    ), ("scope", "kind", "severity", "fixer", "issue", "rules", "search"), "/rule-monitoring"),
+    ), ("scope", "severity", "fixer", "issue", "rules", "search"), "/rule-monitoring"),
     "system": Source("System", "server", (
         ("covered", "Covered"), ("effective", "Effective"), ("techniques", "Techniques"), ("no_coverage", "No coverage"),
         ("known_gaps", "Known gaps"), ("unmapped", "Unmapped"), ("not_counted", "Not counted"),

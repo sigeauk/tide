@@ -1,4 +1,4 @@
-"""Outcomes from Kibana (rule tuning, phase 3): what a rule's closed alerts turned out to be, as Elastic holds it.
+"""Outcomes from Kibana (rule tuning): what a rule's closed alerts turned out to be, as Elastic holds it.
 
 At each sync, for each Kibana space synced, TIDE reads the space's closed Security cases of the last
 ``ALERT_DAYS`` (``elastic_helper.fetch_closed_cases``) and then runs one paged aggregation over its alerts
@@ -7,15 +7,15 @@ order R28 sets: its closing reason (9.6), else its first outcome tag, else its c
 mapped onto ``rule_tuning.OUTCOMES`` with the client's mappings (``mapping``) and kept per rule, day,
 source and outcome in place of the space's last ones (``rule_outcome_counts``), as alert counts are.
 
-Mappings are per client, one set for all its destinations (D15). A value maps to an outcome by the
+Mappings are per client, one set for all its destinations. A value maps to an outcome by the
 client's choice, else by its name (``ALIASES``: *TP*, *False Positive*, *Benign True Positive*…), else it
 is ignored. Values are compared without regard to case, spaces or punctuation (``norm``).
 
 A case's outcome counts only when the client says where its case tool leaves it (``case_field``: the
 case's tags, its category or one of its custom fields), and only for a case whose alerts all come from one
-rule (D9). An alert's own reason or tag wins over its case's outcome. TIDE keeps no case title,
+rule. An alert's own reason or tag wins over its case's outcome. TIDE keeps no case title,
 description, comment or name: only counts, and each rule's latest closed cases (id, outcome, when)
-for the link back (R39).
+for the link back.
 """
 from __future__ import annotations
 

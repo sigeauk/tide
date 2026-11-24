@@ -5,11 +5,16 @@ pair, CLAUDE.md section 6), and that destination is synced, so the scenarios' ru
 rules like any other destination's until it is cleaned up (the end keeps them). Each scenario's tide.toml gives the attack as a
 baseline and the systems it hit: the baseline is made with its techniques; each system is made with
 its devices, the baseline applied, and the simulation's destination as its coverage; every rule in
-rules.toml is mapped to the technique its `covers` names, and the known gaps are recorded. After the
-replay the destination is synced again, so the rules' field checks see the data.
+rules.toml is mapped to the technique its `covers` names, as a SIEM rule (so a disabled or broken one
+counts as it would on a client's own SIEM), and the known gaps are recorded (with a review date
+review_days after the start, where tide.toml gives one). Where tide.toml names the scenario's attacker
+([threat_actor]), it is a threat actor on the client's Threat Landscape, using the baseline's
+techniques, its source SIMULATION. Each of Elastic's rules
+has its origin recorded, as TIDE's Deploy records its copies'. After each replay the destination is
+synced again with its field lists read afresh, so the rules' field checks see the data.
 
 Each thing made is recorded in simulation_objects, and the clean-up removes exactly those: the
-systems (with everything on them), the baselines, then the destination with its rules. What it made on
+systems (with everything on them) and threat actors, the baselines, then the destination with its rules. What it made on
 the SIEM (its space, its data's template) is recorded there too (made_on_siem), so the clean-up deletes
 only that. A problem stops only its own step, is recorded, and is shown on the simulation; the replay
 goes on regardless. Everything is done as the Sim Admin who started (or cleaned up) it, so TIDE's
@@ -19,15 +24,18 @@ history shows it as their work.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 from app.services.sim import packs, rules
 
 logger = logging.getLogger(__name__)
 
-DESTINATION, BASELINE, SYSTEM, PROBLEM = "destination", "baseline", "system", "problem"
-IN_TIDE = (DESTINATION, BASELINE, SYSTEM)
+DESTINATION, BASELINE, SYSTEM, ACTOR, PROBLEM = "destination", "baseline", "system", "actor", "problem"
+IN_TIDE = (DESTINATION, BASELINE, SYSTEM, ACTOR)
+# A threat actor's source when a simulation made it (threat_actors.source): shown on Threat Landscape as
+# SIM, and left alone by the OpenCTI sync, which clears the client's OpenCTI actors.
+SIMULATION = "Simulation"
 # What the simulation made on the SIEM, so a clean-up deletes only that (simulation.py).
 SIEM_SPACE, SIEM_DATA = "siem_space", "siem_data"
 
@@ -63,9 +71,35 @@ def _problem(store, sim_id: str, what: str, exc: Exception) -> None:
     _record(store, sim_id, PROBLEM, "", what, str(exc)[:500])
 
 
-def _sync(store, siem_id: str, space: str) -> None:
+def _sync(store, siem_id: str, space: str, force_mapping: bool = False) -> None:
     from app.services.sync import run_elastic_sync
-    run_elastic_sync(client_id=store.client_id, only_siem_id=siem_id, only_space=space)
+    run_elastic_sync(client_id=store.client_id, force_mapping=force_mapping, only_siem_id=siem_id, only_space=space)
+
+
+def _record_origins(store, sim_id: str, siem_id: str, space: str, scenarios: list[packs.Scenario],
+                    actor: Optional[str]) -> None:
+    """Record where each of Elastic's rules in the space came from, as TIDE's Deploy does for its copy:
+    under an id of its own (rules.RuleSpec.kibana_id), TIDE knows it by its origin, so Elastic's later
+    updates show for it and it isn't taken for a custom rule using Elastic's id."""
+    from app.services import rule_origins
+    for sc in scenarios:
+        try:
+            specs = [sp for sp in rules.specs(sc) if sp.source == "elastic"]
+        except packs.PackError:
+            continue                    # the space has none of its rules: the start said why
+        for sp in specs:
+            if not rule_origins.record_for_client(store.db, store.client_id, (sp.kibana_id, siem_id, space), "elastic",
+                                                  sp.rule_id, "deployed", actor or rules.AUTHOR):
+                logger.warning("Simulation %s: no origin recorded for Elastic's rule %s", sim_id, sp.rule_id)
+
+
+def _forget_origins(store, siem_id: str, space: str) -> None:
+    """The origins recorded for the space's rules, which unlinking it (deleting its rules) leaves."""
+    from app.services import rule_origins
+    from app.services.tenant_manager import tenant_context_for
+    with tenant_context_for(store.client_id), store.db.get_connection() as conn:
+        rule_origins.ensure(conn)
+        conn.execute("DELETE FROM rule_origins WHERE siem_id = ? AND space = ?", [siem_id, space])
 
 
 # ── Set up ─────────────────────────────────────────────────────────────────────────────────────
@@ -86,6 +120,7 @@ def set_up(store, sim_id: str, siem_id: str, space: str, namespace: str,
         _sync(store, siem_id, space)
     except Exception as exc:  # noqa: BLE001
         _problem(store, sim_id, "Could not sync its rules into TIDE", exc)
+    _record_origins(store, sim_id, siem_id, space, scenarios, actor)
     from app.services.tenant_manager import tenant_context_for
     with tenant_context_for(store.client_id):
         for sc in scenarios:
@@ -119,6 +154,8 @@ def _scenario(store, sim_id: str, sc: packs.Scenario, spec: dict, siem_id: str, 
     except Exception as exc:  # noqa: BLE001
         _problem(store, sim_id, f"{sc.label}: could not make its baseline", exc)
         return
+    if spec.get("threat_actor"):
+        _threat_actor(store, sim_id, sc, spec, tag)
     for s in spec.get("system", []):
         try:
             system = engine.add_system(SystemCreate(name=f"{s['name']} ({tag})", description=s.get("description")),
@@ -138,7 +175,9 @@ def _scenario(store, sim_id: str, sc: packs.Scenario, spec: dict, siem_id: str, 
             try:
                 if covers not in steps:
                     raise ValueError(f"the baseline has no technique '{covers}'")
-                det = engine.add_step_detection(steps[covers], rule.rule_id, source="manual", client_id=cid,
+                # As a SIEM rule, as TIDE's own window maps one: its state counts (a disabled or
+                # broken rule doesn't cover the technique, or isn't effective).
+                det = engine.add_step_detection(steps[covers], rule.kibana_id, source="siem", client_id=cid,
                                                 siem_id=siem_id, space=space, created_by=actor)
                 if det:
                     engine.apply_detection(det.id, system_id=system.id, client_id=cid)
@@ -148,19 +187,40 @@ def _scenario(store, sim_id: str, sc: packs.Scenario, spec: dict, siem_id: str, 
             try:
                 if gap["technique"] not in steps:
                     raise ValueError(f"the baseline has no technique '{gap['technique']}'")
+                days = gap.get("review_days")
                 engine.add_blind_spot("tactic", steps[gap["technique"]], gap["reason"], system_id=system.id,
-                                      created_by=actor or "", override_type="gap", client_id=cid)
+                                      created_by=actor or "", override_type="gap", client_id=cid,
+                                      review_by=date.today() + timedelta(days=days) if days else None)
             except Exception as exc:  # noqa: BLE001
                 _problem(store, sim_id, f"{sc.label}: could not record the known gap '{gap.get('technique')}'", exc)
 
 
+def _threat_actor(store, sim_id: str, sc: packs.Scenario, spec: dict, tag: str) -> None:
+    """The scenario's attacker as a threat actor on the client's Threat Landscape: its techniques the
+    baseline's, so it opens straight onto the attack. Called in the client's tenant context."""
+    actor = spec["threat_actor"]
+    name = f"{actor['name']} ({tag})"
+    ttps = sorted({str(t) for step in (spec.get("baseline") or {}).get("technique", []) for t in step.get("techniques", [])})
+    try:
+        with store.db.get_connection() as conn:
+            conn.execute("INSERT INTO threat_actors (name, description, ttps, ttp_count, aliases, origin, source, last_updated) "
+                         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                         [name, actor.get("description") or None, ttps, len(ttps), actor.get("aliases") or None,
+                          actor.get("origin") or None, [SIMULATION], datetime.now()])
+        _record(store, sim_id, ACTOR, name, name)
+    except Exception as exc:  # noqa: BLE001
+        _problem(store, sim_id, f"{sc.label}: could not add its threat actor", exc)
+
+
 def resync(store, sim_id: str) -> None:
-    """Sync the simulation's destination again, once its data is in (the rules' field checks)."""
+    """Sync the simulation's destination again once a replay's data is in, with the field lists read
+    afresh (force_mapping): its data streams were made empty before the data, so the lists the set-up's
+    sync kept would leave its rules' fields "not in the index mappings", and the rules not effective."""
     for o in objects(store, sim_id):
         if o["kind"] == DESTINATION and o["state"] == "made":
             siem_id, _, space = o["object_id"].partition("|")
             try:
-                _sync(store, siem_id, space)
+                _sync(store, siem_id, space, force_mapping=True)
             except Exception as exc:  # noqa: BLE001
                 _problem(store, sim_id, "Could not sync its rules again after the replay", exc)
 
@@ -168,12 +228,12 @@ def resync(store, sim_id: str) -> None:
 # ── Remove ─────────────────────────────────────────────────────────────────────────────────────
 
 def remove(store, sim_id: str, actor: Optional[str]) -> list[str]:
-    """Remove what the simulation made in its client's TIDE: its systems, its baselines, then its
-    destination with its rules. Each one removed is marked, so cleaning up again retries only what
-    failed. Returns what went; a ValueError says what couldn't."""
+    """Remove what the simulation made in its client's TIDE: its systems and threat actors, its
+    baselines, then its destination with its rules. Each one removed is marked, so cleaning up again
+    retries only what failed. Returns what went; a ValueError says what couldn't."""
     from app import inventory_engine as engine
     from app.services.tenant_manager import tenant_context_for
-    order = {SYSTEM: 0, BASELINE: 1, DESTINATION: 2}
+    order = {SYSTEM: 0, ACTOR: 0, BASELINE: 1, DESTINATION: 2}
     todo = sorted((o for o in objects(store, sim_id) if o["state"] == "made" and o["kind"] in order),
                   key=lambda o: order[o["kind"]])
     removed, failed = [], []
@@ -182,10 +242,15 @@ def remove(store, sim_id: str, actor: Optional[str]) -> list[str]:
             if o["kind"] == DESTINATION:
                 siem_id, _, space = o["object_id"].partition("|")
                 store.db.unlink_destination(store.client_id, siem_id, space=space, actor=actor)
+                _forget_origins(store, siem_id, space)
             else:
                 with tenant_context_for(store.client_id):
                     if o["kind"] == SYSTEM:
                         engine.delete_system(o["object_id"], client_id=store.client_id)
+                    elif o["kind"] == ACTOR:       # only the one it made: a simulation's, by its name
+                        with store.db.get_connection() as conn:
+                            conn.execute("DELETE FROM threat_actors WHERE name = ? AND list_contains(source, ?)",
+                                         [o["object_id"], SIMULATION])
                     else:
                         engine.delete_playbook(o["object_id"], client_id=store.client_id, actor=actor)
             with store.connect() as conn:

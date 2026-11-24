@@ -149,6 +149,12 @@ What each role may read and change is set per client in its **Role Templates**, 
 
 Super admins see every client and every setting, and set up the integrations every client uses. Grant or revoke it with **Platform Admin** in Management → Users, or in Diagnostics → Access. You can't change your own.
 
+### Passwords
+
+Someone who signs in with a TIDE account changes their own password in **Profile & Preferences**, under **Sign-in**: **Change email or password**.
+
+If they've forgotten it, an admin opens **Management → Users**, the person's **⋮**, then **Reset password**, and gives them a temporary password. The person is signed out everywhere. When they next sign in, TIDE opens only their profile until they choose a new password. A client admin can reset passwords only for people whose every client they administer, and never for a Platform Admin. Single sign-on passwords belong to Keycloak: reset those there.
+
 ### Sessions
 
 - A sign-in with a TIDE account lasts 24 hours.

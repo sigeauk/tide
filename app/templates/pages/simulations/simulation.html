@@ -45,9 +45,13 @@
 {% for g in games %}
 {% set s, sim = g.sim, g.sim %}
 <section class="card card-padded card-mb sys-section" data-fold="play-{{ s.id }}" aria-label="Simulation">
+    {# Folds as every page section does (window_ui.section_title), its state beside the title. #}
+    {% set title %}{% for part in g.parts %}{{ part.scenario.label }}{% if not loop.last %}, {% endif %}{% endfor %}{% endset %}
     <div class="sys-section__head">
-        <h2 class="sys-section__title">{{ icon('binoculars', '18') }}
-            {% for part in g.parts %}{{ part.scenario.label }}{% if not loop.last %}, {% endif %}{% endfor %}
+        <h2 class="section-title sys-section__title">
+            <button type="button" class="sys-section__toggle" data-rm-collapse aria-expanded="true" title="Collapse or expand {{ title }}">
+                <span class="sys-section__chev" aria-hidden="true">{{ icon('chevron-down', '16') }}</span>{{ icon('binoculars', '18') }} {{ title }}
+            </button>
             {% include "partials/simulation_state.html" %}
         </h2>
     </div>
@@ -69,12 +73,17 @@
             {% endfor %}
         </div>
         {% endfor %}
+        {% if not g.parts | selectattr('questions') | list %}
+        {# A scenario with none, such as the demo (#127): nothing to answer, so no board either. #}
+        <p class="rm-empty">Its scenarios have no questions.</p>
+        {% else %}
         <h3 class="sim-subhead">Board</h3>
         <div id="sim-board-{{ s.id }}" hx-get="/api/simulation/{{ s.id }}/board{% if s.state == 'setting_up' %}?setting_up=1{% endif %}"
              hx-trigger="every {{ '5s' if s.state == 'setting_up' else '15s' }}, boardChanged from:body" hx-swap="innerHTML">
             {% set board, me = g.board, g.me %}
             {% include "partials/simulation_board.html" %}
         </div>
+        {% endif %}
     </div>
 </section>
 {% endfor %}

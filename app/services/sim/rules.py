@@ -4,14 +4,19 @@ Each rule's index patterns are narrowed to the simulation's own data streams, so
 else on the SIEM: a pattern for Elastic's logs-* data streams keeps its dataset and takes the
 simulation's namespace (logs-iis.access-* becomes logs-iis.access-<namespace>), and any other pattern
 (winlogbeat-*, an exact index) is dropped. A rule left with no pattern isn't run. The rules are
-enabled, look back far enough to see every event a replay sends, and are authored AUTHOR.
+enabled and run every minute over the last six, so they see every event a replay sends, unless
+rules.toml says otherwise (enabled, interval, from: the demo starts some rules broken). They are
+authored AUTHOR.
 
 Sources:
   custom   the rule in full in rules.toml
   elastic  one of Elastic's prebuilt rules, by its rule_id, from the detection-rules copy in the image
   sigma    a Sigma rule, by its id, from the Sigma repository in the image, converted with a pipeline
            from sim/sigma/ (pipeline = "ecs.yml", the default)
-Each keeps its own rule_id in the simulation's space (never a destination, so no copy can clash).
+A Sigma or custom rule keeps its rules.toml rule_id in the simulation's space. An Elastic rule takes an
+id of its own there, the same in every simulation (RuleSpec.kibana_id), as TIDE's Deploy gives a copy
+one: under Elastic's id Kibana couldn't install Elastic's own rule in the space, and TIDE would flag
+it. The simulation records the copy's origin in its client's TIDE instead (client.py).
 """
 
 from __future__ import annotations
@@ -19,6 +24,7 @@ from __future__ import annotations
 import os
 import re
 import tomllib
+import uuid
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -31,6 +37,8 @@ INTERVAL, LOOK_BACK = "1m", "now-6m"     # each rule runs every minute, over the
 TYPES = {"query": "kuery", "threshold": "kuery", "eql": "eql"}
 SEVERITIES = ("low", "medium", "high", "critical")
 SOURCES = ("custom", "elastic", "sigma")
+INTERVAL_RX, FROM_RX = re.compile(r"[1-9][0-9]*[smh]"), re.compile(r"now-[1-9][0-9]*[smh]")
+_ELASTIC_IDS = uuid.uuid5(uuid.NAMESPACE_URL, "tide-simulations:elastic-rules")
 PIPELINES = packs.SIM_DIR / "sigma"
 DEFAULT_PIPELINE = "ecs.yml"
 
@@ -42,6 +50,12 @@ class RuleSpec:
     name: str
     source: str
     entry: dict
+
+    @property
+    def kibana_id(self) -> str:
+        """Its rule id in the simulation's space: an Elastic rule's own, derived from Elastic's so it is
+        the same in every simulation; any other rule's rules.toml rule_id."""
+        return str(uuid.uuid5(_ELASTIC_IDS, self.rule_id)) if self.source == "elastic" else self.rule_id
 
 
 def specs(sc: packs.Scenario) -> list[RuleSpec]:
@@ -67,6 +81,12 @@ def specs(sc: packs.Scenario) -> list[RuleSpec]:
             raise packs.PackError(f"{where}: rule {i}'s source is one of {', '.join(SOURCES)}, not '{source}'")
         if source == "sigma" and not (PIPELINES / os.path.basename(str(e.get("pipeline", DEFAULT_PIPELINE)))).is_file():
             raise packs.PackError(f"{where}: rule {i}'s pipeline isn't in sim/sigma/")
+        if "enabled" in e and not isinstance(e["enabled"], bool):
+            raise packs.PackError(f"{where}: rule {i}'s enabled is true or false")
+        if "interval" in e and not INTERVAL_RX.fullmatch(str(e["interval"])):
+            raise packs.PackError(f'{where}: rule {i}\'s interval is a number of s, m or h, such as "5m"')
+        if "from" in e and not FROM_RX.fullmatch(str(e["from"])):
+            raise packs.PackError(f'{where}: rule {i}\'s from is now- and a number of s, m or h, such as "now-6m"')
         out.append(RuleSpec(rid, str(e.get("name", "")), source, e))
     return out
 
@@ -91,8 +111,9 @@ def scope(patterns: list[str], namespace: str) -> list[str]:
 
 
 def body(spec: RuleSpec, namespace: str) -> dict:
-    """The Kibana rule for a spec, its index patterns narrowed to the namespace, enabled and run every
-    minute; a PackError when it can't be run (not found, no pattern left, or a field it needs)."""
+    """The Kibana rule for a spec, under its kibana_id, its index patterns narrowed to the namespace,
+    enabled and run every minute over the last six unless rules.toml says otherwise; a PackError when
+    it can't be run (not found, no pattern left, or a field it needs)."""
     rule = {"custom": _custom, "elastic": _elastic, "sigma": _sigma}[spec.source](spec, namespace)
     where = f"rule {spec.name or spec.rule_id}"
     if rule.get("type") not in TYPES:
@@ -104,9 +125,10 @@ def body(spec: RuleSpec, namespace: str) -> dict:
     if not rule["index"]:
         raise packs.PackError(f"{where}: none of its index patterns is for logs-* data streams")
     tags = [str(t) for t in rule.get("tags") or [] if t != TAG]
-    rule.update(rule_id=spec.rule_id, enabled=True, interval=INTERVAL, actions=[], exceptions_list=[],
-                author=[AUTHOR], tags=[*tags, TAG])
-    rule["from"] = LOOK_BACK
+    e = spec.entry
+    rule.update(rule_id=spec.kibana_id, enabled=bool(e.get("enabled", True)), interval=str(e.get("interval", INTERVAL)),
+                actions=[], exceptions_list=[], author=[AUTHOR], tags=[*tags, TAG])
+    rule["from"] = str(e.get("from", LOOK_BACK))
     return rule
 
 

@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-    TIDE Baseline Assurance Report — PDF Template  (v5 — Unified Print-Friendly)
+    TIDE Baseline assurance report — PDF Template  (v5 — Unified Print-Friendly)
     ─────────────────────────────────────────────────────────────────────────────
     Cover page + TOC + white body background — fully printer-friendly.
     Airgap-safe: NO external fonts, images or URLs.
@@ -10,7 +10,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
-<title>{{ report.baseline_name }} — Baseline Assurance Report</title>
+<title>{{ report.baseline_name }} — Baseline assurance report</title>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -119,7 +119,7 @@ td { color:var(--text-2); }
         <span class="cover-logo">TIDE</span>
         <div class="cover-tagline">Threat Informed Detection Engine</div>
         <hr class="cover-rule"/>
-        <div class="cover-title">Baseline Assurance Report</div>
+        <div class="cover-title">Baseline assurance report</div>
         <div class="cover-subtitle">{{ report.baseline_name }}</div>
         <div class="cover-clf-badge">{{ report.classification or 'Official' }}</div>
         <div class="cover-meta">
@@ -134,13 +134,13 @@ td { color:var(--text-2); }
      TABLE OF CONTENTS
      ══════════════════════════════════════════════════════ -->
 <div class="section-banner avoid-break" style="margin-top:0;">
-    <div class="section-banner-title">Table of Contents</div>
+    <div class="section-banner-title">Table of contents</div>
 </div>
 <div style="margin-bottom:7mm;">
-    <div class="toc-item"><span class="toc-num">1</span><span class="toc-text">Executive Summary</span></div>
-    <div class="toc-item"><span class="toc-num">2</span><span class="toc-text">Baseline Definition — Techniques</span></div>
-    <div class="toc-item"><span class="toc-num">3</span><span class="toc-text">System Compliance Matrix</span></div>
-    <div class="toc-item"><span class="toc-num">4</span><span class="toc-text">Per-System Coverage Detail</span></div>
+    <div class="toc-item"><span class="toc-num">1</span><span class="toc-text">Executive summary</span></div>
+    <div class="toc-item"><span class="toc-num">2</span><span class="toc-text">Baseline definition — techniques</span></div>
+    <div class="toc-item"><span class="toc-num">3</span><span class="toc-text">System compliance matrix</span></div>
+    <div class="toc-item"><span class="toc-num">4</span><span class="toc-text">Per-system coverage detail</span></div>
 </div>
 <div class="page-break"></div>
 
@@ -148,7 +148,7 @@ td { color:var(--text-2); }
      SECTION 1 — EXECUTIVE SUMMARY
      ══════════════════════════════════════════════════════ -->
 <div class="section-banner avoid-break">
-    <div class="section-banner-title">Executive Summary</div>
+    <div class="section-banner-title">Executive summary</div>
     <div class="section-banner-sub">Baseline compliance overview across all applied systems</div>
 </div>
 
@@ -165,7 +165,7 @@ td { color:var(--text-2); }
     </div>
     <div class="stat-card">
         <span class="stat-value">{{ report.total_techniques }}</span>
-        <span class="stat-label">Mapped ATT&amp;CK Techniques</span>
+        <span class="stat-label">Mapped ATT&amp;CK techniques</span>
     </div>
 </div>
 
@@ -180,7 +180,7 @@ td { color:var(--text-2); }
      SECTION 2 — BASELINE DEFINITION (TACTIC STEPS)
      ══════════════════════════════════════════════════════ -->
 <div class="section-banner avoid-break">
-    <div class="section-banner-title">Baseline Definition — Techniques</div>
+    <div class="section-banner-title">Baseline definition — techniques</div>
     <div class="section-banner-sub">Each technique in this baseline with its ATT&amp;CK IDs and detection rules</div>
 </div>
 
@@ -192,7 +192,7 @@ td { color:var(--text-2); }
             <th>Title</th>
             <th>Tactic</th>
             <th>Techniques</th>
-            <th>Detection Rules</th>
+            <th>Detection rules</th>
         </tr>
     </thead>
     <tbody>

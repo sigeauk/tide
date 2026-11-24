@@ -1,0 +1,97 @@
+# What a simulation of this scenario sets up in its client's TIDE when it starts, and removes when it
+# is cleaned up: the attack as a baseline, the system it hit (with the baseline applied, counting the
+# simulation's space as its coverage), and the gaps the client has accepted. The rules in rules.toml are
+# mapped to the baseline's techniques by their `covers`, which is a technique's title here.
+#
+# priority: critical, high, medium or low. category: identity, endpoint, network (and TIDE's others).
+# review_days: a known gap is to be looked at again that many days after the simulation starts.
+# [threat_actor]: the attacker, as a threat actor on the client's Threat Landscape, using the baseline's
+# techniques (name and description; origin and aliases optional).
+
+[baseline]
+name = "Trust store integrity: banking trojan interception"
+description = "How a banking trojan, delivered as an invoice, adds its own root certificate and points the browser at its proxy, so it can read the user's HTTPS traffic to the bank. Each technique is one step of it, as RTM's trojan does them."
+
+[[baseline.technique]]
+tactic = "Initial Access"
+techniques = ["T1566.001"]
+title = "Invoice opened: Word runs its macro"
+priority = "high"
+category = "endpoint"
+description = "A finance user opens an invoice attached to an email, and its macro starts PowerShell."
+
+[[baseline.technique]]
+tactic = "Execution"
+techniques = ["T1059.001"]
+title = "PowerShell download cradle"
+priority = "high"
+category = "endpoint"
+description = "PowerShell downloads the trojan's script and runs it in memory: IEX (New-Object Net.WebClient).DownloadString(...)."
+
+[[baseline.technique]]
+tactic = "Command and Control"
+techniques = ["T1105"]
+title = "Certificate downloaded with certutil"
+priority = "medium"
+category = "endpoint"
+description = "certutil -urlcache fetches the attacker's root certificate over HTTP."
+
+[[baseline.technique]]
+tactic = "Defense Impairment"
+techniques = ["T1553.004"]
+title = "Rogue root certificate installed"
+priority = "critical"
+category = "endpoint"
+description = "The attacker's certificate is made a trusted root, two ways: certutil -addstore into the user's store (procedure A), and PowerShell writing the machine's store, which lands in the registry under HKLM (procedure B). Either lets the attacker's proxy impersonate any HTTPS site."
+
+[[baseline.technique]]
+tactic = "Defense Impairment"
+techniques = ["T1112"]
+title = "Proxy auto-config pointed at the attacker"
+priority = "high"
+category = "endpoint"
+description = "The trojan sets the user's AutoConfigURL in the registry, so the browser sends its traffic through the attacker's proxy."
+
+[[baseline.technique]]
+tactic = "Persistence"
+techniques = ["T1546.001"]
+title = "PDFs made to open the payload"
+priority = "medium"
+category = "endpoint"
+description = "A file type of its own runs the payload, and cmd /c assoc gives it .pdf, so opening any PDF starts the trojan again."
+
+[[baseline.technique]]
+tactic = "Persistence"
+techniques = ["T1053.005"]
+title = "Scheduled task at logon"
+priority = "high"
+category = "endpoint"
+description = "schtasks /create /sc onlogon, named as Adobe's own updater, starts the payload at every logon."
+
+[[baseline.technique]]
+tactic = "Credential Access"
+techniques = ["T1557"]
+title = "HTTPS read through the attacker's proxy"
+priority = "critical"
+category = "network"
+description = "With its certificate trusted and the browser using its proxy, the attacker reads and changes the user's HTTPS traffic, the bank's included."
+
+# The attacker, as a threat actor on Threat Landscape: its techniques are the baseline's.
+[threat_actor]
+name = "Banking trojan crew"
+description = "A cybercriminal group that targets finance staff who use online banking. Its trojan arrives as an invoice, installs its own root certificate and points the browser at its proxy, so it can read and change the victim's HTTPS traffic to the bank, much as RTM's trojan does."
+
+[[system]]
+name = "Finance workstations"
+description = "The finance team's desktops, which use the bank's online portal."
+hosts = [{ name = "we8105desk", ip = "192.168.250.100", os = "Windows 7" }]
+
+[[known_gap]]
+technique = "Rogue root certificate installed"
+reason = "Procedure B: a root certificate added to the machine's store, by PowerShell or straight in the registry. No rule watches HKLM's root store yet."
+review_days = 30
+
+[[known_gap]]
+technique = "HTTPS read through the attacker's proxy"
+reason = "No TLS inspection: the interception itself can't be seen. Accepted while the steps before it are covered."
+review_days = 90

@@ -155,7 +155,10 @@ async def local_login(
     session_token = auth.create_session_token(user.id)
     
     response = HTMLResponse(content="", status_code=200)
-    response.headers["HX-Redirect"] = local_path(next)   # htmx follows it with location.href
+    # htmx follows it with location.href; after an admin's reset, to Profile to choose a new password.
+    from app.models.auth import PASSWORD_CHANGE_PAGE, User
+    due = User.password_change_due(db.get_user_by_id(user.id))
+    response.headers["HX-Redirect"] = PASSWORD_CHANGE_PAGE if due else local_path(next)
     
     use_secure = settings.app_url.startswith("https://")
     response.set_cookie(

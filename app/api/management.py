@@ -2535,19 +2535,46 @@ def _tenant_chips_html(clients: list, *, all_tenants: bool = False) -> str:
     return " ".join(chips)
 
 
+_MENU_SEP = '<div class="rh-more__sep" role="separator"></div>'
+
+
+def _menu_item(name: str, icon_name: str, text: str, attrs: str, danger: bool = False) -> str:
+    """One item of a ⋮ built in Python (macros/menu.html's markup): ``attrs`` say what it does."""
+    return (f'<button name="{name}" type="button" role="menuitem" class="rh-more__item'
+            f'{" rh-more__item--danger" if danger else ""}" {attrs}>{_icon(icon_name, "15")}<span>{text}</span></button>')
+
+
+def _menu(subject: str, title: str, items: str) -> str:
+    """A ⋮ built in Python, like every other ⋮ in TIDE (macros/menu.html): ``subject`` ("SIEM", "User")
+    names it ("SIEM Actions"; "SIEM actions" to screen readers), ``title`` is its tip, ``items`` its
+    _menu_item()s."""
+    toggle = _more_button(f"{subject} actions", title=title, attrs=f'name="{subject} Actions"')
+    return f'<div class="rh-more" data-more>{toggle}<div class="rh-more__menu" role="menu" hidden>{items}</div></div>'
+
+
 def _card_menu(kind: str, test: str, edit: str, delete: str) -> str:
-    """An integration card's ⋮, like every other ⋮ in TIDE (macros/menu.html): Test connection,
-    Edit, then Delete. ``test``, ``edit`` and ``delete`` are each item's attributes (what it does);
-    ``kind`` names the card ("SIEM") for its name and screen readers."""
-    def item(name, icon_name, text, attrs, danger=False):
-        return (f'<button name="{name}" type="button" role="menuitem" class="rh-more__item'
-                f'{" rh-more__item--danger" if danger else ""}" {attrs}>{_icon(icon_name, "15")}<span>{text}</span></button>')
-    toggle = _more_button(f"{kind} actions", title="Test the connection, edit or delete it",
-                          attrs=f'name="{kind} Actions"')
-    return (f'<div class="rh-more" data-more>{toggle}<div class="rh-more__menu" role="menu" hidden>'
-            f'{item("Test connection", "zap", "Test connection", test)}{item("Edit", "pencil", "Edit", edit)}'
-            f'<div class="rh-more__sep" role="separator"></div>{item("Delete", "trash-2", "Delete", delete, True)}'
-            f'</div></div>')
+    """An integration card's ⋮: Test connection, Edit, then Delete. ``test``, ``edit`` and ``delete``
+    are each item's attributes (what it does); ``kind`` names the card ("SIEM")."""
+    return _menu(kind, "Test the connection, edit or delete it",
+                 _menu_item("Test connection", "zap", "Test connection", test) + _menu_item("Edit", "pencil", "Edit", edit)
+                 + _MENU_SEP + _menu_item("Delete", "trash-2", "Delete", delete, True))
+
+
+def _user_menu(u: dict, manage: bool, is_self: bool) -> str:
+    """A user's ⋮ in Settings → Users: Reset password (a TIDE account's: Keycloak holds a single sign-on
+    account's), then Delete. None for your own account (your password is on your Profile) or a user you
+    may not manage (deps.can_manage_user): a ⋮ only where there are actions."""
+    if is_self or not manage:
+        return ""
+    uid, name = u["id"], _esc(u["username"])
+    local = (u.get("auth_provider") or "local").lower() == "local"
+    reset = (_menu_item("Reset password", "key", "Reset password",
+                        f'hx-get="/api/settings/users/{uid}/reset-password" hx-target="#modal-container" '
+                        f'hx-swap="innerHTML"') + _MENU_SEP) if local else ""
+    delete = _menu_item("Delete", "trash-2", "Delete",
+                        f'hx-delete="/api/management/users/{uid}" hx-target="#management-content" '
+                        f'hx-swap="innerHTML" hx-confirm="Delete user {name}?"', True)
+    return _menu("User", "Reset their password or delete them" if local else "Delete them", reset + delete)
 
 
 def _test_attrs(kind: str, item_id: str, target_id: str) -> str:
@@ -2935,13 +2962,7 @@ def _render_users_tab(users: list, all_roles: list, clients: list,
                     </form>
                 </details>
             </td>
-            <td>
-                <button class="btn btn-danger btn-sm"
-                        hx-delete="/api/management/users/{u['id']}"
-                        hx-target="#management-content"
-                        hx-swap="innerHTML"
-                        hx-confirm="Delete user {_esc(u['username'])}?">Del</button>
-            </td>
+            <td class="mgmt-users__more">{_user_menu(u, manage, u["id"] == self_id)}</td>
         </tr>'''
 
     add_form = '''
@@ -2981,7 +3002,7 @@ def _render_users_tab(users: list, all_roles: list, clients: list,
         <thead><tr>
             <th>Username</th><th>Email</th><th>Source</th>
             <th>Active</th>{super_th}<th>Last Login</th>
-            <th>Clients</th><th></th>
+            <th>Clients</th><th class="mgmt-users__more"><span class="sr-only">Actions</span></th>
         </tr></thead>
         <tbody>{rows}</tbody>
     </table>'''

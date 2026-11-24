@@ -107,6 +107,8 @@ def page_systems(request: Request, user: CurrentUser, client_id: ActiveClient):
     return _render("pages/inventory/systems.html", request, {
         "active_page": "systems", "summaries": summaries, "systems": systems, "user": user,
         "classifications": list_classifications(client_id=client_id), "clf_colors": _clf_color_map(client_id=client_id),
+        # The cards' filters, kept in the address by systems.js (#119): a reload or a link shows the same.
+        "sf": {k: request.query_params.get(k, "") for k in ("q", "classification", "risk")},
     })
 
 
@@ -719,7 +721,7 @@ def api_host_cve_matches(request: Request, host_id: str, user: CurrentUser, clie
     })
 
 
-# ── CVE Overview's list: filtered and sorted here, 50 cards at a time (UX.md 9.5) ──
+# ── CVE Overview's list: filtered and sorted here, 50 cards at a time ──
 CVE_PAGE = 50
 _CVE_SORTS = ("cve_id", "name", "vendor", "date_added", "due_date", "matched")
 
@@ -787,12 +789,18 @@ def cve_overview_view(cves, params) -> dict:
 
 
 def _cve_table(request: Request, user, client_id: str, toast: Optional[str] = None) -> HTMLResponse:
-    """CVE Overview's filter bar and first 50 cards, newest CVE first."""
+    """CVE Overview's filter bar and first 50 cards, newest CVE first, or as the page's address asks
+    (its filters kept there by cve_overview.js, #119); after an upload, every CVE."""
     from app.inventory_engine import list_systems
     from starlette.datastructures import QueryParams
     cves = get_all_cve_overview(client_id=client_id)
+    params = request.query_params if request.method == "GET" else QueryParams("")
+    sort = params.get("sort") if params.get("sort") in _CVE_SORTS else "cve_id"
     ctx = {"cves": cves, "matched_count": sum(1 for c in cves if c.affected_hosts), "user": user,
-           "systems": list_systems(client_id=client_id), "view": cve_overview_view(cves, QueryParams(""))}
+           "systems": list_systems(client_id=client_id), "view": cve_overview_view(cves, params),
+           "cf": {"search": params.get("search", ""), "matched": params.get("matched", ""),
+                  "system": params.getlist("system"), "coverage": params.getlist("coverage"),
+                  "sort": f"{sort}:{'asc' if params.get('dir') == 'asc' else 'desc'}"}}
     if toast:
         ctx["toast"] = toast
     return _render("partials/cve_overview_table.html", request, ctx)
@@ -3049,7 +3057,7 @@ def api_system_report(
     """Generate a System report for the chosen baselines (``baseline_id``, repeated; all of them when
     none are named): ``mode`` technical (the full report) or executive (a two- or three-page CISO
     briefing). ``techniques`` picks which techniques get a detail entry in a technical report.
-    ``include_wazuh`` adds the Wazuh devices' vulnerabilities and hardening (D14), when the system
+    ``include_wazuh`` adds the Wazuh devices' vulnerabilities and hardening, when the system
     has such devices."""
     import os
     from datetime import datetime
@@ -3338,7 +3346,7 @@ def _generate_brief_markdown(data: dict, classification: str) -> str:
     if data.get("include_baselines"):
         names = ", ".join(x["name"] for x in data["baselines"])
         lines.append(f"**Baselines:** {'All — ' if data.get('all_baselines') else ''}{names}")
-    lines += ["", "---", "", "## Risk Posture", "",
+    lines += ["", "---", "", "## Risk posture", "",
               "| " + " | ".join(k["label"] for k in b["kpis"]) + " |",
               "|" + "---|" * len(b["kpis"]),
               "| " + " | ".join(f"{_md(k['value'])} ({_md(k['sub'])})" for k in b["kpis"]) + " |", "",
@@ -3356,7 +3364,7 @@ def _generate_brief_markdown(data: dict, classification: str) -> str:
             lines += [f"- {name}: {first[name]['covered']}% on {first[name]['day']:%Y-%m-%d}, "
                       f"{last[name]['covered']}% on {last[name]['day']:%Y-%m-%d}" for name in last]
             lines.append("")
-        lines += ["## Threat Exposure", "",
+        lines += ["## Threat exposure", "",
                   "| Baseline | Techniques | Covered | No coverage | Known gaps | N/A | Coverage | Effective |",
                   "|----------|------------|---------|-------------|------------|-----|----------|-----------|"]
         scored = not data["coverage_undefined"]
@@ -3372,7 +3380,7 @@ def _generate_brief_markdown(data: dict, classification: str) -> str:
         for r in b["tactics"]:
             lines.append(f"| {_md(r['tactic'])} | {r['total']} | {r['covered']} | {r['none']} | {r['gap']} | {r['na']} | "
                          f"{pct(r['effective_pct'])} |")
-        lines += ["", "## Remediation Roadmap", "",
+        lines += ["", "## Remediation roadmap", "",
                   "Quick wins first (operational blockers, no new engineering), then the detections to build.", ""]
         if b["roadmap"]:
             lines += ["| # | Action | Effort | Impact |", "|---|--------|--------|--------|"]
@@ -3385,7 +3393,7 @@ def _generate_brief_markdown(data: dict, classification: str) -> str:
         lines.append("")
 
     if data.get("include_devices"):
-        lines += ["## Device & Vulnerability Posture", ""]
+        lines += ["## Device & vulnerability posture", ""]
         if data["total_hosts"]:
             lines += ["| Devices | Clean | At risk | Monitored | Unique CVEs |", "|---|---|---|---|---|",
                       f"| {data['total_hosts']} | {data['green_hosts']} | {data['red_hosts']} | {data['amber_hosts']} | "
@@ -3417,7 +3425,7 @@ def _generate_system_markdown(data: dict, classification: str) -> str:
     lines = [
         f"<!-- {classification} -->",
         "",
-        f"# {sys['name']} — {'Technical Deep Dive' if mode == 'technical' else 'CISO Executive Summary'}",
+        f"# {sys['name']} — {'Technical deep dive' if mode == 'technical' else 'CISO executive summary'}",
         "",
         f"**Classification:** {classification}",
     ]
@@ -3433,7 +3441,7 @@ def _generate_system_markdown(data: dict, classification: str) -> str:
         lines.append(f"**Baselines:** {'All — ' if data.get('all_baselines') else ''}{names}")
     if sys.get("description"):
         lines += ["", sys["description"]]
-    lines += ["", "---", "", "## Executive Summary", ""]
+    lines += ["", "---", "", "## Executive summary", ""]
 
     if show_baselines:
         covered = "—" if data["coverage_pct"] is None else f"{data['coverage_pct']}% ({t['covered']} of {scored} scored)"
@@ -3458,13 +3466,13 @@ def _generate_system_markdown(data: dict, classification: str) -> str:
         lines += [
             "| Metric | Value |",
             "|--------|-------|",
-            f"| Total Devices | {data['total_hosts']} |",
+            f"| Total devices | {data['total_hosts']} |",
             f"| Unique CVEs | {data['total_cves']} |",
             f"| At Risk (Red) | {data['red_hosts']} |",
             f"| Monitored (Amber) | {data['amber_hosts']} |",
             f"| Blind Spots (Grey) | {data.get('grey_hosts', 0)} |",
             f"| Clean (Green) | {data['green_hosts']} |",
-            f"| Coverage Ratio | {data['coverage_ratio']}% |",
+            f"| Coverage ratio | {data['coverage_ratio']}% |",
             "",
         ]
 
@@ -3481,7 +3489,7 @@ def _generate_system_markdown(data: dict, classification: str) -> str:
                          f"{bt['na']} | {b['coverage_pct']}% | {b['effective_pct']}% |")
         lines.append("")
 
-        lines += ["## Priority Gaps", ""]
+        lines += ["## Priority gaps", ""]
         if data["priority_gaps"]:
             lines += ["| Priority | Technique | ATT&CK | Baseline | Status | Reason |",
                       "|----------|-----------|--------|----------|--------|--------|"]
@@ -3526,7 +3534,7 @@ def _generate_system_markdown(data: dict, classification: str) -> str:
                 if last.get(p["baseline_id"]) != figures:
                     changed.append(p)
                 last[p["baseline_id"]] = figures
-            lines += ["## Coverage Trend", "",
+            lines += ["## Coverage trend", "",
                       "Each baseline's coverage at the end of each week, from this system's history. "
                       "Weeks where nothing changed are left out.", "",
                       "| Week ending | Baseline | Coverage | Covered | Known gaps | No coverage | N/A |",
@@ -3538,7 +3546,7 @@ def _generate_system_markdown(data: dict, classification: str) -> str:
 
     if data.get("top5_cves") and data.get("include_devices"):
         lines += [
-            "## Top 5 Critical CVEs",
+            "## Top 5 critical CVEs",
             "",
             "| CVE ID | Vulnerability | At Risk | Monitored | Blind Spots | Ransomware |",
             "|--------|---------------|---------|-----------|-------------|------------|",
@@ -3554,7 +3562,7 @@ def _generate_system_markdown(data: dict, classification: str) -> str:
 
     if data.get("include_devices"):
         lines += [
-            "## Device Status Summary",
+            "## Device status summary",
             "",
             "| Device | IP | OS | Status | CVEs | At Risk | Monitored |",
             "|--------|----|----|--------|------|---------|-----------|",
@@ -3571,7 +3579,7 @@ def _generate_system_markdown(data: dict, classification: str) -> str:
         lines += _wazuh_markdown(data["wazuh"], data.get("hardening") or [])
 
     if mode == "technical" and show_baselines:
-        lines += ["## Coverage Matrix", ""]
+        lines += ["## Coverage matrix", ""]
         for b in data["baselines"]:
             lines += [f"### {b['name']}", ""]
             if b.get("description"):
@@ -3596,7 +3604,7 @@ def _generate_system_markdown(data: dict, classification: str) -> str:
             lines.append("")
 
         if data["detailed_techniques"]:
-            lines += ["## Technique Detail", ""]
+            lines += ["## Technique detail", ""]
             if data["technique_scope"] == "gaps":
                 lines += ["_Techniques with no coverage or a known gap._", ""]
             for tech in data["detailed_techniques"]:
@@ -3620,15 +3628,15 @@ def _generate_system_markdown(data: dict, classification: str) -> str:
                 lines.append("")
 
     if mode == "technical" and data.get("all_cves") and data.get("include_devices"):
-        lines += ["## CVE Breakdown (Technical Detail)", ""]
+        lines += ["## CVE breakdown (technical detail)", ""]
         for cve in data["all_cves"]:
             lines.append(f"### {cve['cve_id']}")
             lines.append(f"_{cve.get('vulnerability_name', '')}_")
             lines.append("")
             if cve.get("techniques"):
-                lines.append("**MITRE Techniques:** " + ", ".join(f"`{t['id']}`" for t in cve["techniques"]))
+                lines.append("**MITRE techniques:** " + ", ".join(f"`{t['id']}`" for t in cve["techniques"]))
                 lines.append("")
-            lines.append("| Host | IP | Status | Active Rules |")
+            lines.append("| Host | IP | Status | Active rules |")
             lines.append("|------|----|--------|-------------|")
             for h in cve.get("hosts_red", []):
                 lines.append(f"| {h['name']} | {h['ip']} | At Risk | — |")
@@ -3652,7 +3660,7 @@ def _generate_cve_markdown(data: dict, classification: str) -> str:
     lines = [
         f"<!-- {classification} -->",
         "",
-        f"# {data['cve_id']} — CVE Vulnerability Impact Audit",
+        f"# {data['cve_id']} — CVE vulnerability impact audit",
         "",
         f"**Classification:** {classification}",
         f"**Generated:** {data['generated_at']}",
@@ -3661,41 +3669,41 @@ def _generate_cve_markdown(data: dict, classification: str) -> str:
         "",
         "---",
         "",
-        "## Impact Summary",
+        "## Impact summary",
         "",
         "| Metric | Value |",
         "|--------|-------|",
-        f"| Affected Systems | {data['total_systems']} |",
-        f"| Affected Hosts | {data['total_hosts']} |",
-        f"| At Risk Hosts | {data['red_count']} |",
-        f"| Monitored Hosts | {data['amber_count']} |",
-        f"| Blind Spot Hosts | {data.get('grey_count', 0)} |",
-        f"| Detection Rules | {len(data.get('detections', []))} |",
-        f"| MITRE Techniques | {len(data.get('techniques', []))} |",
+        f"| Affected systems | {data['total_systems']} |",
+        f"| Affected hosts | {data['total_hosts']} |",
+        f"| At Risk hosts | {data['red_count']} |",
+        f"| Monitored hosts | {data['amber_count']} |",
+        f"| Blind Spot hosts | {data.get('grey_count', 0)} |",
+        f"| Detection rules | {len(data.get('detections', []))} |",
+        f"| MITRE techniques | {len(data.get('techniques', []))} |",
         "",
     ]
 
     # Info
     lines += [
-        "## CVE Details",
+        "## CVE details",
         "",
-        f"- **Vendor / Product:** {data.get('vendor_project', '')} / {data.get('product', '')}",
-        f"- **Date Added:** {data.get('date_added', '')}",
-        f"- **Due Date:** {data.get('due_date', '')}",
+        f"- **Vendor / product:** {data.get('vendor_project', '')} / {data.get('product', '')}",
+        f"- **Date added:** {data.get('date_added', '')}",
+        f"- **Due date:** {data.get('due_date', '')}",
         f"- **Ransomware:** {'Yes' if data.get('known_ransomware') else 'No'}",
     ]
     if data.get("short_description"):
         lines.append(f"- **Description:** {data['short_description']}")
     if data.get("notes"):
-        lines.append(f"- **Required Action:** {data['notes']}")
+        lines.append(f"- **Required action:** {data['notes']}")
     lines.append("")
 
     # MITRE Techniques
     if data.get("techniques"):
         lines += [
-            "## MITRE ATT&CK Techniques",
+            "## MITRE ATT&CK techniques",
             "",
-            "| Technique | Name | Detection | Rule Count |",
+            "| Technique | Name | Detection | Rule count |",
             "|-----------|------|-----------|------------|",
         ]
         for t in data["techniques"]:
@@ -3706,9 +3714,9 @@ def _generate_cve_markdown(data: dict, classification: str) -> str:
     # Detection Rules
     if data.get("detections"):
         lines += [
-            "## Applied Detection Rules",
+            "## Applied detection rules",
             "",
-            "| Rule / Reference | Note | Source |",
+            "| Rule / reference | Note | Source |",
             "|-----------------|------|--------|",
         ]
         for d in data["detections"]:
@@ -3717,11 +3725,11 @@ def _generate_cve_markdown(data: dict, classification: str) -> str:
 
     # Impact Matrix
     if data.get("grouped_systems"):
-        lines += ["## Impact Matrix — Affected Systems & Hosts", ""]
+        lines += ["## Impact matrix — affected systems & hosts", ""]
         for sys in data["grouped_systems"]:
             lines.append(f"### {sys['system_name']}")
             lines.append("")
-            lines.append("| Hostname | IP | OS | Status | Active Rules |")
+            lines.append("| Hostname | IP | OS | Status | Active rules |")
             lines.append("|----------|----|----|--------|-------------|")
             for h in sys["hosts"]:
                 if h.get("status") == "grey":
@@ -3747,7 +3755,7 @@ def _generate_baseline_markdown(data: dict, classification: str) -> str:
     lines = [
         f"<!-- {classification} -->",
         "",
-        f"# {data['baseline_name']} — Baseline Assurance Report",
+        f"# {data['baseline_name']} — Baseline assurance report",
         "",
         f"**Classification:** {classification}",
         f"**Generated:** {data['generated_at']}",
@@ -3760,12 +3768,12 @@ def _generate_baseline_markdown(data: dict, classification: str) -> str:
     lines += [
         "---",
         "",
-        "## Executive Summary",
+        "## Executive summary",
         "",
         "| Metric | Value |",
         "|--------|-------|",
         f"| Techniques | {data['total_steps']} |",
-        f"| Mapped ATT&CK Techniques | {data['total_techniques']} |",
+        f"| Mapped ATT&CK techniques | {data['total_techniques']} |",
         "",
         "A template carries no coverage: each system it is applied to gets its own copy, "
         "and that system's report shows how its copy is covered.",
@@ -3774,7 +3782,7 @@ def _generate_baseline_markdown(data: dict, classification: str) -> str:
 
     if data.get("steps"):
         lines += [
-            "## Baseline Definition — Tactic Steps",
+            "## Baseline definition — tactic steps",
             "",
             "| # | Title | Tactic | Techniques | Detections |",
             "|---|-------|--------|------------|------------|",

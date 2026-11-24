@@ -37,7 +37,7 @@
 <!-- Table -->
 <div class="card card-flush">
     <div name="Open Cve Overview Partial" id="cve-table-container"
-         hx-get="/api/inventory/cve-overview-partial"
+         hx-get="/api/inventory/cve-overview-partial{{ '?' ~ request.url.query if request.url.query }}"
          hx-trigger="load"
          hx-swap="innerHTML">
         {% from "components/ui/loading_state.html" import loading_state %}

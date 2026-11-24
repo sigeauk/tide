@@ -4291,7 +4291,7 @@ class DatabaseService:
             self._ensure_wazuh_tables_in_tenants(conn, 107)
             self._set_schema_version(conn, 107)
 
-        # ── Migration 108: Wazuh phase 5, in every tenant DB ──
+        # ── Migration 108: Wazuh agents' reads and SCA history, in every tenant DB ──
         # Each destination's agents and how its last read went (Rule Monitoring's Wazuh agents disconnected and
         # Wazuh read incomplete), and each policy's score history (the Dashboard's Hardening card). Additive only.
         if current_version < 108:
@@ -4327,7 +4327,7 @@ class DatabaseService:
             self._set_schema_version(conn, 112)
             logger.info("Migration 112: clients can turn Alerts left open off.")
 
-        # ── Migration 113: Outcomes from Kibana (rule tuning, phase 3) ──
+        # ── Migration 113: Outcomes from Kibana (rule tuning) ──
         # The outcome findings' window, judged alerts needed and shares (NULL: rule_alerts.DEFAULTS), and the
         # client's mappings of Kibana's values onto outcomes (JSON, rule_outcomes.parse). Additive only.
         if current_version < 113:
@@ -8213,10 +8213,11 @@ class DatabaseService:
     def clear_octi_threat_actors_in_active_db(self) -> int:
         """Delete OpenCTI-sourced threat_actors rows from the active DB context.
 
-        In a tenant DB the table is the client's OpenCTI actors alone, so this
-        wipes it, a copy of MITRE's an earlier version left there included.
-        Without a tenant context it keeps any MITRE-sourced rows, so the shared
-        DB does not lose its baseline.
+        In a tenant DB the table is the client's OpenCTI actors, so this wipes it,
+        a copy of MITRE's an earlier version left there included, but keeps the
+        attackers its running simulations added (source ``Simulation``): their
+        clean-up removes them. Without a tenant context it keeps any MITRE-sourced
+        rows, so the shared DB does not lose its baseline.
         """
         from app.services.tenant_manager import get_tenant_db_path
         in_tenant = get_tenant_db_path() is not None
@@ -8224,7 +8225,11 @@ class DatabaseService:
             with self.get_connection() as conn:
                 # Count first (DuckDB rowcount on bulk DELETE is unreliable).
                 rows = conn.execute("SELECT name, source FROM threat_actors").fetchall()
-                victims = [r[0] for r in rows if in_tenant or not self._row_is_mitre(r[1])]
+                def simulated(src) -> bool:
+                    src = src.tolist() if hasattr(src, "tolist") else src
+                    return "Simulation" in (src if isinstance(src, (list, tuple)) else [src])
+                victims = [r[0] for r in rows
+                           if not simulated(r[1]) and (in_tenant or not self._row_is_mitre(r[1]))]
                 if not victims:
                     return 0
                 conn.executemany(
@@ -8568,13 +8573,17 @@ class DatabaseService:
                     source = row.get("source", [])
                     if hasattr(source, "tolist"):
                         source = source.tolist()
-                    # The client's table holds its OpenCTI actors: a copy of MITRE's or a removed
-                    # vendor's left there by an earlier version is not one, and shows nowhere.
+                    # The client's table holds its OpenCTI actors, and the attackers of its running
+                    # simulations (sim/client.py): a copy of MITRE's or a removed vendor's left there by an
+                    # earlier version is neither, and shows nowhere.
                     from app.services.cti_source_labels import display_label
-                    if not any(display_label(str(s or "")) == "OpenCTI"
-                               for s in (source if isinstance(source, list) else [])):
+                    labels = {display_label(str(s or "")) for s in (source if isinstance(source, list) else [])}
+                    if "Simulation" in labels:
+                        source = ["Simulation"]
+                    elif "OpenCTI" in labels:
+                        source = ["OCTI"]
+                    else:
                         continue
-                    source = ["OCTI"]
                     origin_val = row.get("origin")
                     if origin_val is None or (isinstance(origin_val, float)
                                               and _math.isnan(origin_val)):

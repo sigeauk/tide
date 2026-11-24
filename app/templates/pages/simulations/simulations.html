@@ -5,13 +5,13 @@
   results until they are cleared. Context: api.simulations.page_context. Three tabs, as a client's page
   has them (ui.tab, ?tab=): Run (start one, the list, the one opened in #sim-detail; the list refreshes
   on simulationsChanged), Dashboard (a simulation's scores, #sim-dashboard) and Answers (its questions
-  with their answers, #sim-answers), each of the last two for the simulation picked above it.
+  with their answers, #sim-answers), each of the last two for the simulation picked above it
+  (partials/simulation_tab.html), and drawn again on simulationsChanged too.
 #}
 {% from "macros/icons.html" import icon %}
 {% from "macros/modal.html" import empty_state %}
 {% from "macros/help.html" import help_button with context %}
 {% from "components/window_ui.html" import section_head %}
-{% from "components/ui/loading_state.html" import loading_state %}
 
 {% block title %}Simulations | TIDE{% endblock %}
 
@@ -35,21 +35,6 @@
     {% endfor %}
 </div>
 
-{# A simulation to show in the Dashboard or Answers tab: the one running, else the latest. #}
-{% macro pick(part) -%}
-<div class="filter-group sim-pick">
-    <label class="form-label" for="sim-pick-{{ part }}">Simulation</label>
-    <select id="sim-pick-{{ part }}" class="form-input" data-change="ui.load" data-url="/api/simulations/{id}/{{ part }}"
-            data-target="#sim-{{ part }}">
-        {% for s in sims %}
-        <option value="{{ s.id }}"{% if s.id == focus %} selected{% endif %}>{% for sid in s.scenarios %}{{ names.get(sid, sid) }}{% if not loop.last %}, {% endif %}{% endfor %}, {{ s.created_at.strftime('%Y-%m-%d %H:%M') if s.created_at else '' }} ({{ states.get(s.state, s.state) | lower }})</option>
-        {% endfor %}
-    </select>
-</div>
-<div id="sim-{{ part }}" hx-get="/api/simulations/{{ focus }}/{{ part }}" hx-trigger="load" hx-swap="innerHTML">
-    {{ loading_state('Loading…') }}
-</div>
-{%- endmacro %}
 
 <div id="sim-tab-run" role="tabpanel" aria-labelledby="sim-tab-btn-run" data-fold-store="tide.simulationsFolds"{% if tab != 'run' %} hidden{% endif %}>
 {% if can_run %}
@@ -135,16 +120,12 @@
 <div id="sim-detail"></div>
 </div>
 
-{% for part, what in (('dashboard', 'its scores'), ('answers', 'its questions with their answers')) %}
+{% for part in ('dashboard', 'answers') %}
 <div id="sim-tab-{{ part }}" role="tabpanel" aria-labelledby="sim-tab-btn-{{ part }}" data-fold-store="tide.simulationsFolds"{% if tab != part %} hidden{% endif %}>
-    {% if sims %}
-    {{ pick(part) }}
-    {% else %}
-    {% call empty_state('crosshair') %}
-    <h3>No simulations yet</h3>
-    <p>Start one under Run to see {{ what }} here.</p>
-    {% endcall %}
-    {% endif %}
+    {# Drawn again when a simulation starts, ends, is cleaned up or cleared, so a new one shows here. #}
+    <div hx-get="/api/simulations/tab/{{ part }}" hx-trigger="simulationsChanged from:body" hx-swap="innerHTML">
+        {% include "partials/simulation_tab.html" %}
+    </div>
 </div>
 {% endfor %}
 {% endblock %}

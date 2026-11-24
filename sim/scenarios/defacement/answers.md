@@ -46,7 +46,7 @@ FROM logs-iis.access-botes
 | LIMIT 5
 ```
 
-**With TIDE:** *External Alerts* (Elastic) turns each Suricata and FortiGate alert in the simulation's data into an alert in its space, so the scan is seen without anyone searching for it. The two raised over 5,000 alerts in the attack's window, nearly all about the scan, so this is by far the set's noisiest rule. The one alert that mattered comes later, among them (question 13). In your own TIDE, **Rule Monitoring** lists a rule like this under **Too many alerts**, and analysts record what its alerts turned out to be with **Record outcome…** in its rule window, so the case for tuning it in **Rule Tuning** rests on evidence.
+**With TIDE:** *External Alerts* (Elastic) turns each Suricata and FortiGate alert in the simulation's data into an alert in its space, so the scan is seen without anyone searching for it. The two raised over 5,000 alerts in the attack's window, nearly all about the scan, so this is by far the set's noisiest rule. The one alert that mattered comes later, among them (question 13). In your own TIDE, **Rule Tuning** lists a rule like this under **Too many alerts**, and analysts record what its alerts turned out to be with **Record outcome…** in its rule window, so the case for tuning it rests on evidence.
 
 ### 2. The scanner's maker
 
@@ -222,7 +222,7 @@ FortiGate's antivirus flagged the upload at 21:52:45, two seconds before Suricat
 event.dataset : "fortinet_fortigate.log" and rule.ruleset : "virus" and destination.ip : "192.168.250.70"
 ```
 
-**With TIDE:** *External Alerts* raised this too, as one alert among thousands from the scan. That is the reason to tune a noisy rule: the alert that mattered was there, and nobody would have seen it. **Rule Monitoring** and **Rule Tuning** (question 1) are where that work starts.
+**With TIDE:** *External Alerts* raised this too, as one alert among thousands from the scan. That is the reason to tune a noisy rule: the alert that mattered was there, and nobody would have seen it. **Rule Tuning** (question 1) is where that work starts.
 
 ### 14. The process behind the attacker's commands
 

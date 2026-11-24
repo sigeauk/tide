@@ -133,8 +133,8 @@ def get_iso_code(text: str) -> Optional[str]:
 # actor's own techniques (OpenCTI's merged onto MITRE's).
 ACTOR_SPEC = SimpleNamespace(key="actor", title="Threat actors", singular="Threat actor",
                              window_body="components/mitre_window_actor.html")
-# An actor's sources as source pills: an ATT&CK domain as on the MITRE pages, OpenCTI as CTI, any
-# other connector by its own name.
+# An actor's sources as source pills: an ATT&CK domain as on the MITRE pages, OpenCTI as CTI, a
+# simulation's attacker as SIM, any other connector by its own name.
 _MITRE_SOURCE = re.compile(r"^MITRE:\s*(\w+)$", re.I)
 _OPENCTI = {"octi", "opencti", "stix"}
 
@@ -152,7 +152,8 @@ def _actor_sources(sources) -> List[str]:
 
 def _source_meta() -> dict:
     from app.services import mitre_catalog as catalog
-    return {**catalog.SOURCE_META, "OpenCTI": {"label": "OpenCTI", "code": "CTI", "pill_class": "src-opencti"}}
+    return {**catalog.SOURCE_META, "OpenCTI": {"label": "OpenCTI", "code": "CTI", "pill_class": "src-opencti"},
+            "Simulation": {"label": "The attacker of a running simulation", "code": "SIM", "pill_class": "src-simulation"}}
 
 
 def _group_ids(db) -> dict:

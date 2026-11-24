@@ -1,7 +1,8 @@
 /*
  * CVE Overview (pages/inventory/cve_overview.html, partials/cve_overview_table.html): the feed
  * uploads, and asking the server for the CVE cards the filter bar shows (search, matched only,
- * systems, coverage, sort), 50 at a time.
+ * systems, coverage, sort), 50 at a time. The bar is kept in the address, which the page draws it
+ * from, so a reload or a link shows the same (#119).
  */
 (function () {
     'use strict';
@@ -41,7 +42,15 @@
         var covLabel = $('cov-filter-label');
         if (covLabel) covLabel.textContent = cov === 'all' ? 'Any' : cov + ' selected';
         htmx.ajax('GET', '/api/inventory/cve-overview-cards?' + query.toString(), { target: list, swap: 'innerHTML' });
+        if (window.location.pathname !== '/cve-overview') return;
+        if (query.get('sort') === 'cve_id' && query.get('dir') === 'desc') { query.delete('sort'); query.delete('dir'); }
+        var qs = query.toString();
+        history.replaceState(history.state, '', window.location.pathname + (qs ? '?' + qs : ''));
     }
+    // Arriving with filters in the address: the bar is drawn with them; name them on its dropdowns.
+    document.addEventListener('htmx:afterSettle', function (e) {
+        if (e.detail.target && e.detail.target.id === 'cve-table-container' && window.location.search) load();
+    });
 
     // Feed uploads: the response replaces the CVE table (or reports into the status line).
     async function upload(e, inp) {

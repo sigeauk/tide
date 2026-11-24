@@ -2,7 +2,7 @@
    report/system_report.html when the report includes devices. With no known exploited CVE on any
    device, one line says so in place of the narrative, the coverage ratio and the top CVEs. #}
 <div class="section-banner avoid-break" id="sec-devices">
-    <div class="section-banner-title">Device Exposure</div>
+    <div class="section-banner-title">Device exposure</div>
     <div class="section-banner-sub">Known exploited vulnerabilities on {{ report.system.name }}'s devices, and whether they are detected</div>
 </div>
 
@@ -17,7 +17,7 @@
 <div class="summary-grid avoid-break">
     <div class="stat-card">
         <span class="stat-value">{{ report.total_hosts }}</span>
-        <span class="stat-label">Total Devices</span>
+        <span class="stat-label">Total devices</span>
     </div>
     <div class="stat-card">
         <span class="stat-value {% if report.total_cves > 0 %}danger{% else %}success{% endif %}">{{ report.total_cves }}</span>
@@ -25,19 +25,19 @@
     </div>
     <div class="stat-card">
         <span class="stat-value danger">{{ report.red_hosts }}</span>
-        <span class="stat-label">At Risk Devices</span>
+        <span class="stat-label">At Risk devices</span>
     </div>
     <div class="stat-card">
         <span class="stat-value warning">{{ report.amber_hosts }}</span>
-        <span class="stat-label">Monitored Devices</span>
+        <span class="stat-label">Monitored devices</span>
     </div>
     <div class="stat-card">
         <span class="stat-value success">{{ report.green_hosts }}</span>
-        <span class="stat-label">Clean Devices</span>
+        <span class="stat-label">Clean devices</span>
     </div>
     <div class="stat-card">
         <span class="stat-value {% if report.coverage_ratio >= 80 %}success{% elif report.coverage_ratio >= 40 %}warning{% else %}danger{% endif %}">{{ report.coverage_ratio }}%</span>
-        <span class="stat-label">Coverage Ratio</span>
+        <span class="stat-label">Coverage ratio</span>
     </div>
 </div>
 
@@ -72,7 +72,7 @@
      ══════════════════════════════════════════════════════ -->
 {% if (report.include_devices is not defined or report.include_devices) and report.total_cves %}
 <div class="section-banner avoid-break">
-    <div class="section-banner-title">Vulnerability Coverage Ratio</div>
+    <div class="section-banner-title">Vulnerability coverage ratio</div>
     <div class="section-banner-sub">Detection coverage across all CVE-host pairings</div>
 </div>
 
@@ -83,12 +83,12 @@
     </thead>
     <tbody>
         <tr>
-            <td><span class="badge badge-amber">Amber</span> Monitored (CVE + Detection Applied)</td>
+            <td><span class="badge badge-amber">Amber</span> Monitored (CVE + detection applied)</td>
             <td>{{ report.total_amber_pairs }}</td>
             <td>{% if (report.total_amber_pairs + report.total_red_pairs) > 0 %}{{ report.coverage_ratio }}%{% else %}N/A{% endif %}</td>
         </tr>
         <tr>
-            <td><span class="badge badge-red">Red</span> At Risk (CVE + No Detection)</td>
+            <td><span class="badge badge-red">Red</span> At Risk (CVE + no detection)</td>
             <td>{{ report.total_red_pairs }}</td>
             <td>{% if (report.total_amber_pairs + report.total_red_pairs) > 0 %}{{ 100 - report.coverage_ratio }}%{% else %}N/A{% endif %}</td>
         </tr>
@@ -100,13 +100,13 @@
      ══════════════════════════════════════════════════════ -->
 {% if report.top5_cves %}
 <div class="section-banner avoid-break">
-    <div class="section-banner-title">Top 5 Critical CVEs</div>
+    <div class="section-banner-title">Top 5 critical CVEs</div>
     <div class="section-banner-sub">Ranked by number of at-risk hosts</div>
 </div>
 
 <table>
     <thead>
-        <tr><th>CVE ID</th><th>Vulnerability</th><th>Vendor / Product</th><th>At Risk</th><th>Monitored</th><th>MITRE Techniques</th><th>Ransomware</th></tr>
+        <tr><th>CVE ID</th><th>Vulnerability</th><th>Vendor / product</th><th>At Risk</th><th>Monitored</th><th>MITRE techniques</th><th>Ransomware</th></tr>
     </thead>
     <tbody>
         {% for cve in report.top5_cves %}
@@ -135,14 +135,14 @@
      ══════════════════════════════════════════════════════ -->
 {% if (report.include_devices is not defined or report.include_devices) and report.host_rows %}
 <div class="section-banner avoid-break">
-    <div class="section-banner-title">Device Status Summary</div>
+    <div class="section-banner-title">Device status summary</div>
     <div class="section-banner-sub">Per-device vulnerability and detection overview</div>
 </div>
 
 <table class="cols">
     <colgroup><col class="w-18"/><col class="w-15"/><col/><col class="w-13"/><col class="w-9"/><col class="w-11"/><col class="w-15"/></colgroup>
     <thead>
-        <tr><th>Device</th><th>IP Address</th><th>OS</th><th>Status</th><th>CVEs</th><th>At Risk</th><th>Monitored</th></tr>
+        <tr><th>Device</th><th>IP address</th><th>OS</th><th>Status</th><th>CVEs</th><th>At Risk</th><th>Monitored</th></tr>
     </thead>
     <tbody>
         {% for h in report.host_rows %}

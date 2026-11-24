@@ -1,0 +1,25 @@
+# A scenario for showing TIDE rather than testing players: it has no questions. Its client starts in a
+# believable bad state (gaps, rules that look fine in Kibana but can't work, a noisy rule, and a
+# technique that needs two rules but has one); a presenter fixes it all in TIDE, then Replay data sends
+# the same data again and every fixed rule fires. The folder's name is its id.
+
+title = "TIDE demo: rogue root certificate"   # short, for lists
+date = "24 August 2016"
+environment = "wayne-enterprises"          # whose network the logs come from
+source = "Events made for the demo, in the Splunk Boss of the SOC v1 noise of the same morning"
+licence = "CC0-1.0"                        # the attack is our own; the noise is BOTS v1's (CC0-1.0)
+
+# The attack, in original time (UTC): a banking trojan on Bob Smith's desktop, we8105desk. The invoice
+# opened from Outlook at 15:31:04, a PowerShell download cradle, certutil fetching a root certificate and
+# adding it to Bob's store, the proxy auto-config pointed at the attacker, a UAC prompt, then the
+# certificate added to the machine's store, PDFs made to open the payload and a scheduled task at
+# logon, all by 15:31:55. The noise is the noise pack wayne-24aug-morning's events in the window.
+window = ["2016-08-24T15:25:00Z", "2016-08-24T15:45:00Z"]
+
+# Nothing either side of the window, and no noise pack laid over it: its noise is already in noise/,
+# so noise busy sends the same as normal.
+lead = "0m"
+
+# The attacker's domain, address, certificate, files and names: none of them is in the noise.
+attacker = ["update-cdn.example.net", "203.0.113.47", "8F43288AD272F3103B6FB1428485EA3014C0BCFE", "Invoice_0824",
+            "inv.ps1", "proxy.pac", "acroupd", "AcroUpd.Document", "Adobe Acrobat Update Task"]

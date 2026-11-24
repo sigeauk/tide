@@ -50,8 +50,9 @@
     {% if 'siems' in metric_keys %}
     {% for siem in view.client_siems %}
     <div class="integration-card">
-        <div class="integration-card-name">{{ siem.label }} &middot; {{ siem.name }}</div>
-        <div class="integration-card-url">{{ siem.kibana_url or siem.manager_url or '' }}</div>
+        {# A destination is named as on every other page; its SIEM goes with the address. #}
+        <div class="integration-card-name">{{ siem.name }}</div>
+        <div class="integration-card-url">{{ siem.label }}{% if siem.kibana_url or siem.manager_url %} &middot; {{ siem.kibana_url or siem.manager_url }}{% endif %}</div>
         <span class="integration-card-status status-{{ 'active' if siem.is_active else 'inactive' }}">{{ 'Connected' if siem.is_active else 'Inactive' }}</span>
     </div>
     {% else %}

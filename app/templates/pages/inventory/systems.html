@@ -85,12 +85,12 @@
 <form class="filters-bar mt-md items-end flex-nowrap overflow-x-auto" data-submit="systems.filter">
     <div class="filter-group grow">
         <label class="form-label">Search systems</label>
-        <input id="system-filter-q" class="form-input" type="text" data-input="systems.filter" placeholder="Search systems by name, description, classification, or metadata">
+        <input id="system-filter-q" class="form-input" type="text" name="q" value="{{ sf.q }}" data-input="systems.filter" placeholder="Search systems by name, description, classification, or metadata">
     </div>
     {% set clf_opts = [('', 'Any')] %}
     {% for clf in classifications %}{% set _ = clf_opts.append((clf.name | lower, clf.name)) %}{% endfor %}
-    {{ filter_choice('system-filter-classification', 'classification', 'Classification', clf_opts, '', attrs='data-change="systems.filter"') }}
-    {{ filter_choice('system-filter-risk', 'risk', 'Risk status', [('', 'Any'), ('red', 'At Risk'), ('amber', 'Monitored'), ('green', 'Clean')], '', attrs='data-change="systems.filter"') }}
+    {{ filter_choice('system-filter-classification', 'classification', 'Classification', clf_opts, sf.classification, attrs='data-change="systems.filter"') }}
+    {{ filter_choice('system-filter-risk', 'risk', 'Risk status', [('', 'Any'), ('red', 'At Risk'), ('amber', 'Monitored'), ('green', 'Clean')], sf.risk, attrs='data-change="systems.filter"') }}
     <div class="filter-group self-end">
         <button class="btn btn-secondary" type="button" data-click="systems.clearFilters">Clear</button>
     </div>
@@ -231,5 +231,4 @@
 </div>
 
 
-<div id="slide-panel-container"></div>
 {% endblock %}
