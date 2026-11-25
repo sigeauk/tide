@@ -1,5 +1,6 @@
 """Simulations (#118, app.services.sim): the Simulations page, where a Sim Admin starts a simulation on
-one of the client's SIEMs, follows it and ends it (page:simulations), and the Simulation page, where the
+one of the client's SIEMs (with players, or none yet), follows it, adds players while it runs and ends
+it (page:simulations), and the Simulation page, where the
 players chosen for it answer its questions (page:simulation; each call also checks the person is one of
 its players). Reading needs read and changing needs write on each (main.py's maps).
 
@@ -8,6 +9,8 @@ destination (CLAUDE.md section 6): the SIEM is chosen by its id among the client
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import math
 import re
@@ -33,6 +36,10 @@ BOARD = "partials/simulation_board.html"
 DASHBOARD = "partials/simulation_dashboard.html"
 ANSWERS_TAB = "partials/simulation_answers.html"
 TAB = "partials/simulation_tab.html"
+PLAYERS = "partials/simulation_players_dialog.html"
+LIVE = "partials/simulation_live.html"
+SCENARIO_DIALOG = "partials/simulation_scenario_dialog.html"
+NEW_PARTS = "partials/simulation_new_parts.html"
 STATES = {"setting_up": "Setting up", "replaying": "Replaying", "playing": "Playing", "ending": "Ending",
           "ended": "Ended", "cleaning_up": "Cleaning up", "failed": "Failed"}
 ANSWERS = {"right": "Right", "wrong": "Not right: try again.", "solved": "You've answered it already.",
@@ -50,6 +57,19 @@ def _who(user) -> tuple[str, str]:
     if user is None:
         return "dev-user-001", "Local Developer"
     return str(user.id), str(getattr(user, "label", None) or user.name or user.username)
+
+
+def _client_users(db, client_id: str) -> list[dict]:
+    """The client's users who can be chosen to play, by name."""
+    return sorted(db.get_client_users(client_id) or [], key=lambda u: (u.get("full_name") or u["username"]).lower())
+
+
+def _people(db, client_id: str, chosen) -> list[tuple[str, str]]:
+    """The client's users among the ids ticked, as a simulation keeps its players: (id, name). An id
+    that isn't one of the client's users is left out."""
+    chosen = {str(u) for u in chosen}
+    return [(u["id"], u.get("full_name") or u["username"]) for u in db.get_client_users(client_id) or []
+            if u["id"] in chosen]
 
 
 def _actor(user) -> Optional[str]:
@@ -94,9 +114,10 @@ def _names() -> Dict[str, str]:
 
 
 def _kibana_link(db, client_id: str, sim: dict) -> str:
-    """Its space's alerts in Kibana, while the space is there (until it is cleaned up)."""
+    """Its space's alerts in Kibana, while the space is there (until a clean-up deletes it)."""
     url = ((db.get_siem_inventory_item(sim["siem_id"]) or {}).get("kibana_url") or "").rstrip("/")
-    return f"{url}/s/{sim['space']}/app/security/alerts" if url and not sim.get("cleaned") else ""
+    deleted = ((sim.get("cleanup") or {}).get("space") or {}).get("ok")
+    return f"{url}/s/{sim['space']}/app/security/alerts" if url and not deleted else ""
 
 
 def for_namespace(text: str, namespace: str) -> str:
@@ -145,7 +166,7 @@ def page_context(db, client_id: str, user, tab: str = "") -> Dict[str, Any]:
     store = _store(db, client_id)
     sims = simulation.list_all(store)
     return {"siems": siems(db), "scenarios": scenarios(), "noise_levels": packs.NOISE_LEVELS,
-            "users": sorted(db.get_client_users(client_id) or [], key=lambda u: (u.get("full_name") or u["username"]).lower()),
+            "users": _client_users(db, client_id),
             "sims": sims, "names": _names(), "states": STATES,
             "can_run": user is None or user.can_write("page:simulations"),
             "selected": None, "tab": tab if tab in TABS else "run", "focus": _focus(sims)}
@@ -162,11 +183,12 @@ def _live(sim: dict) -> bool:
     return sim["state"] in (*simulation.ACTIVE, *simulation.OPEN) and not sim["interrupted"]
 
 
-def _questions(sim: dict) -> list:
-    """Each of the simulation's scenarios with its questions, each with its write-up for its own data
-    (``answer_parts``) and how many of its searches can be saved in Kibana."""
+def _questions(sim: dict, shown: list) -> list:
+    """Each of the simulation's scenarios whose questions are shown (``shown``, simulation.question_scenarios),
+    with its questions, each with its write-up for its own data (``answer_parts``) and how many of its
+    searches can be saved in Kibana."""
     out = []
-    for sid in sim["scenarios"]:
+    for sid in shown:
         try:
             sc = packs.scenario(sid)
             items = []
@@ -179,19 +201,185 @@ def _questions(sim: dict) -> list:
     return out
 
 
+# ── One simulation, as the Run tab shows it ────────────────────────────────────────────────────
+
+PART_NAMES = {"logs": "its logs", "rules": "its rules", "tide": "set up in TIDE", "questions": "its questions"}
+PART_ITEMS = {   # a row's ⋮, for a part not done when it was added: (its label, icon, what it asks first)
+    "rules": ("Make its rules", "shield", "Make {name}'s rules in the simulation's space? Where it is set up in TIDE, "
+                                          "they are mapped onto its systems."),
+    "tide": ("Set it up in TIDE", "monitor", "Set {name} up in TIDE: its baseline, systems and threat actor, with its "
+                                             "rules in the space mapped?"),
+    "questions": ("Show its questions", "book-open", "Show {name}'s questions to the players? They can't be hidden again."),
+}
+
+
+def _nth(n: int) -> str:
+    return f"{n}{'th' if 10 <= n % 100 <= 20 else {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')}"
+
+
+def _and(items: list) -> str:
+    return " and ".join([", ".join(items[:-1]), items[-1]] if len(items) > 1 else items)
+
+
+def _question_count(sc: Optional[packs.Scenario]) -> int:
+    try:
+        return len(game.questions(sc)) if sc else 0
+    except packs.PackError:
+        return 0
+
+
+def _rows(sim: dict, parts: list, reps: list, rule_rows: list, objs: list, names: dict) -> list:
+    """Each scenario as the Scenarios table shows it: what was made for it, its replays not yet finished
+    (how far each has got, or what a queued one waits for), what its last finished replay did, and the
+    parts it can still be given."""
+    unfinished = [r for r in reps if r["state"] in simulation.WAITING]
+    out = []
+    for p in parts:
+        sid = p["scenario"]
+        try:
+            sc = packs.scenario(sid)
+        except packs.PackError:
+            sc = None
+        asked = _question_count(sc)
+        mine = [r for r in reps if r["scenario"] in (sid, "")]          # "": an older simulation's, of every scenario
+        live = []
+        for r in mine:
+            if r["state"] not in simulation.WAITING:
+                continue
+            total = sc.window_events(r["noise"]) if sc else None
+            sent = int((r["progress"] or {}).get("sent") or 0)
+            before = [names.get(x["scenario"], x["scenario"]) for x in unfinished if x["n"] < r["n"]] if r["after"] else []
+            live.append({**r, "sent": sent, "total": total, "pct": min(100, sent * 100 // total) if total else None,
+                         "again": f" for the {_nth(r['pass'])} time" if (r["pass"] or 1) > 1 else "",
+                         "waits_for_rules": r["state"] == simulation.QUEUED and p["state"] == "setting_up",
+                         "before": list(dict.fromkeys(before)),
+                         "original": ((r["progress"] or {}).get("original_time") or "")[11:16]})
+        done = [r for r in mine if r["state"] not in simulation.WAITING]
+        made_in_tide = [o for o in objs if o.get("scenario") == sid and o["kind"] in client.IN_TIDE]
+        systems = sum(1 for o in made_in_tide if o["kind"] == client.SYSTEM)
+        rule_count = sum(1 for r in rule_rows if r["scenario"] == sid and r["state"] == "created")
+        made = []
+        if p["rules"]:
+            made.append(f"{rule_count} rule{'' if rule_count == 1 else 's'}")
+        if p["tide"]:
+            made.append(f"baseline and {systems} system{'' if systems == 1 else 's'} in TIDE" if made_in_tide else "set up in TIDE")
+        if p["questions"] and asked:
+            made.append(f"{asked} questions")
+        out.append({"part": p, "scenario": sc, "label": names.get(sid, sid), "made": made, "live": live,
+                    "summary": _summary([r for r in done if r["state"] != simulation.CANCELLED] or done),
+                    "missing": [k for k in ("rules", "tide", "questions") if not p[k] and (k != "questions" or asked)]})
+    return out
+
+
+def _summary(done: list) -> tuple[str, str]:
+    """(what a scenario's finished replays did, its text class): the last, and how many were replayed."""
+    if not done:
+        return "Not replayed", "text-secondary"
+    last, times = done[-1], sum(1 for r in done if r["state"] == simulation.REPLAYED)
+    sent = int((last["progress"] or {}).get("sent") or 0)
+    at = f" at {last['finished_at']:%H:%M}" if last.get("finished_at") else ""
+    if last["state"] == simulation.FAILED:
+        return f"Could not replay it: {last['error'] or 'no reason given'}", "text-danger"
+    if last["state"] == simulation.CANCELLED:
+        return "Its replay was cancelled", "text-secondary"
+    if last["state"] == simulation.STOPPED:
+        return f"Stopped{at}, after {sent:,} events", "text-secondary"
+    return (f"Replayed{'' if times == 1 else f' {times} times'}: {sent:,} events, the last done{at}", "")
+
+
+def _activity(sim: dict, parts: list, reps: list, players: list, objs: list, names: dict, limit: int = 50) -> list:
+    """What happened in the simulation, newest first: its start, each scenario added with its parts, each
+    replay asked for, started (when it waited) and finished, each player added, each problem met, its end."""
+    events: list = []
+
+    def add(at, text: str, warn: bool = False) -> None:
+        if at:
+            events.append((at, len(events), text, warn))
+
+    def name(sid: str) -> str:
+        return names.get(sid, sid) if sid else "Every scenario"
+
+    add(sim["created_at"], f"{sim['created_by']} started it")
+    for p in parts:
+        asked = [PART_NAMES[k] for k in ("rules", "tide", "questions", "logs") if p[k]]
+        add(p["added_at"], f"{p['added_by']} added {name(p['scenario'])}: {_and(asked) if asked else 'nothing yet'}")
+    for pl in players:
+        add(pl.get("added_at"), f"{pl.get('added_by') or 'Someone'} added {pl['name']} as a player")
+    for r in reps:
+        waited = r["started_at"] is None or (r["requested_at"] and (r["started_at"] - r["requested_at"]).total_seconds() > 2)
+        again = f", for the {_nth(r['pass'])} time" if (r["pass"] or 1) > 1 else ""
+        add(r["requested_at"], f"{r['requested_by']} asked to replay {name(r['scenario'])}'s logs"
+                               f"{', after the replays before them' if r['after'] and waited else ''}")
+        if r["started_at"] and waited:
+            add(r["started_at"], f"{name(r['scenario'])}'s logs replaying{again}")
+        sent = int((r["progress"] or {}).get("sent") or 0)
+        add(r["finished_at"], {
+            simulation.REPLAYED: f"{name(r['scenario'])}'s logs replayed{again}: {sent:,} events",
+            simulation.STOPPED: f"{name(r['scenario'])}'s replay stopped, after {sent:,} events",
+            simulation.CANCELLED: f"{name(r['scenario'])}'s replay cancelled",
+            simulation.FAILED: f"Could not replay {name(r['scenario'])}'s logs: {r['error'] or 'no reason given'}",
+        }.get(r["state"], ""), warn=r["state"] == simulation.FAILED)
+    for o in objs:
+        if o["kind"] == client.PROBLEM:
+            add(o.get("made_at"), f"{o['name']}: {o['note']}", warn=True)
+    add(sim["ended_at"], f"{sim['ended_by'] or 'Someone'} ended it")
+    events.sort(key=lambda e: (e[0], e[1]), reverse=True)
+    return [{"at": at, "text": text, "warn": warn} for at, _, text, warn in events[:limit]]
+
+
+def _cleanup_lines(sim: dict, status: dict) -> list:
+    """What a clean-up removed, kept or couldn't remove, part by part, once one has run."""
+    report = sim.get("cleanup") or {}
+    if not report:
+        return []
+    out = []
+    for part, label, steps in (("tide", "What it set up in TIDE", ("tide",)), ("space", "its space", ("destination", "space", "alerts")),
+                               ("data", "its logs", ("data",))):
+        st = status[part]
+        if st == "failed":
+            why = next((report[s]["error"] for s in steps if report.get(s) and not report[s]["ok"]), "no reason given")
+            out.append(f"{label}: not removed: {why}")
+        elif st != "none":
+            out.append(f"{label}: {'removed' if st == 'done' else 'kept'}")
+    return out
+
+
+def _panel(db, client_id: str, sim: dict, user) -> Dict[str, Any]:
+    """A simulation's panel: its figures, its scenarios and their replays, its activity, what it set up
+    in TIDE, the board and its rules; ``poll``, how often it asks for itself again (every 3 s while
+    something is under way, 15 s while it runs), and ``version``, its shape (what it offers), which
+    simulation_live compares to draw it again in full only when that changed."""
+    store, sim_id, names = _store(db, client_id), sim["id"], _names()
+    parts, reps = simulation.scenario_parts(store, sim_id), simulation.replays(store, sim_id)
+    objs, rule_rows, players = client.objects(store, sim_id), simulation.rule_results(store, sim_id), simulation.players(store, sim_id)
+    can_run, kibana = user is None or user.can_write("page:simulations"), _kibana_link(db, client_id, sim)
+    busy = not sim["interrupted"] and (sim["state"] in simulation.ACTIVE
+                                        or any(p["state"] == "setting_up" for p in parts)
+                                        or any(r["state"] in simulation.WAITING for r in reps))
+    opened = sim["state"] in simulation.OPEN and not sim["interrupted"]
+    cleanup = simulation.cleanup_status(sim, objs)
+    shape = [sim["state"], sim["interrupted"], sim["cleaned"], sim["cleanup_failed"], bool(kibana), can_run, cleanup,
+             [(p["scenario"], p["logs"], p["rules"], p["tide"], p["questions"], p["state"], p["interrupted"]) for p in parts]]
+    figures = [r["progress"] or {} for r in reps]
+    return {"sim": sim, "names": names, "states": STATES, "players": players, "board": simulation.board(store, sim_id),
+            "rules": rule_rows, "in_tide": [o for o in objs if o["kind"] in (*client.IN_TIDE, client.PROBLEM)],
+            "rows": _rows(sim, parts, reps, rule_rows, objs, names),
+            "activity": _activity(sim, parts, reps, players, objs, names),
+            "sent": sum(int(f.get("sent") or 0) for f in figures), "refused": sum(int(f.get("refused") or 0) for f in figures),
+            "first_refusal": next((f["first_refusal"] for f in figures if f.get("first_refusal")), ""),
+            "kibana": kibana, "can_run": can_run, "running": simulation.running(sim), "opened": opened, "cleanup": cleanup,
+            "cleanup_lines": _cleanup_lines(sim, cleanup),
+            "part_items": PART_ITEMS, "poll": "3s" if busy else ("15s" if opened else None),
+            "version": hashlib.sha256(json.dumps(shape, default=str).encode()).hexdigest()[:12]}
+
+
 def _detail(request: Request, db, client_id: str, sim_id: str, user, note: str = "", error: str = "",
             status_code: int = 200) -> HTMLResponse:
-    store = _store(db, client_id)
-    sim = simulation.get(store, sim_id)
+    sim = simulation.get(_store(db, client_id), sim_id)
     if sim is None:
         return HTMLResponse('<div class="alert alert-danger">Could not open it: there is no such simulation.</div>',
                             status_code=404)
-    ctx = {"sim": sim, "names": _names(), "states": STATES, "players": simulation.players(store, sim_id),
-           "board": simulation.board(store, sim_id), "rules": simulation.rule_results(store, sim_id),
-           "in_tide": [o for o in client.objects(store, sim_id) if o["kind"] in (*client.IN_TIDE, client.PROBLEM)],
-           "kibana": _kibana_link(db, client_id, sim), "note": note, "error": error,
-           "can_run": user is None or user.can_write("page:simulations"), "active": sim["state"] in simulation.ACTIVE
-           and not sim["interrupted"]}
+    ctx = {**_panel(db, client_id, sim, user), "note": note, "error": error}
     return request.app.state.templates.TemplateResponse(request, DETAIL, ctx, status_code=status_code)
 
 
@@ -284,7 +472,7 @@ def _dashboard(request: Request, store, sim: dict, me: Optional[str], poll_url: 
     sim_id = sim["id"]
     board = simulation.board(store, sim_id)
     stats = simulation.question_stats(store, sim_id)
-    items = [(sc, q, stats.get(q.key, {})) for sc, qs in _questions(sim) for q, *_ in qs]
+    items = [(sc, q, stats.get(q.key, {})) for sc, qs in _questions(sim, simulation.question_scenarios(store, sim)) for q, *_ in qs]
     return request.app.state.templates.TemplateResponse(request, DASHBOARD, {
         "sim": sim, "names": _names(), "states": STATES, "board": board, "me": me, "player": me is not None,
         "items": items, "chart": score_chart(simulation.timeline(store, sim_id)), "live": _live(sim),
@@ -300,7 +488,7 @@ def simulation_answers(sim_id: str, request: Request, db: DbDep, client_id: Acti
     own data, and the notes on its rules (for the Sim Admin)."""
     sim = _sim_or_404(db, client_id, sim_id)
     return request.app.state.templates.TemplateResponse(request, ANSWERS_TAB, {
-        "sim": sim, "questions": _questions(sim), "can_save": _can_save(sim, user)})
+        "sim": sim, "questions": _questions(sim, simulation.question_scenarios(_store(db, client_id), sim)), "can_save": _can_save(sim, user)})
 
 
 def _can_save(sim: dict, user) -> bool:
@@ -362,22 +550,58 @@ def simulations_list(request: Request, db: DbDep, client_id: ActiveClient, user:
 
 @router.post("/api/simulations/start", response_class=HTMLResponse)
 async def start_simulation(request: Request, db: DbDep, client_id: ActiveClient, user: RequireUser):
+    """Start a simulation with one scenario (``scenario``; a script may send several as ``scenarios``) and
+    the parts ticked for it."""
     form = await request.form()
+    parts = _parts(form)
     try:
         siem = simulation.siem_for(db, str(form.get("siem_id") or ""))
-        chosen = {str(u) for u in form.getlist("players")}
-        people = [(u["id"], u.get("full_name") or u["username"]) for u in db.get_client_users(client_id) or []
-                  if u["id"] in chosen]
-        sim_id = simulation.start(_store(db, client_id), siem, [str(s) for s in form.getlist("scenarios")],
-                                  str(form.get("noise") or "quiet"), float(form.get("speed") or 10), people,
-                                  _who(user)[1], actor=_actor(user))
+        chosen = form.getlist("scenario") or form.getlist("scenarios")
+        sim_id = simulation.start(_store(db, client_id), siem, [str(s) for s in chosen],
+                                  str(form.get("noise") or "quiet"), float(form.get("speed") or 10),
+                                  _people(db, client_id, form.getlist("players")), _who(user)[1], actor=_actor(user),
+                                  parts=parts)
     except (simulation.SimError, ValueError) as exc:
         # A refusal is shown where the simulation would have opened: htmx swaps only a 2xx, and a 4xx
         # would leave just app.js's "Could not complete that" toast, without the reason.
         return HTMLResponse(f'<div class="alert alert-danger">Could not start it: {exc}</div>')
-    response = _detail(request, db, client_id, sim_id, user, note="Started: setting up its space, then replaying.")
+    response = _detail(request, db, client_id, sim_id, user, note=f"Started: setting up its space, then {_doing(parts)}.")
     response.headers["HX-Trigger"] = "simulationsChanged"
     _players_changed(client_id)
+    return response
+
+
+def _parts(form) -> simulation.Parts:
+    """The parts ticked on a form (its ``parts`` boxes, under ``parts_given``); a form without them (a
+    script's) asks for all of them."""
+    if not form.get("parts_given"):
+        return simulation.Parts()
+    ticked = {str(p) for p in form.getlist("parts")}
+    return simulation.Parts(**{k: k in ticked for k in ("logs", "rules", "tide", "questions")})
+
+
+def _doing(parts: simulation.Parts) -> str:
+    """What a scenario's parts do, as a note says it."""
+    steps = [text for on, text in ((parts.rules, "making its rules"), (parts.tide, "setting it up in TIDE"),
+                                   (parts.questions, "showing its questions"), (parts.logs, "replaying its logs")) if on]
+    return _and(steps) if steps else "nothing more"
+
+
+@router.get("/api/simulations/{sim_id}/live", response_class=HTMLResponse)
+def simulation_live(sim_id: str, request: Request, db: DbDep, client_id: ActiveClient, user: RequireUser, v: str = ""):
+    """What changed in a simulation's panel since it was drawn as ``v`` (its version): its figures, each
+    scenario's replays, its activity, what it set up in TIDE, the board and its rules, swapped out of
+    band, so a menu or dialog open on it stays open. When what it offers changed (its state, a scenario
+    added), the whole panel instead (HX-Reswap), and the list hears of it."""
+    sim = simulation.get(_store(db, client_id), sim_id)
+    if sim is None:
+        return HTMLResponse('<div class="alert alert-danger">Could not show it: it has been cleared.</div>',
+                            headers={"HX-Reswap": "innerHTML"})
+    ctx = _panel(db, client_id, sim, user)
+    if ctx["version"] == v:
+        return request.app.state.templates.TemplateResponse(request, LIVE, ctx)
+    response = request.app.state.templates.TemplateResponse(request, DETAIL, {**ctx, "note": "", "error": ""})
+    response.headers.update({"HX-Reswap": "innerHTML", "HX-Trigger": "simulationsChanged"})
     return response
 
 
@@ -387,7 +611,8 @@ def simulation_detail(sim_id: str, request: Request, db: DbDep, client_id: Activ
 
 
 def _act(request: Request, db, client_id: str, sim_id: str, user, what: str, note: str, act) -> HTMLResponse:
-    """End or clean up a simulation (act(store, siem, sim)), then show it with a note, or why not."""
+    """Do something to a simulation (act(store, siem, sim): end it, clean it up, stop or cancel a replay, give a
+    scenario a part), then show it with a note, or why not ("Could not <what>: <why>")."""
     store = _store(db, client_id)
     sim = simulation.get(store, sim_id)
     try:
@@ -395,8 +620,8 @@ def _act(request: Request, db, client_id: str, sim_id: str, user, what: str, not
             raise simulation.SimError("there is no such simulation")
         act(store, simulation.siem_for(db, sim["siem_id"]), sim)
     except simulation.SimError as exc:
-        return _detail(request, db, client_id, sim_id, user, error=f"Could not {what} it: {exc}") \
-            if sim else HTMLResponse(f'<div class="alert alert-danger">Could not {what} it: {exc}.</div>', status_code=404)
+        return _detail(request, db, client_id, sim_id, user, error=f"Could not {what}: {exc}") \
+            if sim else HTMLResponse(f'<div class="alert alert-danger">Could not {what}: {exc}.</div>', status_code=404)
     response = _detail(request, db, client_id, sim_id, user, note=note)
     response.headers["HX-Trigger"] = "simulationsChanged"
     _players_changed(client_id)
@@ -406,24 +631,204 @@ def _act(request: Request, db, client_id: str, sim_id: str, user, what: str, not
 @router.post("/api/simulations/{sim_id}/end", response_class=HTMLResponse)
 def end_simulation(sim_id: str, request: Request, db: DbDep, client_id: ActiveClient, user: RequireUser):
     """Stop it: the replay and the answering end, its rules' alerts are counted; its space stays."""
-    return _act(request, db, client_id, sim_id, user, "end", "Ending: stopping the replay and counting each rule's alerts.",
+    return _act(request, db, client_id, sim_id, user, "end it", "Ending: stopping its replays and counting each rule's alerts.",
                 lambda store, siem, sim: simulation.end(store, siem, sim["id"], _who(user)[1]))
 
 
-@router.post("/api/simulations/{sim_id}/replay", response_class=HTMLResponse)
-def replay_simulation_data(sim_id: str, request: Request, db: DbDep, client_id: ActiveClient, user: RequireUser):
-    """Replay data: send its data again, stamped now, so rules made or fixed since the last pass see it."""
-    return _act(request, db, client_id, sim_id, user, "replay",
-                "Replaying its data again: rules made or fixed since the last pass will see it.",
-                lambda store, siem, sim: simulation.replay_data(store, siem, sim["id"]))
+# ── Its scenarios and replays ──────────────────────────────────────────────────────────────────
+
+def _scenario_dialog(request: Request, db, client_id: str, sim: dict, user, scenario: str = "", error: str = "",
+                     form: Optional[dict] = None) -> HTMLResponse:
+    """Add scenario (no ``scenario``: those not in it yet, with the parts to tick) or Replay again (one of
+    its scenarios: the noise level, speed and when). In #modal-container, so the panel's refresh leaves
+    it open. When something replays or is queued, it asks when: now, alongside it, or after."""
+    store = _store(db, client_id)
+    reps = simulation.replays(store, sim["id"])
+    last = next((r for r in reversed(reps) if r["scenario"] == scenario), None) if scenario else None
+    choices = [s for s in scenarios() if (s["id"] == scenario if scenario else s["id"] not in sim["scenarios"])]
+    defaults = {"noise": (last or {}).get("noise") or sim["noise"], "speed": (last or {}).get("speed", sim["speed"])}
+    return request.app.state.templates.TemplateResponse(request, SCENARIO_DIALOG, {
+        "sim": sim, "scenario": scenario, "label": _names().get(scenario, scenario), "choices": choices,
+        "noise_levels": packs.NOISE_LEVELS, "form": {**defaults, **(form or {})}, "error": error,
+        "when": any(r["state"] in simulation.WAITING for r in reps),
+        "opened": sim["state"] in simulation.OPEN and not sim["interrupted"],
+        "can_run": user is None or user.can_write("page:simulations")})
+
+
+def _refused(response: HTMLResponse) -> HTMLResponse:
+    """A dialog drawn again with why it was refused, in #modal-container rather than the panel."""
+    response.headers.update({"HX-Retarget": "#modal-container", "HX-Reswap": "innerHTML"})
+    return response
+
+
+def _done(response: HTMLResponse) -> HTMLResponse:
+    """The panel drawn again after a dialog's action: the dialog closes, and the list hears of it."""
+    response.headers.update({"HX-Trigger-After-Swap": "tideCloseModal", "HX-Trigger": "simulationsChanged"})
+    return response
+
+
+@router.get("/api/simulations/{sim_id}/add-scenario", response_class=HTMLResponse)
+def add_scenario_dialog(sim_id: str, request: Request, db: DbDep, client_id: ActiveClient, user: RequireUser):
+    return _scenario_dialog(request, db, client_id, _sim_or_404(db, client_id, sim_id), user)
+
+
+@router.post("/api/simulations/{sim_id}/scenarios", response_class=HTMLResponse)
+async def add_simulation_scenario(sim_id: str, request: Request, db: DbDep, client_id: ActiveClient, user: RequireUser):
+    """Add scenario: the one chosen, doing the parts ticked; its replay now or after those under way."""
+    sim = _sim_or_404(db, client_id, sim_id)
+    form = await request.form()
+    scenario, parts = str(form.get("scenario") or ""), _parts(form)
+    kept = {"scenario": scenario, "parts": [str(p) for p in form.getlist("parts")], "noise": str(form.get("noise") or ""),
+            "speed": form.get("speed") or "", "when": str(form.get("when") or "now")}
+    try:
+        if not scenario:
+            raise simulation.SimError("choose a scenario.")
+        simulation.add_scenario(_store(db, client_id), simulation.siem_for(db, sim["siem_id"]), sim_id, scenario, parts,
+                                str(form.get("noise") or "quiet"), float(form.get("speed") or 10), _who(user)[1],
+                                after=kept["when"] == "after", actor=_actor(user))
+    except (simulation.SimError, ValueError) as exc:
+        return _refused(_scenario_dialog(request, db, client_id, sim, user, error=f"Could not add it: {exc}", form=kept))
+    logger.info("Simulation %s: %s added scenario %s (%s)", sim_id, _who(user)[1], scenario, parts)
+    return _done(_detail(request, db, client_id, sim_id, user,
+                         note=f"Added {_names().get(scenario, scenario)}: {_doing(parts)}."))
+
+
+@router.get("/api/simulations/{sim_id}/scenarios/{scenario}/replay", response_class=HTMLResponse)
+def replay_scenario_dialog(sim_id: str, scenario: str, request: Request, db: DbDep, client_id: ActiveClient,
+                           user: RequireUser):
+    sim = _sim_or_404(db, client_id, sim_id)
+    if scenario not in sim["scenarios"]:
+        raise HTTPException(status_code=404, detail="It has no such scenario.")
+    return _scenario_dialog(request, db, client_id, sim, user, scenario=scenario)
+
+
+@router.post("/api/simulations/{sim_id}/scenarios/{scenario}/replay", response_class=HTMLResponse)
+async def replay_simulation_scenario(sim_id: str, scenario: str, request: Request, db: DbDep, client_id: ActiveClient,
+                                     user: RequireUser):
+    """Replay again: a scenario's logs sent again, stamped now, as its next pass, so rules made or fixed
+    since see them; now, alongside any replay, or after those under way."""
+    sim = _sim_or_404(db, client_id, sim_id)
+    form = await request.form()
+    after = str(form.get("when") or "now") == "after"
+    kept = {"noise": str(form.get("noise") or ""), "speed": form.get("speed") or "", "when": "after" if after else "now"}
+    try:
+        simulation.replay_scenario(_store(db, client_id), simulation.siem_for(db, sim["siem_id"]), sim_id, scenario,
+                                   str(form.get("noise") or "quiet"), float(form.get("speed") or 10), _who(user)[1],
+                                   after=after)
+    except (simulation.SimError, ValueError) as exc:
+        return _refused(_scenario_dialog(request, db, client_id, sim, user, scenario=scenario,
+                                         error=f"Could not replay it: {exc}", form=kept))
+    name = _names().get(scenario, scenario)
+    return _done(_detail(request, db, client_id, sim_id, user,
+                         note=f"Queued {name}'s logs, after the replays before them." if after
+                         else f"Replaying {name}'s logs again: rules made or fixed since will see them."))
+
+
+@router.post("/api/simulations/{sim_id}/scenarios/{scenario}/parts", response_class=HTMLResponse)
+async def add_simulation_parts(sim_id: str, scenario: str, request: Request, db: DbDep, client_id: ActiveClient,
+                               user: RequireUser):
+    """A part a scenario wasn't given when it was added (a row's ⋮): its rules, its set-up in TIDE or its
+    questions."""
+    part = str((await request.form()).get("part") or "")
+    if part not in PART_ITEMS:
+        raise HTTPException(status_code=404, detail="There is no such part.")
+    name = _names().get(scenario, scenario)
+    notes = {"rules": f"Making {name}'s rules in its space, and mapping them onto its set-up in TIDE if it has one.",
+             "tide": f"Setting {name} up in TIDE.", "questions": f"{name}'s questions are shown to the players."}
+    return _act(request, db, client_id, sim_id, user, f"give {name} that", notes[part],
+                lambda store, siem, sim: simulation.add_parts(store, siem, sim["id"], scenario, actor=_actor(user),
+                                                              **{part: True}))
+
+
+@router.post("/api/simulations/{sim_id}/replays/{n}/stop", response_class=HTMLResponse)
+def stop_simulation_replay(sim_id: str, n: int, request: Request, db: DbDep, client_id: ActiveClient, user: RequireUser):
+    """Stop a replay that is running; what it sent stays, and those queued after it may start."""
+    return _act(request, db, client_id, sim_id, user, "stop the replay", "Stopping the replay: what it sent stays.",
+                lambda store, siem, sim: simulation.stop_replay(store, siem, sim["id"], n))
+
+
+@router.post("/api/simulations/{sim_id}/replays/{n}/cancel", response_class=HTMLResponse)
+def cancel_simulation_replay(sim_id: str, n: int, request: Request, db: DbDep, client_id: ActiveClient,
+                             user: RequireUser):
+    """Take a queued replay out of the queue."""
+    return _act(request, db, client_id, sim_id, user, "cancel the replay", "Took the replay out of the queue.",
+                lambda store, siem, sim: simulation.cancel_replay(store, siem, sim["id"], n))
+
+
+def _players_dialog(request: Request, db, client_id: str, sim: dict, user, error: str = "") -> HTMLResponse:
+    playing = {p["user_id"] for p in simulation.players(_store(db, client_id), sim["id"])}
+    return request.app.state.templates.TemplateResponse(request, PLAYERS, {
+        "sim": sim, "users": [u for u in _client_users(db, client_id) if u["id"] not in playing],
+        "running": simulation.running(sim), "can_run": user is None or user.can_write("page:simulations"), "error": error})
+
+
+@router.get("/api/simulations/{sim_id}/players", response_class=HTMLResponse)
+def add_players_dialog(sim_id: str, request: Request, db: DbDep, client_id: ActiveClient, user: RequireUser):
+    """Add players: the client's users who aren't playing it yet, to tick. A dialog in #modal-container,
+    so the simulation's own refresh (every 3 s while it sets up or replays) leaves it open."""
+    return _players_dialog(request, db, client_id, _sim_or_404(db, client_id, sim_id), user)
+
+
+@router.post("/api/simulations/{sim_id}/players", response_class=HTMLResponse)
+async def add_simulation_players(sim_id: str, request: Request, db: DbDep, client_id: ActiveClient, user: RequireUser):
+    """Add the users ticked as players while it runs: the simulation is drawn again with a note, the
+    dialog closes, and their sidebars show Simulation at once. None ticked: the dialog says so."""
+    sim = _sim_or_404(db, client_id, sim_id)
+    people = _people(db, client_id, (await request.form()).getlist("players"))
+    if not people:
+        response = _players_dialog(request, db, client_id, sim, user, error="Tick at least one user to add.")
+        response.headers.update({"HX-Retarget": "#modal-container", "HX-Reswap": "innerHTML"})
+        return response
+    try:
+        added = simulation.add_players(_store(db, client_id), sim_id, people, by=_who(user)[1])
+    except simulation.SimError as exc:
+        response = _detail(request, db, client_id, sim_id, user, error=f"Could not add players: {exc}")
+    else:
+        who = " and ".join([", ".join(added[:-1]), added[-1]] if len(added) > 1 else added)
+        response = _detail(request, db, client_id, sim_id, user,
+                           note=f"Added {who}: Simulation is in their sidebar now." if added
+                           else "They are playing it already.")
+        logger.info("Simulation %s: %s added %d player(s)", sim_id, _who(user)[1], len(added))
+        _players_changed(client_id)
+    response.headers["HX-Trigger-After-Swap"] = "tideCloseModal"
+    return response
+
+
+CLEAN_UP_DIALOG = "partials/simulation_cleanup_dialog.html"
+CLEAN_LABELS = {"tide": "what it set up in TIDE", "space": "its space", "data": "its logs"}
+
+
+def _cleanup_dialog(request: Request, db, client_id: str, sim: dict, user, error: str = "") -> HTMLResponse:
+    """Clean up: its three parts (what it set up in TIDE, its space, its logs), each ticked while it is
+    left (or failed), or saying it was removed. In #modal-container, as the panel's other dialogs."""
+    store = _store(db, client_id)
+    return request.app.state.templates.TemplateResponse(request, CLEAN_UP_DIALOG, {
+        "sim": sim, "status": simulation.cleanup_status(sim, client.objects(store, sim["id"])), "error": error,
+        "ended": sim["state"] == "ended" or (sim["state"] == "cleaning_up" and sim["interrupted"]),
+        "can_run": user is None or user.can_write("page:simulations")})
+
+
+@router.get("/api/simulations/{sim_id}/clean-up", response_class=HTMLResponse)
+def clean_up_dialog(sim_id: str, request: Request, db: DbDep, client_id: ActiveClient, user: RequireUser):
+    return _cleanup_dialog(request, db, client_id, _sim_or_404(db, client_id, sim_id), user)
 
 
 @router.post("/api/simulations/{sim_id}/clean-up", response_class=HTMLResponse)
-def clean_up_simulation(sim_id: str, request: Request, db: DbDep, client_id: ActiveClient, user: RequireUser):
-    """Remove what it set up in TIDE and delete what it made on the SIEM (its space among it)."""
-    return _act(request, db, client_id, sim_id, user, "clean up",
-                "Cleaning up: removing what it set up in TIDE, then deleting its space, data and alerts.",
-                lambda store, siem, sim: simulation.clean_up(store, siem, sim["id"], actor=_actor(user)))
+async def clean_up_simulation(sim_id: str, request: Request, db: DbDep, client_id: ActiveClient, user: RequireUser):
+    """Clean up the parts ticked (``parts`` under ``parts_given``; all of them, from a script): what it set
+    up in TIDE, its space on the SIEM (with its destination in TIDE), its logs on the SIEM."""
+    sim = _sim_or_404(db, client_id, sim_id)
+    form = await request.form()
+    parts = tuple(str(p) for p in form.getlist("parts")) if form.get("parts_given") else simulation.CLEAN_PARTS
+    try:
+        if not parts:
+            raise simulation.SimError("tick what to clean up.")
+        simulation.clean_up(_store(db, client_id), simulation.siem_for(db, sim["siem_id"]), sim_id, actor=_actor(user),
+                            parts=parts)
+    except simulation.SimError as exc:
+        return _refused(_cleanup_dialog(request, db, client_id, sim, user, error=f"Could not clean it up: {exc}"))
+    what = _and([CLEAN_LABELS[p] for p in simulation.CLEAN_PARTS if p in parts])
+    return _done(_detail(request, db, client_id, sim_id, user, note=f"Cleaning up {what}."))
 
 
 @router.post("/api/simulations/{sim_id}/clear", response_class=HTMLResponse)
@@ -450,7 +855,7 @@ def _play(db, client_id: str, sim: dict, user_id: str) -> Dict[str, Any]:
     store = _store(db, client_id)
     mine = simulation.progress_for(store, sim["id"], user_id)
     parts = []
-    for sid in sim["scenarios"]:
+    for sid in simulation.question_scenarios(store, sim):
         try:
             sc = packs.scenario(sid)
         except packs.PackError:
@@ -562,6 +967,26 @@ def simulation_board(sim_id: str, request: Request, db: DbDep, client_id: Active
         return HTMLResponse("", headers={"HX-Refresh": "true"})
     return request.app.state.templates.TemplateResponse(
         request, BOARD, {"board": simulation.board(store, sim_id), "me": uid})
+
+
+@router.get("/api/simulation/{sim_id}/parts", response_class=HTMLResponse)
+def simulation_new_parts(sim_id: str, request: Request, db: DbDep, client_id: ActiveClient, user: RequireUser,
+                         have: str = ""):
+    """A player's page asking every 15 s for scenarios whose questions were shown since it was drawn
+    (``have``: those it shows): each is appended to it out of band, marked new, with the board if it had
+    none, so an answer being typed stays; nothing when none is new."""
+    store, uid = _store(db, client_id), _who(user)[0]
+    sim, refused = _playing(store, sim_id, uid, "its questions")
+    if refused:
+        return refused
+    seen = {x for x in have.split(",") if x}
+    play = _play(db, client_id, sim, uid)
+    new = [part for part in play["parts"] if part["scenario"].id not in seen]
+    if not new:
+        return HTMLResponse("")
+    had_board = any(part["questions"] for part in play["parts"] if part["scenario"].id in seen)
+    return request.app.state.templates.TemplateResponse(request, NEW_PARTS, {
+        "sim": sim, "new": new, "parts": play["parts"], "board": play["board"], "me": uid, "had_board": had_board})
 
 
 @router.get("/api/simulation/{sim_id}/dashboard", response_class=HTMLResponse)

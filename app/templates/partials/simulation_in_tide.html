@@ -1,0 +1,30 @@
+{#
+  What a simulation set up in its client's TIDE (client.objects: its destination, baselines, systems and
+  threat actors, each linked while it is there) and the problems it met. Out of band (``oob``) when
+  simulation_live sends it.
+#}
+{% from "macros/icons.html" import icon %}
+<div id="sim-intide-{{ s.id }}"{% if oob %} hx-swap-oob="true"{% endif %}>
+{% set made = in_tide | rejectattr('kind', 'equalto', 'problem') | list %}
+{% if made %}
+<ul class="sim-in-tide">
+    {% for o in made %}
+    <li>
+        <span class="text-secondary">{{ {'destination': 'Destination', 'baseline': 'Baseline', 'system': 'System', 'actor': 'Threat actor'}[o.kind] }}</span>
+        {% if o.state == 'made' and o.kind == 'system' %}<a href="/systems/{{ o.object_id }}">{{ o.name }}</a>
+        {% elif o.state == 'made' and o.kind == 'actor' %}<a href="/threats?search={{ ('"' ~ o.name ~ '"') | urlencode }}">{{ o.name }}</a>
+        {% elif o.state == 'made' and o.kind == 'baseline' %}<a href="/baselines?baseline_id={{ o.object_id | urlencode }}&group=baseline">{{ o.name }}</a>
+        {% else %}{{ o.name }}{% endif %}
+        {% if o.state == 'removed' %}<span class="text-secondary text-sm">removed</span>{% endif %}
+    </li>
+    {% endfor %}
+</ul>
+{% elif rows | selectattr('part.state', 'equalto', 'setting_up') | list %}
+<p class="rm-empty">Being set up: its space linked to the client, its rules synced in, its baselines, systems and threat actor made.</p>
+{% else %}
+<p class="rm-empty">Nothing set up in TIDE.</p>
+{% endif %}
+{% for p in in_tide if p.kind == 'problem' %}
+<p class="rm-note rm-note--warn">{{ icon('triangle-alert', '13') }} {{ p.name }}: {{ p.note }}</p>
+{% endfor %}
+</div>

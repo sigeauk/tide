@@ -23,20 +23,25 @@ A simulation is started and ended by a **Sim Admin**: a role beside Admin, Analy
 
 Under **Start a simulation**:
 
-1. **SIEM**: which Elastic SIEM to make the simulation's space on. Any Elastic SIEM set up in TIDE with its Elasticsearch URL, its Kibana URL and an API key can be chosen (see [What its API key needs](#what-its-api-key-needs)); the client doesn't need to be linked to it, as the simulation's space becomes one of the client's destinations.
-2. **Noise**: how much ordinary traffic the attack hides in. *Quiet* is the attack window alone; *Normal* adds the routine events of the same minutes; *Busy* also adds the half hour either side, and the same network's traffic from earlier that day, so the attack is harder to find.
-3. **Speed**: how many times faster than it happened. At 10, an hour of the attack takes six minutes; at 0 it goes as fast as your SIEM takes it.
-4. **Scenarios**: one or more, replayed one after the other.
-5. **Players**: the client's users who answer its questions.
-6. **Start simulation**.
+1. **SIEM**: which Elastic SIEM to make the simulation's space on. Any Elastic SIEM set up in TIDE with its Elasticsearch URL, its Kibana URL and an API key can be chosen (see [What its API key needs](#what-its-api-key-needs)); the client doesn't need to be linked to it, as the simulation's space becomes one of the client's destinations (once a scenario makes its rules or is set up in TIDE).
+2. **Scenario**: the attack to start with. You can add more once it runs (see [Adding scenarios](#adding-scenarios)).
+3. **What to do** with it, all ticked to begin with:
+   - **Replay its logs** into the simulation's space;
+   - **Make its rules in the simulation's space**, the detection rules that watch for it;
+   - **Set it up in TIDE**: its baseline, systems and threat actor, as below;
+   - **Show its questions to the players**.
+4. **Noise**: how much ordinary traffic the attack hides in. *Quiet* is the attack window alone; *Normal* adds the routine events of the same minutes; *Busy* also adds the half hour either side, and the same network's traffic from earlier that day, so the attack is harder to find.
+5. **Speed**: how many times faster than it happened. At 10, an hour of the attack takes six minutes; at 0 it goes as fast as your SIEM takes it.
+6. **Players**: the client's users who answer its questions. You can start with none and add them while it runs (see [Adding players](#adding-players)).
+7. **Start simulation**.
 
-TIDE makes a Kibana space for the simulation on the SIEM, with a data view on its own logs and the scenario's detection rules, which search only the simulation's own logs. Then it sets the simulation up in the client, and replays the attack into the space. Your players see the space with the Kibana access they already have, so give them access to every space, or add the simulation's space to their Kibana roles.
+TIDE makes a Kibana space for the simulation on the SIEM, with a data view on its own logs. Then it does what you ticked: it makes the scenario's detection rules, which search only the simulation's own logs, sets the scenario up in the client, and replays the attack into the space once its rules are there to see it. Your players see the space with the Kibana access they already have, so give them access to every space, or add the simulation's space to their Kibana roles.
 
 ### What it sets up in the client
 
 Until it is cleaned up, the simulation is part of the client like anything else:
 
-- Its space is one of the client's destinations, named *Simulation* and its id, and its rules are synced in, so they show in **Rule Health**, **Rule Monitoring** and the dashboards.
+- Once a scenario makes its rules or is set up in TIDE, the simulation's space is one of the client's destinations, named *Simulation* and its id, and its rules are synced in, so they show in **Rule Health**, **Rule Monitoring** and the dashboards. A simulation whose scenarios only replay their logs adds nothing to the client.
 - Each scenario's attack is a baseline, such as *Web defacement: Po1s0n1vy*, and the systems it hit are systems, such as *imreallynotbatman.com*, with their devices. Their names end with the simulation's id.
 - Each system has the baseline applied and counts the simulation's destination as its coverage. Each of the scenario's rules is mapped to the technique it is there to catch, and a step nothing catches is recorded as a known gap. A system's **Covered** and **Effective** figures then show how much of the attack the rules catch. As on any SIEM, a rule that is disabled doesn't count, and one that **Rule Monitoring** finds can't work isn't effective.
 - Elastic's rules are copies under rule ids of their own, as **Deploy** makes them, so Elastic's own rules can still be installed in the space.
@@ -46,21 +51,41 @@ Everything it adds counts in the client's figures, so keep a client for exercise
 
 ### Following it
 
-An open simulation shows what it is doing (setting up, replaying, playing once the replay is done), how many events it has sent, and how far through the attack's original time it is. **Open its space in Kibana** goes straight to its alerts. Below are what it set up **In TIDE**, the **Board**, and the **Rules** and how many alerts each raised.
+An open simulation shows what it is doing (setting up, replaying while any of its logs are, playing otherwise), how many events it has sent, and keeps itself up to date. **Open its space in Kibana** goes straight to its alerts. Below are:
+
+- **Scenarios**: each scenario, what it has (its rules, its baseline and systems in TIDE, its questions), and its logs: how far a replay has got, what a queued one waits for, or what its last replay did. **Stop** stops a replay (what it sent stays); **Cancel** takes a queued one out of the queue.
+- **Activity**: what has happened, newest first: who added each scenario and player, each replay and how it went, and any problem.
+- What it set up **In TIDE**, the **Board**, and the **Rules** and how many alerts each raised.
 
 One simulation at a time can set up, replay or clean up on a SIEM. If TIDE restarts during one, it shows as *Interrupted*: end it (or clean it up) again.
 
-### Replaying its data
+### Adding players
 
-Once the replay is done, **Replay data** sends the simulation's logs again, stamped with the time they are sent. Detection rules only look a few minutes back, so a rule made or fixed after the first replay never saw the attack: replaying the data shows whether it catches it now. The players can go on answering meanwhile. Kibana keeps every replay, and the field `botes.replay.run_id` tells them apart. Once it is done, the simulation's rules are synced again, as after the first replay.
+While a simulation sets up, replays or plays, **Add players** lists the client's users who aren't playing it yet. Tick the ones to add and choose **Add players**: they can answer its questions from then on, as the players chosen at the start can, and **Simulation** appears in their sidebar. Someone who joins late starts on 0 points.
+
+### Adding scenarios
+
+Once the simulation has set up its first scenario, **Add scenario** adds another, into the same space for the same players. Choose the scenario and tick what to do with it, as when you started it: you might replay a second attack's logs alone, with no rules and nothing in TIDE, to make the first one harder to find. While logs are replaying, **When** says whether its replay starts **Now**, alongside them, or **After** them. Its replay waits for its rules either way, so they see it.
+
+Something you didn't tick can be done later from its row's ⋮: **Make its rules** (mapped onto its systems if it is set up in TIDE), **Set it up in TIDE** or **Show its questions**. Two scenarios that share a rule have it once, in the space, counting for both.
+
+### Replaying a scenario again
+
+**Replay again…** on a scenario's row sends its logs again, stamped with the time they are sent, at the noise level and speed you choose, now or after the replays under way. Detection rules only look a few minutes back, so a rule made or fixed after the first replay never saw the attack: replaying it shows whether it catches it now. The players can go on answering meanwhile. Kibana keeps every replay, and the field `botes.replay.run_id` tells them apart. Once it is done, the simulation's rules are synced again.
 
 ### Ending it, and cleaning up
 
-**End simulation** stops the replay if it is still running, stops the players answering (their **Simulation** goes), and counts each rule's alerts. Everything else stays: its space with its rules, logs and alerts on the SIEM, and what it set up in the client, so you can go through it with the players afterwards.
+**End simulation** stops its replays and cancels those queued, stops the players answering (their **Simulation** goes), and counts each rule's alerts. Everything else stays: its space with its rules, logs and alerts on the SIEM, and what it set up in the client, so you can go through it with the players afterwards.
 
-**Clean up**, once it has ended, removes what it set up in the client (its systems, its baselines, and its destination with its rules) and deletes what it made on the SIEM: its space with its rules and data view, its logs and their template, and its alerts. If something can't be removed, the simulation says so and **Clean up again** tries once more. The logs also delete themselves after seven days, in case a simulation is never cleaned up.
+**Clean up**, once it has ended, asks what to remove, all of it ticked to begin with:
 
-The results (the board, the answers given, the rules and their alerts) stay in TIDE until you **Clear results**, once it is cleaned up.
+- **In TIDE**: what it set up in the client (its destination and the rules synced from it, its baselines, systems and threat actors);
+- **Its space on the SIEM**: its rules, data view, saved searches and alerts;
+- **Its logs on the SIEM** and their template. They also delete themselves after seven days, in case a simulation is never cleaned up.
+
+You can clean up TIDE and keep the space and logs on the SIEM, for the players to go back to in Kibana, or the other way round. Deleting the space removes its destination from TIDE too, with the rules synced from it, as a destination can't outlive its space; its baselines and systems stay until you clean up TIDE. The simulation then says what was removed and what was kept, and **Clean up the rest** removes what is left. If something can't be removed, it says why and **Clean up again** tries once more.
+
+The results (the board, the answers given, the rules and their alerts) stay in TIDE until you **Clear results**, once all of it is cleaned up.
 
 ## The TIDE demo
 
@@ -73,7 +98,7 @@ The results (the board, the answers given, the rules and their alerts) stay in T
 - two techniques with no rule at all;
 - the interception itself, which nothing can see, recorded as a known gap with its reason and a review date.
 
-Start it before your audience arrives, with **Noise** *Normal*, **Speed** 10 and one player: setting up and the first replay take a few minutes. Begin on **Threat Landscape** with its attacker, *Banking trojan crew*: its techniques are the attack's, and it counts most of them as covered because a rule is tagged with each. Then show what TIDE finds that Kibana doesn't, in **Rule Monitoring**, **Rule Tuning** and the system's **Covered** and **Effective** figures. Fix each rule in its window, and for each technique without a rule, **Deploy** one of Elastic's rules or **Convert** a Sigma rule from the technique's window, then map it. **Replay data** sends the attack again: every fixed rule fires on it, and the system shows 7 of its 8 techniques covered and effective, with the interception still a known gap on record.
+Start it before your audience arrives, with **Noise** *Normal*, **Speed** 10 and no players, as it has no questions: setting up and the first replay take a few minutes. Begin on **Threat Landscape** with its attacker, *Banking trojan crew*: its techniques are the attack's, and it counts most of them as covered because a rule is tagged with each. Then show what TIDE finds that Kibana doesn't, in **Rule Monitoring**, **Rule Tuning** and the system's **Covered** and **Effective** figures. Fix each rule in its window, and for each technique without a rule, **Deploy** one of Elastic's rules or **Convert** a Sigma rule from the technique's window, then map it. **Replay again…** on its row in **Scenarios** sends the attack again: every fixed rule fires on it, and the system shows 7 of its 8 techniques covered and effective, with the interception still a known gap on record.
 
 ## The air-gap demo
 
@@ -84,11 +109,13 @@ Start it before your audience arrives, with **Noise** *Normal*, **Speed** 10 and
 - a known gap whose reason the data shows is no longer true ("USB storage is blocked by Group Policy");
 - steps with no rule at all, one of them, the rogue device, with no rule in Elastic's or Sigma's library that runs on this stack.
 
-Fix the two rules (the second with **Use the default index**), **Deploy** or **Convert** a rule from the libraries for the steps without one, and for the rogue device add a hunt under **Coverage** and make a rule from it with **Create rule**. **Replay data** sends the attack again, and every fixed rule fires on it: the system ends with all 9 techniques covered and effective. The presenter's script is `sim/scenarios/airgap/DEMO_SCRIPT.md`.
+Fix the two rules (the second with **Use the default index**), **Deploy** or **Convert** a rule from the libraries for the steps without one, and for the rogue device add a hunt under **Coverage** and make a rule from it with **Create rule**. **Replay again…** on its row sends the attack again, and every fixed rule fires on it: the system ends with all 9 techniques covered and effective. The presenter's script is `sim/scenarios/airgap/DEMO_SCRIPT.md`.
 
 ## Playing a simulation
 
 **Simulation** appears in the sidebar as soon as a simulation you are a player in starts, and goes when it ends. While it sets up you can read the questions; answers open when the replay starts. It has two tabs: **Questions** shows each scenario's story, **Open the space in Kibana**, and its questions, each of which folds by its text and stays as you left it; **Dashboard** shows each player's score over time, the **Board**, and how many players have solved each question.
+
+When the Sim Admin adds a scenario with its questions while you play, they appear at the end of **Questions** within a few seconds, marked new; anything you are typing stays as it is.
 
 - Type your answer and choose **Answer**. Answers aren't case-sensitive, and quotes and extra spaces don't matter. Wait a moment between answers.
 - **Hint** shows one of the question's hints, and costs a quarter of its points, whether you answer it or not.

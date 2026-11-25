@@ -1,0 +1,44 @@
+{#
+  Add players (api.simulations.add_players_dialog): the client's users who aren't playing this
+  simulation yet, ticked as on the start form, and added while it sets up, replays or plays. In
+  #modal-container, so the simulation's refresh every 3 s leaves it open; adding them draws the
+  simulation again in #sim-detail with a note, and the response closes this (tideCloseModal).
+  Context: sim, users, running, can_run, error.
+#}
+{% from "macros/icons.html" import icon %}
+{% from "macros/modal.html" import close_button %}
+<div name="Add Players Dialog" class="modal-overlay" data-rm-overlay>
+    <div class="modal-content modal-md" role="dialog" aria-modal="true" aria-labelledby="sim-players-title">
+        <div class="modal-header">
+            <h3 class="modal-title" id="sim-players-title">{{ icon('user-plus', '16') }} Add players</h3>
+            {{ close_button('name="Close" data-rm-close') }}
+        </div>
+        {% if not can_run %}
+        <p class="rm-empty">Adding players needs the right to run simulations.</p>
+        {% elif not running %}
+        <p class="rm-empty">Players can be added only while the simulation sets up, replays or plays.</p>
+        {% elif not users %}
+        <p class="rm-empty">Every user of this client is playing it already.</p>
+        {% else %}
+        <form name="Add Players" hx-post="/api/simulations/{{ sim.id }}/players" hx-target="#sim-detail" hx-swap="innerHTML"
+              class="sys-dialog__form">
+            <p class="rule-help">They can answer its questions from now on, and see Simulation in their sidebar.</p>
+            {% if error %}<p class="inline-error">{{ error }}</p>{% endif %}
+            {% for u in users %}
+            <label class="role-checkbox sim-choice">
+                <input type="checkbox" name="players" value="{{ u.id }}"> <span>{{ u.full_name or u.username }} <span class="text-secondary text-sm">{{ u.username }}</span></span>
+            </label>
+            {% endfor %}
+            <div class="modal-actions">
+                <button name="Cancel" type="button" class="btn btn-secondary" data-rm-close>Cancel</button>
+                <button name="Add Players" type="submit" class="btn btn-primary">{{ icon('user-plus', '15') }} Add players</button>
+            </div>
+        </form>
+        {% endif %}
+        {% if not (can_run and running and users) %}
+        <div class="modal-actions">
+            <button name="Close" type="button" class="btn btn-secondary" data-rm-close>Close</button>
+        </div>
+        {% endif %}
+    </div>
+</div>

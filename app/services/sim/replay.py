@@ -202,7 +202,7 @@ class Replay:
         self.speed, self.max_eps, self.max_gap = speed, max_eps, max_gap
         self.batch_size, self.workers, self.slim, self.on_progress = batch_size, max(workers, 1), slim, on_progress
         self.run_id = uuid.uuid4().hex[:8]
-        self.loop = loop                    # which pass of the same data this is (a simulation's Replay data)
+        self.loop = loop                    # which pass of the same data this is (a scenario's Replay again)
         self.progress = Progress()
         self._stop = threading.Event()
         self._lock = threading.Lock()

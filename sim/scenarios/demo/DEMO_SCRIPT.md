@@ -9,8 +9,7 @@ For whoever presents TIDE. The demo shows a client that looks covered and isn't:
 
 **You need:**
 - **TIDE** with an Elastic SIEM whose API key may make Kibana spaces (see *What its API key needs* in Documentation → Simulations);
-- **a client** to run it in: everything the demo adds is removed afterwards;
-- **yourself as one of the client's users,** so you can be its player.
+- **a client** to run it in: everything the demo adds is removed afterwards.
 
 ## The story
 
@@ -45,8 +44,8 @@ A banking trojan reaches a finance user, Bob Smith, through an invoice opened fr
 1. **Simulations → Run → Start a simulation:**
    - **SIEM**: the demo SIEM.
    - **Noise**: *Normal*. **Speed**: 10.
-   - **Scenarios**: *TIDE demo: rogue root certificate* only (untick *Web defacement*, which is ticked by default).
-   - **Players**: yourself.
+   - **Scenario**: *TIDE demo: rogue root certificate*, with everything under **What to do** ticked.
+   - **Players**: none (the demo has no questions).
    - **Start simulation**.
 2. **Wait for *Playing*,** about 3 minutes: setting up, then the 2-minute first pass, then its sync.
 3. **Wait 5 more minutes,** then in **Rule Health** choose **Sync**. By then every rule has run on the data, and the noisy rule has raised enough alerts for Rule Tuning's **Too many alerts**.
@@ -152,7 +151,7 @@ In the 20-minute version, leave the rule as it is. It counts as covered and effe
 
 ## 7. Prove it, 5 minutes
 
-1. **Simulations → Run** → the simulation → **Replay data**. *Say:* "The same attack, again, stamped now. A rule only looks a few minutes back, so the rules we just fixed never saw the first one."
+1. **Simulations → Run** → the simulation → **Replay again…** on its row → **Replay again**. *Say:* "The same attack, again, stamped now. A rule only looks a few minutes back, so the rules we just fixed never saw the first one."
 2. **Wait for it:** about 2 minutes, while it shows *Replaying*. It's back to *Playing* once the data is in and the sync is done.
 3. **Wait a minute for the 1-minute rules to run,** then **Rule Health → Sync**.
 4. **The system's figures:**
@@ -217,7 +216,7 @@ Two simulations can't set up, replay or clean up on the same SIEM at once.
 | The deployed root certificate rule shows **No recent events in the index pattern** | **Use the default index** wasn't ticked, so it searches Elastic's own patterns on every namespace | **Edit** → under **Index patterns**, tick **Use the default index** |
 | The converted Sigma query names `Image` or `CommandLine` | The wrong pipeline | **Convert** again with *ECS Windows* |
 | A new rule isn't in **Add coverage**'s list | The sync after saving it hasn't finished | Wait for it, then search again |
-| No **Replay data** button | The first pass isn't done | Wait for *Playing* |
+| No **Replay again…** button | It is still setting up | Wait for *Replaying* or *Playing* |
 | The simulation says *Interrupted* | TIDE restarted while it ran | **End simulation**, **Clean up**, start again |
 | A fixed rule's alerts include some from the first pass | A rule's first run looks back 6 minutes, so a rule made soon after a pass sees it | Nothing: count the second pass's (`botes.replay.loop : 2` in Kibana) |
 | The start fails with *Could not make the space* | The SIEM's key can't manage spaces | Use a key with the privileges in *What its API key needs* (Documentation → Simulations) |

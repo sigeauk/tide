@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [7.1.4] - 2026-11-25
+
+### Added
+- **Run several scenarios in one simulation.** Once a simulation runs, **Add scenario** adds another into the same space, for the same players. For each scenario you tick what it does: replay its logs, make its rules, set it up in TIDE, show its questions. You might replay a second attack's logs alone, to make the first harder to find. A replay starts now, alongside any other, or after them; **Stop** and **Cancel** end one, and what wasn't ticked can be done later from the scenario's row. A scenario's questions appear on the players' **Simulation** page within a few seconds, marked new, without losing what they are typing.
+- **See what a simulation is doing.** Its panel lists its scenarios with how far each replay has got and what a queued one waits for, and an **Activity** list of what happened, who did it and when. It keeps itself up to date without closing a menu or dialog you have open.
+- **Clean up a simulation in parts.** **Clean up** asks what to remove: what it set up in TIDE, its space on the SIEM, its logs on the SIEM. Clean up TIDE and keep the space and logs for the players to go back to in Kibana, or the other way round, and clean up the rest later; **Clear results** comes once all of it is gone.
+- **Add players to a running simulation.** While a simulation sets up, replays or plays, **Add players** lists the client's users who aren't playing it yet; those you tick can answer its questions from then on, and **Simulation** appears in their sidebar.
+
+### Changed
+- **Start a simulation with no players.** **Start simulation** no longer asks for a player, so a demo, which has no questions, needs none, and an exercise can start before everyone has arrived.
+- **Start with one scenario, and replay each one again.** **Start simulation** takes one scenario, with what to do with it; add more once it runs. **Replay data**, which sent every scenario again, is now **Replay again…** on each scenario's row, at the noise level and speed you choose.
+
+### Fixed
+- **Scenarios that share a rule can run in one simulation.** Starting the TIDE demo together with Cerber ransomware failed, because both use the same Elastic rule. The rule is now made once in the simulation's space and counts for both.
+- **Start simulation says what ending keeps.** Its question said everything the simulation makes is removed when you end it. Ending keeps it all, and **Clean up** removes it; the question now says so.
+
 ## [7.1.3] - 2026-11-24
 
 ### Added

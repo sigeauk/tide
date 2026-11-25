@@ -1,0 +1,8 @@
+{#
+  A player's Simulation page watching for scenarios whose questions are shown after it was drawn
+  (api.simulations.simulation_new_parts): every 15 s it says which it shows (``parts``); the answer
+  appends any new one and replaces this with one that knows it (``oob``).
+#}
+<div id="sim-watch-{{ s.id }}" hidden{% if oob %} hx-swap-oob="true"{% endif %}
+     hx-get="/api/simulation/{{ s.id }}/parts?have={{ parts | map(attribute='scenario.id') | join(',') | urlencode }}"
+     hx-trigger="every 15s" hx-swap="none"></div>

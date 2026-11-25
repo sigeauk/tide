@@ -8474,6 +8474,16 @@ body.light {
 .sim-chart__line--8 { stroke: var(--sim-series-8); } .sim-chart__dot--8, .sim-legend--8 { fill: var(--sim-series-8); background: var(--sim-series-8); }
 .sim-in-tide { list-style: none; margin: 0 0 0.5rem; padding: 0; display: flex; flex-direction: column; gap: 0.25rem; }
 .sim-in-tide .text-secondary:first-child { display: inline-block; min-width: 6.5rem; }
+/* A simulation's Scenarios table: each scenario's logs (its replays, a bar for one replaying) and its actions. */
+.sim-scenarios td { vertical-align: top; }
+.sim-scenarios__actions { text-align: right; white-space: nowrap; }
+.sim-row-actions { display: inline-flex; align-items: center; gap: 0.4rem; }
+.sim-logs { display: flex; flex-direction: column; gap: 0.5rem; min-width: 16rem; }
+.sim-replay__line { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 0.6rem; }
+.sim-replay .bulk-progress { margin: 0.35rem 0 0; }
+.sim-activity { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.25rem;
+                max-height: 16rem; overflow-y: auto; font-size: var(--fs-sm); }
+.sim-activity .history-time { display: inline-block; min-width: 4.75rem; }
 .sim-answers { border: 1px solid var(--color-border-muted); border-radius: var(--radius-md); padding: 0.5rem 0.75rem; margin-bottom: 0.5rem; }
 .sim-answers > summary { cursor: pointer; color: var(--color-text-secondary); }
 .sim-answer { border-top: 1px solid var(--color-border-muted); padding-top: 0.5rem; margin-top: 0.5rem; }

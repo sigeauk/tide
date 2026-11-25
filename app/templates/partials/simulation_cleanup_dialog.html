@@ -1,0 +1,48 @@
+{#
+  Clean up (api.simulations._cleanup_dialog), once a simulation has ended: its three parts, each ticked
+  while it is left (or its last try failed), else saying it was removed or never made. Deleting its
+  space removes its destination from TIDE too. In #modal-container; done, the panel is drawn again with
+  a note and this closes (tideCloseModal); refused, this is drawn again saying why.
+  Context: sim, status (simulation.cleanup_status), ended, can_run, error.
+#}
+{% from "macros/icons.html" import icon %}
+{% from "macros/modal.html" import close_button %}
+{% set PARTS = (('tide', 'In TIDE', 'its destination and the rules synced from it, its baselines, systems and threat actors'),
+                ('space', 'Its space on the SIEM', 'its rules, data view, saved searches and alerts'),
+                ('data', 'Its logs on the SIEM', 'its data streams and their template, which delete themselves after seven days anyway')) %}
+<div name="Clean Up Dialog" class="modal-overlay" data-rm-overlay>
+    <div class="modal-content modal-md" role="dialog" aria-modal="true" aria-labelledby="sim-clean-title">
+        <div class="modal-header">
+            <h3 class="modal-title" id="sim-clean-title">{{ icon('trash-2', '16') }} Clean up</h3>
+            {{ close_button('name="Close" data-rm-close') }}
+        </div>
+        {% if not can_run %}
+        <p class="rm-empty">This needs the right to run simulations.</p>
+        <div class="modal-actions"><button name="Close" type="button" class="btn btn-secondary" data-rm-close>Close</button></div>
+        {% elif not ended %}
+        <p class="rm-empty">End the simulation first.</p>
+        <div class="modal-actions"><button name="Close" type="button" class="btn btn-secondary" data-rm-close>Close</button></div>
+        {% else %}
+        <form name="Clean Up" class="sim-start" hx-post="/api/simulations/{{ sim.id }}/clean-up" hx-target="#sim-detail" hx-swap="innerHTML">
+            <p class="rule-help">Choose what to remove now; the rest stays until you clean it up too. Its results (the board, the answers and the rules' alerts) stay in TIDE until you clear them, once all of it is cleaned up.</p>
+            {% if error %}<p class="inline-error">{{ error }}</p>{% endif %}
+            <input type="hidden" name="parts_given" value="1">
+            <fieldset class="sim-start__set">
+                <legend class="form-label">Remove</legend>
+                {% for key, label, what in PARTS %}
+                {% set st = status[key] %}
+                <label class="role-checkbox sim-choice">
+                    <input type="checkbox" name="parts" value="{{ key }}"{% if st in ('left', 'failed') %} checked{% else %} disabled{% endif %}>
+                    <span>{{ label }}<span class="text-secondary text-sm">: {{ what }}{% if st == 'done' %} (removed){% elif st == 'none' %} (it made none){% elif st == 'failed' %} (the last try failed){% endif %}</span></span>
+                </label>
+                {% endfor %}
+            </fieldset>
+            <p class="rm-note">{{ icon('info', '13') }} Deleting its space removes its destination from TIDE too, with the rules synced from it, as a destination can't outlive its space. Its baselines and systems stay until you clean up TIDE.</p>
+            <div class="modal-actions">
+                <button name="Cancel" type="button" class="btn btn-secondary" data-rm-close>Cancel</button>
+                <button name="Clean Up" type="submit" class="btn btn-primary">{{ icon('trash-2', '15') }} Clean up</button>
+            </div>
+        </form>
+        {% endif %}
+    </div>
+</div>

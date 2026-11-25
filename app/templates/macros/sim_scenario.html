@@ -1,0 +1,68 @@
+{#
+  A scenario and what to do with it, as Start a simulation and Add scenario ask for it: the scenario (one
+  of ``choices``, api.simulations.scenarios(), each with its questions, rules and events); the parts to
+  tick (replay its logs, make its rules, set it up in TIDE, show its questions, all ticked to begin with;
+  ``parts_given`` tells the route they were offered); the noise level and speed of its replay; and, where
+  a replay is under way (``when``), whether it starts now or after. Replay again asks only for the noise
+  level, speed and when (``logs_only``). ``form`` keeps what was chosen when a request was refused.
+  ``prefix`` keeps the ids apart, as a dialog opens over the start form.
+#}
+{% set PARTS = (('logs', 'Replay its logs'), ('rules', "Make its rules in the simulation's space"),
+                ('tide', 'Set it up in TIDE: its baseline, systems and threat actor'),
+                ('questions', 'Show its questions to the players')) %}
+
+{% macro scenario_fields(choices, form=none, when=false, logs_only=false, prefix='sim') %}
+{% set f = form or {} %}
+{% set picked = f.get('scenario') or (choices[0].id if choices else '') %}
+{% set ticked = f.get('parts') if f.get('parts') is not none else ['logs', 'rules', 'tide', 'questions'] %}
+{% if not logs_only %}
+<fieldset class="sim-start__set">
+    <legend class="form-label">Scenario</legend>
+    {% for sc in choices %}
+    <label class="role-checkbox sim-choice">
+        <input type="radio" name="scenario" value="{{ sc.id }}"{% if sc.id == picked %} checked{% endif %}>
+        <span>{{ sc.label }}
+            <span class="text-secondary text-sm">{{ sc.questions }} questions, {{ sc.rules }} rules{% for lv, n in sc.events.items() if n %}, {{ '{:,}'.format(n) }} events {{ lv }}{% endfor %}</span>
+        </span>
+    </label>
+    {% endfor %}
+</fieldset>
+<fieldset class="sim-start__set">
+    <legend class="form-label">What to do</legend>
+    <input type="hidden" name="parts_given" value="1">
+    {% for key, label in PARTS %}
+    <label class="role-checkbox sim-choice">
+        <input type="checkbox" name="parts" value="{{ key }}"{% if key in ticked %} checked{% endif %}> <span>{{ label }}</span>
+    </label>
+    {% endfor %}
+</fieldset>
+{% endif %}
+<div class="sim-start__row">
+    <div class="filter-group">
+        <label class="form-label" for="{{ prefix }}-noise">Noise</label>
+        <select id="{{ prefix }}-noise" name="noise" class="form-input">
+            {% for value, label in (('quiet', 'Quiet: the attack window'), ('normal', 'Normal: with its routine events'),
+                                    ('busy', "Busy: and the half hour either side, with the same network's traffic from earlier that day")) %}
+            <option value="{{ value }}"{% if value == (f.get('noise') or 'normal') %} selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="filter-group">
+        <label class="form-label" for="{{ prefix }}-speed">Speed</label>
+        <input id="{{ prefix }}-speed" name="speed" type="number" class="form-input" value="{{ f.get('speed') if f.get('speed') not in (none, '') else 10 }}"
+               min="0" max="1000" step="any"
+               title="Times faster than it happened: 10 replays an hour in six minutes; 0 is as fast as the SIEM allows">
+    </div>
+</div>
+{% if when %}
+<fieldset class="sim-start__set">
+    <legend class="form-label">When</legend>
+    <label class="role-checkbox sim-choice">
+        <input type="radio" name="when" value="now"{% if f.get('when') != 'after' %} checked{% endif %}> <span>Now, alongside the logs replaying</span>
+    </label>
+    <label class="role-checkbox sim-choice">
+        <input type="radio" name="when" value="after"{% if f.get('when') == 'after' %} checked{% endif %}> <span>After the logs replaying or queued now</span>
+    </label>
+</fieldset>
+{% endif %}
+{% endmacro %}

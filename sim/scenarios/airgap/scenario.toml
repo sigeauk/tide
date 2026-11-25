@@ -2,7 +2,7 @@
 # network, with a USB stick and a rogue device, and a client that starts in a believable bad state: a gap
 # accepted for a reason that's no longer true, rules that look fine in Kibana but can't work, and steps
 # with no rule at all, one of them with no rule in Elastic's or Sigma's library for this data, which a
-# hunt covers until a rule is written. The presenter fixes it all in TIDE, then Replay data sends the
+# hunt covers until a rule is written. The presenter fixes it all in TIDE, then Replay again sends the
 # same data again and every fixed rule fires. The folder's name is its id.
 
 title = "TIDE demo: USB, insider and rogue device"   # short, for lists

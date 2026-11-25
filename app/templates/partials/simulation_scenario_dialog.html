@@ -1,0 +1,56 @@
+{#
+  Add scenario (api.simulations._scenario_dialog, no ``scenario``): the scenarios not in the simulation
+  yet, the parts to tick, the noise level and speed, and, while a replay is under way, when. Replay
+  again (``scenario``): its noise level, speed and when. In #modal-container, so the panel's refresh
+  leaves it open; done, the panel is drawn again with a note and the response closes this
+  (tideCloseModal); refused, this is drawn again saying why, with what was chosen.
+  Context: sim, scenario, label, choices, noise_levels, form, when, opened, can_run, error.
+#}
+{% from "macros/icons.html" import icon %}
+{% from "macros/modal.html" import close_button %}
+{% from "macros/sim_scenario.html" import scenario_fields %}
+{% set again = scenario != '' %}
+<div name="{{ 'Replay Again Dialog' if again else 'Add Scenario Dialog' }}" class="modal-overlay" data-rm-overlay>
+    <div class="modal-content modal-md" role="dialog" aria-modal="true" aria-labelledby="sim-scenario-title">
+        <div class="modal-header">
+            {% if again %}
+            <h3 class="modal-title" id="sim-scenario-title">{{ icon('rotate-ccw', '16') }} Replay again</h3>
+            {% else %}
+            <h3 class="modal-title" id="sim-scenario-title">{{ icon('plus', '16') }} Add scenario</h3>
+            {% endif %}
+            {{ close_button('name="Close" data-rm-close') }}
+        </div>
+        {% set usable = can_run and opened and choices %}
+        {% if not can_run %}
+        <p class="rm-empty">This needs the right to run simulations.</p>
+        {% elif not opened %}
+        <p class="rm-empty">This can be done once the simulation has set up its first scenario, until it ends.</p>
+        {% elif not choices %}
+        <p class="rm-empty">{{ 'Its logs are not here to replay.' if again else 'Every scenario is in it already.' }}</p>
+        {% else %}
+        <form name="{{ 'Replay Again' if again else 'Add Scenario' }}" class="sim-start"
+              hx-post="/api/simulations/{{ sim.id }}/{{ 'scenarios/' ~ scenario ~ '/replay' if again else 'scenarios' }}"
+              hx-target="#sim-detail" hx-swap="innerHTML">
+            <p class="rule-help">
+                {% if again %}<strong>{{ label }}</strong>: its logs are sent again, stamped as they are sent, as its next pass, so rules made or fixed since see them. The players go on answering. Kibana keeps every pass, and <code>botes.replay.run_id</code> tells them apart.
+                {% else %}It joins the simulation's space and players. Its logs replay once its rules are made, so they see them.{% endif %}
+            </p>
+            {% if error %}<p class="inline-error">{{ error }}</p>{% endif %}
+            {{ scenario_fields(choices, form, when=when, logs_only=again, prefix='sim-dialog') }}
+            <div class="modal-actions">
+                <button name="Cancel" type="button" class="btn btn-secondary" data-rm-close>Cancel</button>
+                {% if again %}
+                <button name="Replay Again" type="submit" class="btn btn-primary">{{ icon('rotate-ccw', '15') }} Replay again</button>
+                {% else %}
+                <button name="Add Scenario" type="submit" class="btn btn-primary">{{ icon('plus', '15') }} Add scenario</button>
+                {% endif %}
+            </div>
+        </form>
+        {% endif %}
+        {% if not usable %}
+        <div class="modal-actions">
+            <button name="Close" type="button" class="btn btn-secondary" data-rm-close>Close</button>
+        </div>
+        {% endif %}
+    </div>
+</div>

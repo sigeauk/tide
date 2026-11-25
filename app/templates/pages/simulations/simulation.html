@@ -50,7 +50,7 @@
     <div class="sys-section__head">
         <h2 class="section-title sys-section__title">
             <button type="button" class="sys-section__toggle" data-rm-collapse aria-expanded="true" title="Collapse or expand {{ title }}">
-                <span class="sys-section__chev" aria-hidden="true">{{ icon('chevron-down', '16') }}</span>{{ icon('binoculars', '18') }} {{ title }}
+                <span class="sys-section__chev" aria-hidden="true">{{ icon('chevron-down', '16') }}</span>{{ icon('binoculars', '18') }} <span id="sim-title-{{ s.id }}">{{ title }}</span>
             </button>
             {% include "partials/simulation_state.html" %}
         </h2>
@@ -64,26 +64,21 @@
         {% if s.state == 'setting_up' %}
         <p class="rm-note">{{ icon('loader', '13', 'spin') }} Setting up: its space, rules and logs are on their way. Read the questions now; answers open when the replay starts, and this page shows it.</p>
         {% endif %}
-        {% for part in g.parts %}
-        <div class="sim-story">{{ part.story | md }}</div>
-        <div class="sim-questions">
-            {% for item in part.questions %}
-            {% set message, ok = '', false %}
-            {% include "partials/simulation_question.html" %}
-            {% endfor %}
+        {# Each scenario's story and questions; one whose questions are shown later is appended here
+           (simulation_watch, below), with the board if there was none. #}
+        {% set asked = g.parts | selectattr('questions') | list %}
+        <div id="sim-parts-{{ s.id }}">
+            {% for part in g.parts %}{% include "partials/simulation_part.html" %}{% endfor %}
+            {% if not asked %}
+            {# A scenario with none, such as the demo (#127): nothing to answer, so no board either. #}
+            <p class="rm-empty" id="sim-noq-{{ s.id }}">Its scenarios have no questions.</p>
+            {% endif %}
         </div>
-        {% endfor %}
-        {% if not g.parts | selectattr('questions') | list %}
-        {# A scenario with none, such as the demo (#127): nothing to answer, so no board either. #}
-        <p class="rm-empty">Its scenarios have no questions.</p>
-        {% else %}
-        <h3 class="sim-subhead">Board</h3>
-        <div id="sim-board-{{ s.id }}" hx-get="/api/simulation/{{ s.id }}/board{% if s.state == 'setting_up' %}?setting_up=1{% endif %}"
-             hx-trigger="every {{ '5s' if s.state == 'setting_up' else '15s' }}, boardChanged from:body" hx-swap="innerHTML">
-            {% set board, me = g.board, g.me %}
-            {% include "partials/simulation_board.html" %}
+        <div id="sim-board-wrap-{{ s.id }}">
+            {% if asked %}{% set board, me = g.board, g.me %}{% include "partials/simulation_player_board.html" %}{% endif %}
         </div>
-        {% endif %}
+        {% set parts = g.parts %}
+        {% include "partials/simulation_watch.html" %}
     </div>
 </section>
 {% endfor %}

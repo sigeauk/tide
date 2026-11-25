@@ -1,0 +1,29 @@
+{#
+  A simulation's figures (api.simulations._panel): events sent and refused by all its replays, its
+  scenarios and players, and where its data is. Out of band (``oob``) when simulation_live sends it.
+#}
+{% from "macros/icons.html" import icon %}
+<div id="sim-now-{{ s.id }}"{% if oob %} hx-swap-oob="true"{% endif %}>
+    <div class="metrics-grid mb-lg">
+        <div class="metric-card">
+            <div class="metric-label">{{ icon('activity', '16') }} Events sent</div>
+            <div class="metric-value">{{ '{:,}'.format(sent) }}</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">{{ icon('crosshair', '16') }} Scenarios</div>
+            <div class="metric-value">{{ rows | length }}</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">{{ icon('users', '16') }} Players</div>
+            <div class="metric-value">{{ players | length }}</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">{{ icon('shield-alert', '16') }} Refused</div>
+            <div class="metric-value">{{ '{:,}'.format(refused) }}</div>
+        </div>
+    </div>
+    <p class="text-secondary text-sm">
+        On the space <code>{{ s.space }}</code> (data streams <code>logs-*-{{ s.namespace }}</code>). Started by {{ s.created_by }}{% if s.created_at %} at {{ s.created_at.strftime('%Y-%m-%d %H:%M') }}{% endif %}{% if s.ended_by %}; ended by {{ s.ended_by }}{% endif %}.
+        {% if first_refusal %}First refusal: {{ first_refusal }}{% endif %}
+    </p>
+</div>

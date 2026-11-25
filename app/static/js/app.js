@@ -2029,6 +2029,19 @@ console.debug('TIDE app.js loading...');
     else initMitrePickers();
     document.addEventListener('htmx:load', function(e) { initMitrePickers(e.target); });
 
+    // A panel that asks for itself again ([data-live-poll], a simulation's on Simulations → Run). When an
+    // action's own answer draws the panel again first, the question still on its way would come back out
+    // of date and draw it once more, closing a menu or dialog just opened: it is called off as its poller
+    // goes (htmx cleans an element up before it removes it). Not the one whose answer is being drawn
+    // (data-answered, from its answer arriving until it asks again).
+    function livePoll(e) { var elt = e.target; return elt && elt.hasAttribute && elt.hasAttribute('data-live-poll') ? elt : null; }
+    document.addEventListener('htmx:beforeRequest', function(e) { var p = livePoll(e); if (p) p.removeAttribute('data-answered'); });
+    document.addEventListener('htmx:beforeOnLoad', function(e) { var p = livePoll(e); if (p) p.setAttribute('data-answered', ''); });
+    document.addEventListener('htmx:beforeCleanupElement', function(e) {
+        var p = livePoll(e);
+        if (p && window.htmx && !p.hasAttribute('data-answered')) htmx.trigger(p, 'htmx:abort');
+    });
+
     // "…" menus (data-more > [data-more-toggle] + .rh-more__menu). Rule Health wires its own.
     // A menu opens below its ⋮. One that wouldn't fit there -- in the box that scrolls or clips it (a
     // system's or the Baselines page's grid), or the window -- floats over them by its ⋮ instead:

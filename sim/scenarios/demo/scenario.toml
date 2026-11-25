@@ -1,6 +1,6 @@
 # A scenario for showing TIDE rather than testing players: it has no questions. Its client starts in a
 # believable bad state (gaps, rules that look fine in Kibana but can't work, a noisy rule, and a
-# technique that needs two rules but has one); a presenter fixes it all in TIDE, then Replay data sends
+# technique that needs two rules but has one); a presenter fixes it all in TIDE, then Replay again sends
 # the same data again and every fixed rule fires. The folder's name is its id.
 
 title = "TIDE demo: rogue root certificate"   # short, for lists

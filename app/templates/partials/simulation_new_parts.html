@@ -1,0 +1,16 @@
+{#
+  Scenarios whose questions were shown since a player's Simulation page was drawn
+  (api.simulations.simulation_new_parts), each appended to it out of band and marked new; the board,
+  if the page had none (no question before); and the watcher, now knowing them.
+  Context: sim, new, parts (all it shows now), board, me, had_board.
+#}
+{% set s, oob, fresh = sim, true, true %}
+<div hx-swap-oob="beforeend:#sim-parts-{{ s.id }}">
+    {% for part in new %}{% include "partials/simulation_part.html" %}{% endfor %}
+</div>
+{% if not had_board and new | selectattr('questions') | list %}
+<div id="sim-noq-{{ s.id }}" hx-swap-oob="delete"></div>
+<div id="sim-board-wrap-{{ s.id }}" hx-swap-oob="true">{% include "partials/simulation_player_board.html" %}</div>
+{% endif %}
+<span id="sim-title-{{ s.id }}" hx-swap-oob="true">{% for part in parts %}{{ part.scenario.label }}{% if not loop.last %}, {% endif %}{% endfor %}</span>
+{% include "partials/simulation_watch.html" %}

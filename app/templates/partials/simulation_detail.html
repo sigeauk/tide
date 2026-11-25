@@ -1,15 +1,20 @@
 {#
-  One simulation, for a Sim Admin (api.simulations._detail): its state and the replay's progress (asked
-  again every 3 s while it sets up, replays or ends), its space in Kibana, Replay data (once the replay
-  is done: its data sent again), End, Clean up and Clear, what it set up
-  in the client's TIDE, the players' board, and its rules and how many alerts each raised. Its scores
-  over time are in the Dashboard tab, its questions with their answers in the Answers tab.
+  One simulation, for a Sim Admin (api.simulations._detail, _panel): its state; its figures; its space in
+  Kibana, Add players, Add scenario and End (then Clean up, Clear); its Scenarios, each with what was
+  made for it, its replays (how far each has got, Stop and Cancel) and Replay again…, with a ⋮ for a
+  part it wasn't given; its Activity; what it set up In TIDE; the Board; its Rules and their alerts.
+
+  While something is under way (``poll``) it asks simulation_live for what changed: the parts that
+  change (figures, each scenario's logs, activity, in TIDE, board, rules) are swapped out of band, so a
+  menu or dialog open over it stays open; when what it offers changed (``version``), it is drawn
+  again in full. Its scores over time are in the Dashboard tab, its answers in the Answers tab.
 #}
 {% from "macros/icons.html" import icon %}
-{% from "components/window_ui.html" import section_head %}
-{% set s = sim %}
-<section class="card card-padded card-mb sys-section" id="sim-{{ s.id }}" data-fold="detail" aria-label="Simulation"
-         {% if active %}hx-get="/api/simulations/{{ s.id }}" hx-trigger="every 3s" hx-target="#sim-detail" hx-swap="innerHTML"{% endif %}>
+{% from "macros/menu.html" import more_button %}
+{% set s, oob = sim, false %}
+<section class="card card-padded card-mb sys-section" id="sim-{{ s.id }}" data-fold="detail" aria-label="Simulation">
+    {% if poll %}<div hidden data-live-poll hx-get="/api/simulations/{{ s.id }}/live?v={{ version }}" hx-trigger="every {{ poll }}"
+                      hx-target="#sim-detail" hx-swap="none"></div>{% endif %}
     <div class="sys-section__head">
         <h2 class="sys-section__title">{{ icon('crosshair', '18') }}
             {% for sid in s.scenarios %}{{ names.get(sid, sid) }}{% if not loop.last %}, {% endif %}{% endfor %}
@@ -19,34 +24,9 @@
     <div class="sys-section__body">
         {% if note %}<div class="alert alert-success">{{ note }}</div>{% endif %}
         {% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
-        {% if s.state == 'failed' and s.error %}<div class="alert alert-danger">Could not run it: {{ s.error }}</div>
-        {% elif s.error %}<div class="alert alert-danger">Could not send its data again: {{ s.error }}</div>{% endif %}
+        {% if s.state == 'failed' and s.error %}<div class="alert alert-danger">Could not run it: {{ s.error }}</div>{% endif %}
 
-        {% set p = s.progress or {} %}
-        <div class="metrics-grid mb-lg">
-            <div class="metric-card">
-                <div class="metric-label">{{ icon('activity', '16') }} Events sent</div>
-                <div class="metric-value">{{ '{:,}'.format(p.sent or 0) }}</div>
-            </div>
-            <div class="metric-card">
-                <div class="metric-label">{{ icon('clock', '16') }} Original time</div>
-                <div class="metric-value fs-lg">{{ (p.original_time or '')[:19] | replace('T', ' ') or '—' }}</div>
-            </div>
-            <div class="metric-card">
-                <div class="metric-label">{{ icon('users', '16') }} Players</div>
-                <div class="metric-value">{{ players | length }}</div>
-            </div>
-            <div class="metric-card">
-                <div class="metric-label">{{ icon('shield-alert', '16') }} Refused</div>
-                <div class="metric-value">{{ '{:,}'.format(p.refused or 0) }}</div>
-            </div>
-        </div>
-        <p class="text-secondary text-sm">
-            Noise {{ s.noise }}, {{ (s.speed | round(1) ~ '× speed') if s.speed else 'as fast as the SIEM takes it' }}, on the space <code>{{ s.space }}</code>
-            (data streams <code>logs-*-{{ s.namespace }}</code>). Started by {{ s.created_by }}{% if s.created_at %} at {{ s.created_at.strftime('%Y-%m-%d %H:%M') }}{% endif %}{% if s.ended_by %}; ended by {{ s.ended_by }}{% endif %}.
-            {% if (p.pass or 1) > 1 %}Its data has been sent {{ p.pass }} times (Replay data); the figures above are the latest pass's.{% endif %}
-            {% if p.first_refusal %}First refusal: {{ p.first_refusal }}{% endif %}
-        </p>
+        {% include "partials/simulation_now.html" %}
 
         {% if can_run %}
         {% set ended = s.state == 'ended' %}
@@ -54,25 +34,31 @@
             {% if kibana %}
             <a name="Open in Kibana" class="btn btn-secondary" href="{{ kibana }}" target="_blank" rel="noopener">{{ icon('external-link', '15') }} Open its space in Kibana</a>
             {% endif %}
-            {% if s.state == 'playing' %}
-            <button name="Replay Data" type="button" class="btn btn-secondary" hx-post="/api/simulations/{{ s.id }}/replay"
-                    hx-target="#sim-detail" hx-swap="innerHTML"
-                    title="Send its data again, stamped now, so rules made or fixed since the last pass see it"
-                    hx-confirm="Send the simulation's data again, stamped now? Rules made or fixed since the last pass will see it, and the players go on answering. Kibana keeps both passes: botes.replay.run_id tells them apart.">
-                {{ icon('rotate-ccw', '15') }} Replay data
+            {% if running %}
+            <button name="Add Players" type="button" class="btn btn-secondary" hx-get="/api/simulations/{{ s.id }}/players"
+                    hx-target="#modal-container" hx-swap="innerHTML"
+                    title="Add players: any of the client's users who aren't playing it yet">
+                {{ icon('user-plus', '15') }} Add players
+            </button>
+            {% endif %}
+            {% if opened %}
+            <button name="Add Scenario" type="button" class="btn btn-secondary" hx-get="/api/simulations/{{ s.id }}/add-scenario"
+                    hx-target="#modal-container" hx-swap="innerHTML"
+                    title="Add another scenario: its logs, rules, set-up in TIDE and questions, as you tick them">
+                {{ icon('plus', '15') }} Add scenario
             </button>
             {% endif %}
             {% if s.state not in ('ended', 'cleaning_up') %}
             <button name="End Simulation" type="button" class="btn btn-primary" hx-post="/api/simulations/{{ s.id }}/end"
                     hx-target="#sim-detail" hx-swap="innerHTML"
-                    hx-confirm="End the simulation? The replay stops and the players can't answer any more. Its space, rules, logs and alerts stay on the SIEM, and what it set up stays in TIDE, until you clean it up.">
+                    hx-confirm="End the simulation? Its replays stop, those queued are cancelled, and the players can't answer any more. Its space, rules, logs and alerts stay on the SIEM, and what it set up stays in TIDE, until you clean it up.">
                 {{ icon('pause', '15') }} {{ 'End it again' if s.interrupted else 'End simulation' }}
             </button>
             {% elif (ended and not s.cleaned) or (s.state == 'cleaning_up' and s.interrupted) %}
-            <button name="Clean Up" type="button" class="btn btn-primary" hx-post="/api/simulations/{{ s.id }}/clean-up"
-                    hx-target="#sim-detail" hx-swap="innerHTML"
-                    hx-confirm="Clean up the simulation? What it set up in TIDE (its systems, baselines, and its destination with its rules) is removed, and its space, rules, logs and alerts are deleted from the SIEM. Its results stay in TIDE until you clear them.">
-                {{ icon('trash-2', '15') }} {{ 'Clean up again' if s.cleanup_failed or s.interrupted else 'Clean up' }}
+            <button name="Clean Up" type="button" class="btn btn-primary" hx-get="/api/simulations/{{ s.id }}/clean-up"
+                    hx-target="#modal-container" hx-swap="innerHTML"
+                    title="Choose what to remove: what it set up in TIDE, its space on the SIEM, its logs">
+                {{ icon('trash-2', '15') }} {{ 'Clean up again' if s.cleanup_failed or s.interrupted else ('Clean up the rest' if 'done' in cleanup.values() else 'Clean up') }}…
             </button>
             {% elif ended %}
             <button name="Clear Results" type="button" class="btn btn-secondary" hx-post="/api/simulations/{{ s.id }}/clear"
@@ -84,61 +70,68 @@
         </div>
         {% endif %}
 
-        {% if s.cleanup %}
-        <p class="text-secondary text-sm">
-            {% for part, label in (('tide', 'What it set up in TIDE'), ('space', 'its space'), ('data', 'its data streams'), ('alerts', 'its alerts')) %}
-            {% set r = s.cleanup.get(part) %}{% if r %}{{ label }}: {{ ('removed' if part == 'tide' else 'deleted') if r.ok else ('not ' ~ ('removed' if part == 'tide' else 'deleted') ~ ': ' ~ (r.error or 'unknown')) }}{{ '; ' if not loop.last else '.' }}{% endif %}
-            {% endfor %}
-        </p>
-        {% endif %}
+        {% if cleanup_lines %}<p class="text-secondary text-sm">{{ cleanup_lines | join('; ') }}.</p>{% endif %}
 
-        <h3 class="sim-subhead">In TIDE</h3>
-        {% set made = in_tide | rejectattr('kind', 'equalto', 'problem') | list %}
-        {% if made %}
-        <ul class="sim-in-tide">
-            {% for o in made %}
-            <li>
-                <span class="text-secondary">{{ {'destination': 'Destination', 'baseline': 'Baseline', 'system': 'System', 'actor': 'Threat actor'}[o.kind] }}</span>
-                {% if o.state == 'made' and o.kind == 'system' %}<a href="/systems/{{ o.object_id }}">{{ o.name }}</a>
-                {% elif o.state == 'made' and o.kind == 'actor' %}<a href="/threats?search={{ ('"' ~ o.name ~ '"') | urlencode }}">{{ o.name }}</a>
-                {% elif o.state == 'made' and o.kind == 'baseline' %}<a href="/baselines?baseline_id={{ o.object_id | urlencode }}&group=baseline">{{ o.name }}</a>
-                {% else %}{{ o.name }}{% endif %}
-                {% if o.state == 'removed' %}<span class="text-secondary text-sm">removed</span>{% endif %}
-            </li>
-            {% endfor %}
-        </ul>
-        {% elif s.state == 'setting_up' %}
-        <p class="rm-empty">Being set up: its space linked to the client, its rules synced in, its baselines, systems and threat actor made.</p>
-        {% else %}
-        <p class="rm-empty">Nothing set up in TIDE.</p>
-        {% endif %}
-        {% for p in in_tide if p.kind == 'problem' %}
-        <p class="rm-note rm-note--warn">{{ icon('triangle-alert', '13') }} {{ p.name }}: {{ p.note }}</p>
-        {% endfor %}
-
-        <h3 class="sim-subhead">Board</h3>
-        {% set me = none %}
-        {% include "partials/simulation_board.html" %}
-
-        <h3 class="sim-subhead">Rules</h3>
-        {% if rules %}
+        <h3 class="sim-subhead">Scenarios</h3>
         <div class="sys-table-wrap">
-        <table class="rules-table">
-            <thead><tr><th>Rule</th><th>Scenario</th><th>In its space</th><th>Alerts</th></tr></thead>
+        <table class="rules-table sim-scenarios">
+            <thead><tr><th>Scenario</th><th>What it has</th><th>Logs</th><th class="sim-scenarios__actions"><span class="sr-only">Actions</span></th></tr></thead>
             <tbody>
-            {% for r in rules %}
-                <tr>
-                    <td>{{ r.name }}</td>
-                    <td>{{ names.get(r.scenario, r.scenario) }}</td>
-                    <td>{% if r.state == 'created' %}Created{% else %}<span title="{{ r.note }}">Not created</span>{% endif %}</td>
-                    <td>{{ r.alerts if r.alerts is not none else ('counted when it ends' if s.state != 'ended' else '—') }}</td>
-                </tr>
+            {% for row in rows %}
+            {% set p = row.part %}
+            <tr>
+                <td>{{ row.label }}</td>
+                <td>
+                    {% if p.state == 'setting_up' and not p.interrupted %}{{ icon('loader', '13', 'spin') }} Making its rules and setting it up…
+                    {% elif p.interrupted %}<span class="text-warning">A restart cut its set-up off</span>
+                    {% else %}{{ row.made | join(' · ') or ('Logs only' if p.logs else 'Nothing yet') }}{% endif %}
+                </td>
+                <td>{% include "partials/simulation_logs.html" %}</td>
+                <td class="sim-scenarios__actions">
+                    {% if can_run and opened and p.state != 'setting_up' %}
+                    <div class="sim-row-actions">
+                        {% if row.scenario and row.scenario.ready %}
+                        <button name="Replay Again" type="button" class="btn btn-secondary btn-sm"
+                                hx-get="/api/simulations/{{ s.id }}/scenarios/{{ p.scenario }}/replay" hx-target="#modal-container" hx-swap="innerHTML"
+                                title="Replay its logs again, stamped now, so rules made or fixed since see them">{{ icon('rotate-ccw', '14') }} Replay again…</button>
+                        {% endif %}
+                        {% if row.missing %}
+                        <div class="rh-more" data-more>
+                            {{ more_button('Scenario actions', title="Give it what it wasn't given when it was added", attrs='name="Scenario Actions"') }}
+                            <div class="rh-more__menu" role="menu" hidden>
+                                {% for part in row.missing %}
+                                {% set label, ico, ask = part_items[part] %}
+                                <button name="{{ label | title }}" type="button" role="menuitem" class="rh-more__item"
+                                        hx-post="/api/simulations/{{ s.id }}/scenarios/{{ p.scenario }}/parts" hx-vals='{"part": "{{ part }}"}'
+                                        hx-target="#sim-detail" hx-swap="innerHTML" hx-confirm="{{ ask.format(name=row.label) }}">
+                                    {{ icon(ico, '15') }}<span>{{ label }}</span>
+                                </button>
+                                {% endfor %}
+                            </div>
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                </td>
+            </tr>
             {% endfor %}
             </tbody>
         </table>
         </div>
-        {% else %}
-        <p class="rm-empty">No rules yet.</p>
-        {% endif %}
+
+        <h3 class="sim-subhead">Activity</h3>
+        {% include "partials/simulation_activity.html" %}
+
+        <h3 class="sim-subhead">In TIDE</h3>
+        {% include "partials/simulation_in_tide.html" %}
+
+        <h3 class="sim-subhead">Board</h3>
+        <div id="sim-admin-board-{{ s.id }}">
+            {% set me = none %}
+            {% include "partials/simulation_board.html" %}
+        </div>
+
+        <h3 class="sim-subhead">Rules</h3>
+        {% include "partials/simulation_rules.html" %}
     </div>
 </section>

@@ -1,0 +1,9 @@
+{#
+  The board on a player's Simulation page: asked for again every 15 s (5 s while it sets up, until the
+  answers open, which draws the page again) and when an answer scores (boardChanged).
+#}
+<h3 class="sim-subhead">Board</h3>
+<div id="sim-board-{{ s.id }}" hx-get="/api/simulation/{{ s.id }}/board{% if s.state == 'setting_up' %}?setting_up=1{% endif %}"
+     hx-trigger="every {{ '5s' if s.state == 'setting_up' else '15s' }}, boardChanged from:body" hx-swap="innerHTML">
+    {% include "partials/simulation_board.html" %}
+</div>

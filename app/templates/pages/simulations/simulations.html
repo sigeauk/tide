@@ -1,9 +1,10 @@
 {% extends "base.html" %}
 {#
-  Simulations (#118): a Sim Admin starts a simulation on one of the client's SIEMs (its own space, logs
-  and rules, linked to the client while it runs and removed when it ends), follows it, and keeps its
-  results until they are cleared. Context: api.simulations.page_context. Three tabs, as a client's page
-  has them (ui.tab, ?tab=): Run (start one, the list, the one opened in #sim-detail; the list refreshes
+  Simulations (#118): a Sim Admin starts a simulation on one of the client's SIEMs (its own space, with a
+  scenario and the parts ticked for it, macros/sim_scenario.html; more scenarios added once it runs),
+  follows it, and keeps its results until they are cleared. Context: api.simulations.page_context. Three
+  tabs, as a client's page has them (ui.tab, ?tab=): Run (start one, the list, the one opened in
+  #sim-detail, partials/simulation_detail.html; the list refreshes
   on simulationsChanged), Dashboard (a simulation's scores, #sim-dashboard) and Answers (its questions
   with their answers, #sim-answers), each of the last two for the simulation picked above it
   (partials/simulation_tab.html), and drawn again on simulationsChanged too.
@@ -12,6 +13,7 @@
 {% from "macros/modal.html" import empty_state %}
 {% from "macros/help.html" import help_button with context %}
 {% from "components/window_ui.html" import section_head %}
+{% from "macros/sim_scenario.html" import scenario_fields %}
 
 {% block title %}Simulations | TIDE{% endblock %}
 
@@ -54,43 +56,21 @@
     {% else %}
     {# The confirm is on the form: htmx asks on the element that sends the request, not on its button. #}
     <form name="Start Simulation" class="sim-start" hx-post="/api/simulations/start" hx-target="#sim-detail" hx-swap="innerHTML"
-          hx-confirm="Start the simulation? TIDE makes a space for it on the SIEM with its rules, links it to this client with the scenario's baselines and systems, and replays the attack into it. Everything it makes is removed when you end it.">
+          hx-confirm="Start the simulation? TIDE makes a space for it on the SIEM and does what you ticked for its scenario. More scenarios can be added once it runs. Everything it makes stays when you end it, until you clean it up.">
         <div class="sim-start__row">
             <div class="filter-group">
                 <label class="form-label" for="sim-siem">SIEM</label>
                 <select id="sim-siem" name="siem_id" class="form-input"
-                        title="The SIEM to make the simulation's space on. The space becomes one of this client's destinations while the simulation runs">
+                        title="The SIEM to make the simulation's space on. The space becomes one of this client's destinations once a scenario makes its rules or is set up in TIDE">
                     {% if siems | length > 1 %}<option value="" selected disabled>Choose a SIEM</option>{% endif %}
                     {% for s in siems %}<option value="{{ s.id }}">{{ s.label }}</option>{% endfor %}
                 </select>
             </div>
-            <div class="filter-group">
-                <label class="form-label" for="sim-noise">Noise</label>
-                <select id="sim-noise" name="noise" class="form-input">
-                    <option value="quiet">Quiet: the attack window</option>
-                    <option value="normal" selected>Normal: with its routine events</option>
-                    <option value="busy">Busy: and the half hour either side, with the same network's traffic from earlier that day</option>
-                </select>
-            </div>
-            <div class="filter-group">
-                <label class="form-label" for="sim-speed">Speed</label>
-                <input id="sim-speed" name="speed" type="number" class="form-input" value="10" min="0" max="1000" step="any"
-                       title="Times faster than it happened: 10 replays an hour in six minutes; 0 is as fast as the SIEM allows">
-            </div>
         </div>
-        <fieldset class="sim-start__set">
-            <legend class="form-label">Scenarios</legend>
-            {% for sc in scenarios %}
-            <label class="role-checkbox sim-choice" title="{{ sc.questions }} questions, {{ sc.rules }} rules">
-                <input type="checkbox" name="scenarios" value="{{ sc.id }}"{% if loop.first %} checked{% endif %}>
-                <span>{{ sc.label }}
-                    <span class="text-secondary text-sm">{{ sc.questions }} questions, {{ sc.rules }} rules{% for lv, n in sc.events.items() if n %}, {{ '{:,}'.format(n) }} events {{ lv }}{% endfor %}</span>
-                </span>
-            </label>
-            {% endfor %}
-        </fieldset>
+        {{ scenario_fields(scenarios) }}
         <fieldset class="sim-start__set">
             <legend class="form-label">Players</legend>
+            {% if users %}<p class="form-hint">None yet is fine: you can add players while it runs.</p>{% endif %}
             {% for u in users %}
             <label class="role-checkbox sim-choice">
                 <input type="checkbox" name="players" value="{{ u.id }}"> <span>{{ u.full_name or u.username }} <span class="text-secondary text-sm">{{ u.username }}</span></span>

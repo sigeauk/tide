@@ -1,0 +1,17 @@
+{#
+  One scenario on a player's Simulation page (api.simulations._play's parts): its name, its story and its
+  questions (partials/simulation_question.html). ``fresh``: it was just shown (simulation_new_parts), so
+  it says so.
+#}
+{% from "macros/icons.html" import icon %}
+<div class="sim-part" id="sim-part-{{ s.id }}-{{ part.scenario.id }}">
+    <h3 class="sim-subhead">{{ part.scenario.label }}</h3>
+    {% if fresh %}<p class="rm-note">{{ icon('bell', '13') }} New: its questions were just added to the simulation.</p>{% endif %}
+    <div class="sim-story">{{ part.story | md }}</div>
+    <div class="sim-questions">
+        {% for item in part.questions %}
+        {% set message, ok = '', false %}
+        {% include "partials/simulation_question.html" %}
+        {% endfor %}
+    </div>
+</div>

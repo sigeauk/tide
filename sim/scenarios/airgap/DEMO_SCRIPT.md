@@ -9,8 +9,7 @@ For whoever presents TIDE. The demo shows an air-gapped network that looks safe 
 
 **You need:**
 - **TIDE** with an Elastic SIEM whose API key may make Kibana spaces (see *What its API key needs* in Documentation → Simulations);
-- **a client** to run it in: everything the demo adds is removed afterwards;
-- **yourself as one of the client's users,** so you can be its player.
+- **a client** to run it in: everything the demo adds is removed afterwards.
 
 ## The story
 
@@ -47,8 +46,8 @@ Halcyon Marine designs warships on an engineering network with no internet conne
 1. **Simulations → Run → Start a simulation:**
    - **SIEM**: the demo SIEM.
    - **Noise**: any: the scenario has none. **Speed**: 10.
-   - **Scenarios**: *TIDE demo: USB, insider and rogue device* only (untick any other).
-   - **Players**: yourself.
+   - **Scenario**: *TIDE demo: USB, insider and rogue device*, with everything under **What to do** ticked.
+   - **Players**: none (the demo has no questions).
    - **Start simulation**.
 2. **Wait for *Playing*,** about 3 minutes: setting up, the first pass, then its sync.
 3. **Wait 2 more minutes,** then in **Rule Health** choose **Sync**. By then every rule has run on the data.
@@ -125,7 +124,7 @@ In each form, under **Index patterns**, tick **Use the default index**. Elastic'
 
 ## 6. Prove it, 5 minutes
 
-1. **Simulations → Run** → the simulation → **Replay data**. *Say:* "The same attack, stamped now. The rules we just fixed never saw the first one."
+1. **Simulations → Run** → the simulation → **Replay again…** on its row → **Replay again**. *Say:* "The same attack, stamped now. The rules we just fixed never saw the first one."
 2. **Wait for it:** about 2 minutes, while it shows *Replaying*. It's back to *Playing* once the data is in and the sync is done.
 3. **Wait a minute for the 1-minute rules to run,** then **Rule Health → Sync**.
 4. **The system's figures:**
@@ -170,7 +169,7 @@ Two simulations can't set up, replay or clean up on the same SIEM at once.
 | The hunt finds nothing | **Run on** or **Time** under **Hunting** points elsewhere | Choose the simulation's destination and *Last 24 hours*, and run it again |
 | The converted Sigma query names `ClassName` without `winlog.event_data` | The wrong pipeline | **Convert** again with *ECS Windows* |
 | A new rule isn't in **Add coverage**'s list | The sync after saving it hasn't finished | Wait for it, then search again |
-| No **Replay data** button | The first pass isn't done | Wait for *Playing* |
+| No **Replay again…** button | It is still setting up | Wait for *Replaying* or *Playing* |
 | The simulation says *Interrupted* | TIDE restarted while it ran | **End simulation**, **Clean up**, start again |
 | *Rogue contractor* isn't on **Threat Landscape** | The set-up couldn't add it: **In TIDE** on the simulation says why | Start the simulation again; meanwhile open the system straight away (section 3) |
 

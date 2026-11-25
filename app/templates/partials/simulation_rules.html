@@ -1,0 +1,25 @@
+{#
+  A simulation's rules (simulation.rule_results): each made in its space for a scenario, and how many
+  alerts it raised (counted when it ends). Out of band (``oob``) when simulation_live sends it.
+#}
+<div id="sim-rules-{{ s.id }}"{% if oob %} hx-swap-oob="true"{% endif %}>
+{% if rules %}
+<div class="sys-table-wrap">
+<table class="rules-table">
+    <thead><tr><th>Rule</th><th>Scenario</th><th>In its space</th><th>Alerts</th></tr></thead>
+    <tbody>
+    {% for r in rules %}
+        <tr>
+            <td>{{ r.name }}</td>
+            <td>{{ names.get(r.scenario, r.scenario) }}</td>
+            <td>{% if r.state == 'created' %}Created{% else %}<span title="{{ r.note }}">Not created</span>{% endif %}</td>
+            <td>{{ r.alerts if r.alerts is not none else ('counted when it ends' if s.state != 'ended' else '—') }}</td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+{% else %}
+<p class="rm-empty">No rules yet.</p>
+{% endif %}
+</div>

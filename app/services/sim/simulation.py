@@ -1,25 +1,34 @@
-"""A simulation: one run of one or more scenarios in a client's SIEM, played by the players a Sim Admin
-chose, from start to end.
+"""A simulation: one Kibana space on one of TIDE's SIEMs, where a Sim Admin runs scenarios for the
+players they choose, from start to end.
 
 Start (start()): on an Elastic SIEM in TIDE's inventory (the client needn't have it as a destination),
-TIDE makes the space sim-<id>, its data view and index template, and the scenarios' rules (rules.py).
-It then links the space to the client as a destination and sets the scenarios up in the client's TIDE
-(client.py: the rules synced in, each scenario's baseline and systems, the rules mapped), and replays
-the scenarios into the namespace sim<id> (replay.py). That runs in a thread the start begins, as a
-sync does; the pages read its progress. Once the replay is done the players go on answering.
-Replay data (replay_data()): once the replay is done, its data can be sent again, stamped now, as the
-next pass; it is replaying again meanwhile, then playing.
-End (end()): the replay stops if it hasn't finished, the players stop answering, and each rule's
-alerts are counted; the space, its data and rules stay, and so does what it set up in TIDE. Clean up
-(clean_up()): what it set up in TIDE is removed (its systems, baselines, destination and rules), and
-the space, its data streams, its template and its alerts are deleted; each removal is recorded, and
-one that fails can be tried again by cleaning up again. The results stay in the client's database
-until a Sim Admin clears them (clear(), once it is cleaned up).
+TIDE makes the space sim-<id>, its data view and index template, then sets up the scenarios chosen
+and queues their replays, one after the other, in a thread the start begins; the pages read its
+progress. It may start with no players: add_players() adds them while it runs.
 
-States: setting_up, replaying, playing (the replay done), ending, ended, cleaning_up, failed. A
-simulation shown as setting_up, replaying, ending or cleaning_up with no thread behind it was cut off by
-a restart: it is reported as interrupted; ending (or cleaning up) it again carries on. One simulation
-at a time sets up, replays or cleans up on a SIEM.
+A scenario's parts (Parts): what adding it does, as the Sim Admin ticks it. Make its rules (rules.py)
+in the space; set it up in the client's TIDE (client.py: the space linked to the client as a
+destination and synced, its baseline, systems and threat actor, its rules mapped); show its questions
+to the players; replay its logs into the namespace sim<id> (replay.py). add_scenario() adds another
+while it runs; add_parts() does later what wasn't done. A rule two scenarios share is made once.
+
+Replays (replay_scenario()): each sends one scenario's logs, stamped as they are sent, as that
+scenario's next pass. One starts now, alongside any other, or after every replay asked for before it;
+either waits for its scenario's rules to be made first. stop_replay() stops one, cancel_replay() takes
+one out of the queue. Once one is in, the client's TIDE is synced again, so the rules' field checks
+see the data.
+
+End (end()): its replays stop, those queued are cancelled, the players stop answering, and each
+rule's alerts are counted; the space, its data and rules stay, and so does what it set up in TIDE.
+Clean up (clean_up()): what it set up in TIDE is removed (its systems, baselines, destination and
+rules), and the space, its data streams, its template and its alerts are deleted; each removal is
+recorded, and one that fails can be tried again by cleaning up again. The results stay in the
+client's database until a Sim Admin clears them (clear(), once it is cleaned up).
+
+States: setting_up (its space and first scenarios), replaying (a replay running or queued), playing,
+ending, ended, cleaning_up, failed. A simulation shown as setting_up, replaying, ending or cleaning_up
+with nothing running behind it was cut off by a restart: it is reported as interrupted; ending (or
+cleaning up) it again carries on. One simulation at a time sets up, replays or cleans up on a SIEM.
 
 Everything is kept in the client's own database (Store), with the players by their TIDE user ids.
 """
@@ -30,9 +39,10 @@ import json
 import logging
 import re
 import threading
+import time
 import uuid
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -54,12 +64,12 @@ DDL = (
         siem_id     VARCHAR NOT NULL,
         space       VARCHAR NOT NULL,      -- its own Kibana space on siem_id, linked to the client while it runs
         namespace   VARCHAR NOT NULL,      -- its data streams: logs-*-<namespace>
-        scenarios   VARCHAR NOT NULL,      -- JSON: the scenario ids, in replay order
-        noise       VARCHAR NOT NULL,
+        scenarios   VARCHAR NOT NULL,      -- JSON: the scenario ids, in the order they were added
+        noise       VARCHAR NOT NULL,      -- the first scenarios' noise level and speed
         speed       DOUBLE NOT NULL,
         state       VARCHAR NOT NULL,
         error       VARCHAR,
-        progress    VARCHAR,               -- JSON: the replay's summary
+        progress    VARCHAR,               -- JSON: the latest replay's summary
         cleanup     VARCHAR,               -- JSON: what the end removed, or why it couldn't
         created_by  VARCHAR NOT NULL,
         created_at  TIMESTAMP NOT NULL,
@@ -71,7 +81,7 @@ DDL = (
         sim_id  VARCHAR NOT NULL,
         user_id VARCHAR NOT NULL,          -- the TIDE user
         name    VARCHAR NOT NULL,          -- their name when chosen
-        PRIMARY KEY (sim_id, user_id)
+        PRIMARY KEY (sim_id, user_id)      -- and added_by, added_at (COLUMNS_ADDED)
     )""",
     """CREATE TABLE IF NOT EXISTS simulation_answers (
         sim_id   VARCHAR NOT NULL,
@@ -120,11 +130,44 @@ DDL = (
         name      VARCHAR NOT NULL,        -- as made (a problem: what couldn't be done)
         state     VARCHAR NOT NULL,        -- made, removed, or failed (a problem)
         note      VARCHAR,                 -- a problem's reason
-        made_at   TIMESTAMP NOT NULL
+        made_at   TIMESTAMP NOT NULL       -- and scenario, the one it was made for (COLUMNS_ADDED)
+    )""",
+    """CREATE TABLE IF NOT EXISTS simulation_parts (
+        sim_id    VARCHAR NOT NULL,
+        scenario  VARCHAR NOT NULL,
+        logs      BOOLEAN NOT NULL,        -- its logs replayed when it was added
+        rules     BOOLEAN NOT NULL,        -- its rules made in the space
+        tide      BOOLEAN NOT NULL,        -- set up in the client's TIDE
+        questions BOOLEAN NOT NULL,        -- shown to the players
+        state     VARCHAR NOT NULL,        -- setting_up (its rules and set-up), ready
+        added_by  VARCHAR NOT NULL,
+        added_at  TIMESTAMP NOT NULL,
+        PRIMARY KEY (sim_id, scenario)
+    )""",
+    """CREATE TABLE IF NOT EXISTS simulation_replays (
+        sim_id       VARCHAR NOT NULL,
+        n            INTEGER NOT NULL,     -- its order in the simulation, from 1
+        scenario     VARCHAR NOT NULL,
+        noise        VARCHAR NOT NULL,
+        speed        DOUBLE NOT NULL,
+        after        BOOLEAN NOT NULL,     -- waits for every replay asked for before it
+        state        VARCHAR NOT NULL,     -- queued, replaying, replayed, stopped, failed, cancelled
+        pass         INTEGER,              -- which time the scenario's logs are sent (botes.replay.loop)
+        run_id       VARCHAR,              -- botes.replay.run_id
+        progress     VARCHAR,              -- JSON: its summary (replay.Progress)
+        error        VARCHAR,
+        requested_by VARCHAR NOT NULL,
+        requested_at TIMESTAMP NOT NULL,
+        started_at   TIMESTAMP,
+        finished_at  TIMESTAMP,
+        PRIMARY KEY (sim_id, n)
     )""",
 )
+# Columns added to tables a simulation made before they had them.
+COLUMNS_ADDED = (("simulation_players", "added_by", "VARCHAR"), ("simulation_players", "added_at", "TIMESTAMP"),
+                 ("simulation_objects", "scenario", "VARCHAR"))
 TABLES = ("simulations", "simulation_players", "simulation_answers", "simulation_solves", "simulation_hints",
-          "simulation_rules", "simulation_objects")
+          "simulation_rules", "simulation_objects", "simulation_parts", "simulation_replays")
 
 
 class SimError(ValueError):
@@ -134,6 +177,11 @@ class SimError(ValueError):
 def ensure(conn) -> None:
     for ddl in DDL:
         conn.execute(ddl)
+    have = set(conn.execute("SELECT table_name, column_name FROM duckdb_columns() WHERE database_name = current_database() "
+                            "AND schema_name = 'main' AND table_name IN ('simulation_players', 'simulation_objects')").fetchall())
+    for table, column, kind in COLUMNS_ADDED:
+        if (table, column) not in have:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {kind}")   # nosec B608 # COLUMNS_ADDED is fixed
 
 
 class TenantStore:
@@ -150,18 +198,19 @@ class TenantStore:
             yield conn
 
     # The simulation in the client's TIDE (client.py). A test's store stands in for these.
-    def set_up_client(self, sim_id: str, siem_id: str, space: str, namespace: str, scenarios: list,
-                      actor: Optional[str]) -> None:
+    def set_up_client(self, sim_id: str, siem_id: str, space: str, namespace: str, scenario: packs.Scenario,
+                      actor: Optional[str], *, rules: bool, tide: bool, made: set, in_space: set) -> None:
         from app.services.sim import client
-        client.set_up(self, sim_id, siem_id, space, namespace, scenarios, actor)
+        client.set_up(self, sim_id, siem_id, space, namespace, scenario, actor, rules=rules, tide=tide, made=made,
+                      in_space=in_space)
 
     def resync_client(self, sim_id: str) -> None:
         from app.services.sim import client
         client.resync(self, sim_id)
 
-    def remove_from_client(self, sim_id: str, actor: Optional[str]) -> list:
+    def remove_from_client(self, sim_id: str, actor: Optional[str], kinds: Optional[set] = None) -> list:
         from app.services.sim import client
-        return client.remove(self, sim_id, actor)
+        return client.remove(self, sim_id, actor, kinds=kinds)
 
 
 @dataclass
@@ -203,8 +252,22 @@ def siem_for(db, siem_id: str) -> Siem:
 
 # ── The threads ────────────────────────────────────────────────────────────────────────────────
 
-_LOCK = threading.Lock()
-_WORKERS: dict[str, dict] = {}      # sim id -> {"siem_id", "thread", "replay", "ending"}
+_LOCK = threading.Lock()          # _WORK
+_KICK = threading.Lock()          # which replays start, and the simulation's state, decided one at a time
+_SET_UP: dict[str, threading.Lock] = {}     # sim id -> its scenarios' set-ups, one at a time
+
+
+@dataclass
+class _Work:
+    """What runs for one simulation in this process: its threads (set-ups, replays, the end or the clean
+    up) and the replays running, so End can stop them. It goes when its last thread finishes."""
+    siem: Siem
+    threads: set = field(default_factory=set)
+    replays: dict = field(default_factory=dict)       # replay n -> replay.Replay, while it runs
+    ending: bool = False
+
+
+_WORK: dict[str, _Work] = {}
 
 
 def _now() -> datetime:
@@ -222,53 +285,101 @@ def _set(store, sim_id: str, only_if: Optional[tuple] = None, **values) -> None:
         conn.execute(sql, params)
 
 
-def _spawn(sim_id: str, siem_id: str, target, *args) -> None:
-    th = threading.Thread(target=target, args=(*args,), name=f"sim-{sim_id}", daemon=True)
+def _spawn(sim_id: str, siem: Siem, target, *args, ending: bool = False) -> None:
+    th = threading.Thread(target=_thread, args=(sim_id, target, *args), name=f"sim-{sim_id}", daemon=True)
     with _LOCK:
-        _WORKERS[sim_id] = {"siem_id": siem_id, "thread": th, "replay": None, "ending": False}
+        w = _WORK.setdefault(sim_id, _Work(siem))
+        w.threads.add(th)
+        w.ending = w.ending or ending
     th.start()
 
 
-def _done(sim_id: str) -> None:
-    """A simulation's thread is finishing: its entry goes, unless an end has replaced it."""
-    with _LOCK:
-        w = _WORKERS.get(sim_id)
-        if w and w["thread"] is threading.current_thread():
-            del _WORKERS[sim_id]
+def _thread(sim_id: str, target, *args) -> None:
+    try:
+        target(*args)
+    finally:
+        with _LOCK:
+            w = _WORK.get(sim_id)
+            if w:
+                w.threads.discard(threading.current_thread())
+                if not w.threads:
+                    del _WORK[sim_id]
 
 
-def _register(sim_id: str, rp: replay.Replay) -> bool:
-    """Hand the replay to end(); False when the simulation is already being ended (don't start it)."""
+def _live(sim_id: str) -> bool:
     with _LOCK:
-        w = _WORKERS.get(sim_id)
-        if not w or w["ending"] or w["thread"] is not threading.current_thread():
+        return sim_id in _WORK
+
+
+def _ending(sim_id: str) -> bool:
+    with _LOCK:
+        w = _WORK.get(sim_id)
+        return bool(w and w.ending)
+
+
+def _busy_elsewhere(siem: Siem, sim_id: Optional[str] = None) -> None:
+    """One simulation at a time sets up, replays or cleans up on a SIEM: a SimError when another is."""
+    with _LOCK:
+        if any(w.siem.id == siem.id for sid, w in _WORK.items() if sid != sim_id):
+            raise SimError(f"Another simulation is setting up, replaying or cleaning up on {siem.label}: "
+                           f"wait for it to finish.")
+
+
+def _register(sim_id: str, n: int, rp: replay.Replay) -> bool:
+    """Hand a replay to end(); False when the simulation is being ended (don't start it)."""
+    with _LOCK:
+        w = _WORK.get(sim_id)
+        if not w or w.ending:
             return False
-        w["replay"] = rp
+        w.replays[n] = rp
         return True
 
 
-def wait(sim_id: str, timeout: float = 600) -> None:
-    """Wait for a simulation's thread to finish (for tests and scripts)."""
+def _unregister(sim_id: str, n: int) -> None:
     with _LOCK:
-        w = _WORKERS.get(sim_id)
-    if w:
-        w["thread"].join(timeout)
+        w = _WORK.get(sim_id)
+        if w:
+            w.replays.pop(n, None)
+
+
+def wait(sim_id: str, timeout: float = 600) -> None:
+    """Wait until nothing runs for a simulation (for tests and scripts): its set-ups, its replays,
+    including those that start meanwhile, and its end or clean up."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with _LOCK:
+            w = _WORK.get(sim_id)
+            threads = [t for t in (w.threads if w else ()) if t is not threading.current_thread()]
+        if not threads:
+            return
+        for t in threads:
+            t.join(max(0.0, deadline - time.monotonic()))
 
 
 # ── Start ──────────────────────────────────────────────────────────────────────────────────────
 
-def start(store, siem: Siem, scenario_ids: list[str], noise: str, speed: float,
-          players: list[tuple[str, str]], by: str, max_eps: float = replay.MAX_EPS,
-          actor: Optional[str] = None) -> str:
-    """Start a simulation: checks what was asked, records it, and begins its set-up and replay in a
-    thread. Returns its id. ``by`` is the Sim Admin's name as shown; ``actor`` their username, for
-    TIDE's history of what the simulation sets up in the client."""
-    if not scenario_ids:
-        raise SimError("Pick at least one scenario.")
+@dataclass(frozen=True)
+class Parts:
+    """What adding a scenario does: replay its logs, make its rules in the space, set it up in the
+    client's TIDE (its baseline, systems and threat actor, its rules mapped) and show its questions to
+    the players. All of it, unless the Sim Admin unticks some."""
+    logs: bool = True
+    rules: bool = True
+    tide: bool = True
+    questions: bool = True
+
+    def any(self) -> bool:
+        return self.logs or self.rules or self.tide or self.questions
+
+
+def _scenarios(scenario_ids: list[str]) -> list[packs.Scenario]:
     try:
-        scenarios = [packs.scenario(s) for s in dict.fromkeys(scenario_ids)]
+        return [packs.scenario(s) for s in dict.fromkeys(scenario_ids)]
     except packs.PackError as exc:
         raise SimError(str(exc)) from None
+
+
+def _replayable(scenarios: list[packs.Scenario], noise: str, speed: float) -> None:
     for sc in scenarios:
         if not sc.ready:
             raise SimError(f"{sc.label} has no logs, so it can't be replayed.")
@@ -276,83 +387,44 @@ def start(store, siem: Siem, scenario_ids: list[str], noise: str, speed: float,
             raise SimError(f"{sc.label} can't be replayed at noise {noise}.")
     if not 0 <= float(speed) <= MAX_SPEED:
         raise SimError(f"The speed is 0 (as fast as allowed) to {MAX_SPEED}.")
+
+
+def start(store, siem: Siem, scenario_ids: list[str], noise: str, speed: float,
+          players: list[tuple[str, str]], by: str, max_eps: float = replay.MAX_EPS,
+          actor: Optional[str] = None, parts: Parts = Parts()) -> str:
+    """Start a simulation: checks what was asked, records it, and begins its set-up in a thread: its
+    space, then each scenario with ``parts``, then their replays, one after the other. Returns its id.
+    ``by`` is the Sim Admin's name as shown; ``actor`` their username, for TIDE's history of what the
+    simulation sets up in the client. Players may be none: add_players() adds them while it runs."""
+    if not scenario_ids:
+        raise SimError("Pick at least one scenario.")
+    scenarios = _scenarios(scenario_ids)
+    if not parts.any():
+        raise SimError("Tick at least one thing for its scenario to do.")
+    if parts.logs:
+        _replayable(scenarios, noise, speed)
     players = list(dict(players).items())
-    if not players:
-        raise SimError("Pick at least one player.")
-    with _LOCK:
-        if any(w["siem_id"] == siem.id for w in _WORKERS.values()):
-            raise SimError(f"Another simulation is setting up, replaying or cleaning up on {siem.label}: "
-                           f"wait for it to finish.")
+    _busy_elsewhere(siem)
     sim_id = uuid.uuid4().hex[:8]
-    space, namespace = f"sim-{sim_id}", f"sim{sim_id}"
+    space, namespace, now = f"sim-{sim_id}", f"sim{sim_id}", _now()
     with store.connect() as conn:
         conn.execute("INSERT INTO simulations (id, siem_id, space, namespace, scenarios, noise, speed, state, "
                      "created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'setting_up', ?, ?)",
                      [sim_id, siem.id, space, namespace, json.dumps([sc.id for sc in scenarios]), noise,
-                      float(speed), by, _now()])
-        conn.executemany("INSERT INTO simulation_players (sim_id, user_id, name) VALUES (?, ?, ?)",
-                         [[sim_id, uid, name] for uid, name in players])
-    _spawn(sim_id, siem.id, _run, store, siem, sim_id, scenarios, noise, float(speed), float(max_eps), actor)
+                      float(speed), by, now])
+        conn.executemany("INSERT INTO simulation_parts (sim_id, scenario, logs, rules, tide, questions, state, "
+                         "added_by, added_at) VALUES (?, ?, ?, ?, ?, ?, 'setting_up', ?, ?)",
+                         [[sim_id, sc.id, parts.logs, parts.rules, parts.tide, parts.questions, by, now]
+                          for sc in scenarios])
+        if players:
+            conn.executemany("INSERT INTO simulation_players (sim_id, user_id, name, added_by, added_at) "
+                             "VALUES (?, ?, ?, ?, ?)", [[sim_id, uid, name, by, now] for uid, name in players])
+    _spawn(sim_id, siem, _run, store, siem, sim_id, scenarios, parts, noise, float(speed), float(max_eps), by, actor)
     return sim_id
 
 
-def _ending(sim_id: str) -> bool:
-    with _LOCK:
-        w = _WORKERS.get(sim_id)
-        return bool(w and w["ending"])
-
-
-# ── Replay data ────────────────────────────────────────────────────────────────────────────────
-
-def replay_data(store, siem: Siem, sim_id: str, max_eps: float = replay.MAX_EPS) -> None:
-    """Send a playing simulation's data again (Replay data, #127): the same scenarios at the same noise
-    level and speed, stamped now, as a new run (botes.replay.run_id) and the next pass
-    (botes.replay.loop), in a thread. Rules made or fixed since the last pass see it, because a rule
-    only looks a few minutes back; the players go on answering; the client's TIDE is synced again
-    once it is in, as after the first pass."""
-    sim = _check(get(store, sim_id), siem)
-    if sim["state"] != "playing":
-        raise SimError("its data can be sent again once its replay is done, until it ends")
-    try:
-        scenarios = [packs.scenario(s) for s in sim["scenarios"]]
-    except packs.PackError as exc:
-        raise SimError(str(exc)) from None
-    with _LOCK:
-        if any(w["siem_id"] == siem.id for w in _WORKERS.values()):
-            raise SimError(f"another simulation is setting up, replaying or cleaning up on {siem.label}: "
-                           f"wait for it to finish")
-    _set(store, sim_id, only_if=("playing",), state="replaying", error=None)
-    if (get(store, sim_id) or {}).get("state") != "replaying":
-        raise SimError("it was ended meanwhile")
-    _spawn(sim_id, siem.id, _again, store, siem, sim, scenarios, float(max_eps))
-
-
-def _again(store, siem: Siem, sim: dict, scenarios: list[packs.Scenario], max_eps: float) -> None:
-    sim_id = sim["id"]
-    n = int((sim["progress"] or {}).get("pass") or 1) + 1
-    try:
-        rp = replay.Replay(siem.es(), replay.plan(scenarios, sim["noise"]), namespace=sim["namespace"],
-                           speed=sim["speed"], max_eps=max_eps, loop=n,
-                           on_progress=lambda s: _set(store, sim_id, progress=json.dumps({**s, "pass": n})))
-        if not _register(sim_id, rp):
-            return                                         # ended before it began
-        summary = rp.run()
-        _set(store, sim_id, progress=json.dumps({**summary, "pass": n}), replayed_at=_now())
-        if not summary.get("stopped"):
-            try:
-                store.resync_client(sim_id)
-            except Exception:  # noqa: BLE001 - the rules' field checks catch up at the next sync
-                logger.exception("Simulation %s: could not sync its rules again", sim_id)
-        _set(store, sim_id, only_if=("replaying",), state="playing")
-    except Exception as exc:  # noqa: BLE001 - the simulation goes on; its page says why the pass stopped
-        logger.exception("Simulation %s: could not send its data again", sim_id)
-        _set(store, sim_id, only_if=("replaying",), state="playing", error=str(exc)[:500])
-    finally:
-        _done(sim_id)
-
-
-def _run(store, siem: Siem, sim_id: str, scenarios: list[packs.Scenario], noise: str, speed: float,
-         max_eps: float, actor: Optional[str] = None) -> None:
+def _run(store, siem: Siem, sim_id: str, scenarios: list[packs.Scenario], parts: Parts, noise: str,
+         speed: float, max_eps: float, by: str, actor: Optional[str] = None) -> None:
     space, namespace = f"sim-{sim_id}", f"sim{sim_id}"
     try:
         kb, es = siem.kibana(), siem.es()
@@ -364,46 +436,276 @@ def _run(store, siem: Siem, sim_id: str, scenarios: list[packs.Scenario], noise:
         client.made_on_siem(store, sim_id, client.SIEM_SPACE, space)
         replay.install_template(es, namespace=namespace)
         client.made_on_siem(store, sim_id, client.SIEM_DATA, namespace)
-        segments = replay.plan(scenarios, noise)
         # The data streams first, empty, so the data view has their fields (@timestamp) from the start:
         # made on a pattern that matched nothing, Discover would show no histogram until reloaded.
-        replay.make_streams(es, segments, namespace)
+        if parts.logs:
+            replay.make_streams(es, replay.plan(scenarios, noise), namespace)
         kb.create_data_view(space, f"logs-*-{namespace}", "Simulation logs")
-        made = []
         for sc in scenarios:
-            for spec in rules.specs(sc):
+            if _ending(sim_id):
+                return                                     # ended while it was setting up
+            _set_up(store, siem, sim_id, sc, parts.rules, parts.tide, actor)
+        if _ending(sim_id):
+            return
+        if parts.logs:
+            for sc in scenarios:
+                _queue(store, sim_id, sc.id, noise, speed, after=True, by=by)
+        _set(store, sim_id, only_if=("setting_up",), state="replaying" if parts.logs else "playing")
+        _kick(store, siem, sim_id, max_eps)
+    except Exception as exc:  # noqa: BLE001 - recorded on the simulation; ending and cleaning it up removes what it made
+        logger.exception("Simulation %s failed", sim_id)
+        _set(store, sim_id, only_if=("setting_up", "replaying"), state="failed", error=str(exc)[:500])
+
+
+# ── A scenario's parts ─────────────────────────────────────────────────────────────────────────
+
+def _set_up(store, siem: Siem, sim_id: str, sc: packs.Scenario, make_rules: bool, tide: bool,
+            actor: Optional[str]) -> None:
+    """Make a scenario's rules in the space and set it up in the client's TIDE, as asked, one scenario
+    at a time; its part is ready once done, whatever failed (each problem is recorded and shown)."""
+    with _LOCK:
+        lock = _SET_UP.setdefault(sim_id, threading.Lock())
+    with lock:
+        try:
+            sim = get(store, sim_id)
+            made = _make_rules(store, siem, sim, sc) if make_rules else set()
+            if make_rules or tide:
+                in_space = {r["rule_id"] for r in rule_results(store, sim_id) if r["state"] == "created"}
                 try:
-                    kb.create_rule(space, rules.body(spec, namespace))
-                    made.append([sim_id, sc.id, spec.kibana_id, siem.id, space, spec.name, "created", None])
-                except (packs.PackError, replay.ElasticError) as exc:
-                    made.append([sim_id, sc.id, spec.kibana_id, siem.id, space, spec.name, "failed", str(exc)[:500]])
-        if made:
+                    store.set_up_client(sim_id, siem.id, sim["space"], sim["namespace"], sc, actor,
+                                        rules=make_rules, tide=tide, made=made, in_space=in_space)
+                except Exception:  # noqa: BLE001 - its own problems are recorded; the exercise goes on in Kibana
+                    logger.exception("Simulation %s: could not set %s up in the client's TIDE", sim_id, sc.id)
+        finally:
             with store.connect() as conn:
-                conn.executemany("INSERT INTO simulation_rules (sim_id, scenario, rule_id, siem_id, space, name, "
-                                 "state, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", made)
+                conn.execute("UPDATE simulation_parts SET state = 'ready' WHERE sim_id = ? AND scenario = ?", [sim_id, sc.id])
+
+
+def _make_rules(store, siem: Siem, sim: dict, sc: packs.Scenario) -> set:
+    """Make a scenario's rules in the simulation's space and record each: the ids of those made. A rule
+    an earlier scenario brought (two scenarios can share one of Elastic's) is there already: it is
+    made once, and counts for both."""
+    try:
+        specs = rules.specs(sc)
+    except packs.PackError as exc:
+        client.problem(store, sim["id"], f"{sc.label}: could not read its rules", exc, sc.id)
+        return set()
+    held = {r["rule_id"] for r in rule_results(store, sim["id"])}
+    kb, made, rows = siem.kibana(), set(), []
+    for spec in specs:
+        if spec.kibana_id in held:
+            continue
+        held.add(spec.kibana_id)
+        state, note = "created", None
+        try:
+            kb.create_rule(sim["space"], rules.body(spec, sim["namespace"]))
+        except replay.ElasticError as exc:
+            if exc.status != 409:                          # 409: it is in the space already
+                state, note = "failed", str(exc)[:500]
+        except packs.PackError as exc:
+            state, note = "failed", str(exc)[:500]
+        if state == "created":
+            made.add(spec.kibana_id)
+        rows.append([sim["id"], sc.id, spec.kibana_id, siem.id, sim["space"], spec.name, state, note])
+    if rows:
+        with store.connect() as conn:
+            conn.executemany("INSERT INTO simulation_rules (sim_id, scenario, rule_id, siem_id, space, name, state, "
+                             "note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
+    return made
+
+
+def _open(sim: dict) -> dict:
+    """A simulation that takes more scenarios and replays: once its first scenarios are set up (their
+    own replays queued first), until it ends."""
+    if sim["state"] == "setting_up" and not sim["interrupted"]:
+        raise SimError("it is still setting up its first scenarios: wait a moment.")
+    if sim["state"] not in OPEN or sim["interrupted"]:
+        raise SimError("it isn't running.")
+    return sim
+
+
+def add_scenario(store, siem: Siem, sim_id: str, scenario_id: str, parts: Parts, noise: str, speed: float,
+                 by: str, *, after: bool = False, actor: Optional[str] = None,
+                 max_eps: float = replay.MAX_EPS) -> None:
+    """Add a scenario to a running simulation, doing ``parts``: its rules and its set-up in TIDE in a
+    thread, its questions shown at once, and its logs replayed once its rules are in: now, alongside
+    any other replay, or ``after`` those asked for before it."""
+    sim = _open(_check(get(store, sim_id), siem))
+    sc = _scenarios([scenario_id])[0]
+    if sc.id in sim["scenarios"]:
+        raise SimError(f"{sc.label} is in it already: replay its logs again, or do what wasn't done, from its row.")
+    if not parts.any():
+        raise SimError("tick at least one thing for it to do.")
+    if parts.logs:
+        _replayable([sc], noise, speed)
+    _busy_elsewhere(siem, sim_id)
+    set_up = parts.rules or parts.tide
+    with store.connect() as conn:
+        conn.execute("INSERT INTO simulation_parts (sim_id, scenario, logs, rules, tide, questions, state, added_by, "
+                     "added_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     [sim_id, sc.id, parts.logs, parts.rules, parts.tide, parts.questions,
+                      "setting_up" if set_up else "ready", by, _now()])
+        conn.execute("UPDATE simulations SET scenarios = ? WHERE id = ?", [json.dumps([*sim["scenarios"], sc.id]), sim_id])
+    if parts.logs:
+        _queue(store, sim_id, sc.id, noise, speed, after=after, by=by)
+    if set_up:
+        _spawn(sim_id, siem, _set_up_then_kick, store, siem, sim_id, sc, parts.rules, parts.tide, actor, max_eps)
+    _kick(store, siem, sim_id, max_eps)
+
+
+def add_parts(store, siem: Siem, sim_id: str, scenario_id: str, *, rules: bool = False, tide: bool = False,
+              questions: bool = False, actor: Optional[str] = None, max_eps: float = replay.MAX_EPS) -> None:
+    """Do for a scenario already in the simulation what wasn't done when it was added: make its rules
+    (mapped onto its TIDE set-up, if it has one), set it up in TIDE, or show its questions."""
+    _open(_check(get(store, sim_id), siem))
+    part = next((p for p in scenario_parts(store, sim_id) if p["scenario"] == scenario_id), None)
+    if part is None:
+        raise SimError("it has no such scenario.")
+    if part["state"] == "setting_up":
+        raise SimError("its set-up is still under way.")
+    new_rules, new_tide = rules and not part["rules"], tide and not part["tide"]
+    new_questions = questions and not part["questions"]
+    if not (new_rules or new_tide or new_questions):
+        raise SimError("that is done already.")
+    if new_rules or new_tide:
+        _busy_elsewhere(siem, sim_id)
+    with store.connect() as conn:
+        conn.execute("UPDATE simulation_parts SET rules = rules OR ?, tide = tide OR ?, questions = questions OR ?, "
+                     "state = ? WHERE sim_id = ? AND scenario = ?",
+                     [new_rules, new_tide, new_questions, "setting_up" if new_rules or new_tide else "ready",
+                      sim_id, scenario_id])
+    if new_rules or new_tide:
+        _spawn(sim_id, siem, _set_up_then_kick, store, siem, sim_id, packs.scenario(scenario_id), new_rules,
+               new_tide, actor, max_eps)
+
+
+def _set_up_then_kick(store, siem: Siem, sim_id: str, sc: packs.Scenario, make_rules: bool, tide: bool,
+                      actor: Optional[str], max_eps: float) -> None:
+    try:
+        _set_up(store, siem, sim_id, sc, make_rules, tide, actor)
+    finally:
+        _kick(store, siem, sim_id, max_eps)               # its replay waited for its rules
+
+
+# ── Replays ────────────────────────────────────────────────────────────────────────────────────
+
+QUEUED, REPLAYING, REPLAYED, STOPPED, FAILED, CANCELLED = "queued", "replaying", "replayed", "stopped", "failed", "cancelled"
+WAITING = (QUEUED, REPLAYING)                              # not finished
+
+
+def _queue(store, sim_id: str, scenario: str, noise: str, speed: float, *, after: bool, by: str) -> int:
+    with _KICK, store.connect() as conn:
+        n = conn.execute("SELECT coalesce(max(n), 0) + 1 FROM simulation_replays WHERE sim_id = ?", [sim_id]).fetchone()[0]
+        conn.execute("INSERT INTO simulation_replays (sim_id, n, scenario, noise, speed, after, state, requested_by, "
+                     "requested_at) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?)",
+                     [sim_id, n, scenario, noise, float(speed), bool(after), by, _now()])
+    return int(n)
+
+
+def replay_scenario(store, siem: Siem, sim_id: str, scenario_id: str, noise: str, speed: float, by: str, *,
+                    after: bool = False, max_eps: float = replay.MAX_EPS) -> int:
+    """Replay a scenario's logs again, stamped as they are sent, as its next pass: now, alongside any
+    other replay, or ``after`` those asked for before it. Returns the replay's number."""
+    sim = _open(_check(get(store, sim_id), siem))
+    if scenario_id not in sim["scenarios"]:
+        raise SimError("it has no such scenario.")
+    _replayable(_scenarios([scenario_id]), noise, speed)
+    _busy_elsewhere(siem, sim_id)
+    n = _queue(store, sim_id, scenario_id, noise, speed, after=after, by=by)
+    _kick(store, siem, sim_id, max_eps)
+    return n
+
+
+def stop_replay(store, siem: Siem, sim_id: str, n: int) -> None:
+    """Stop a replay that is running; what it sent stays."""
+    _check(get(store, sim_id), siem)
+    with _LOCK:
+        w = _WORK.get(sim_id)
+        rp = w.replays.get(n) if w else None
+    if rp is None:
+        raise SimError("that replay isn't running.")
+    rp.stop()
+
+
+def cancel_replay(store, siem: Siem, sim_id: str, n: int, max_eps: float = replay.MAX_EPS) -> None:
+    """Take a queued replay out of the queue; those after it may then start."""
+    _check(get(store, sim_id), siem)
+    with _KICK, store.connect() as conn:
+        done = conn.execute("UPDATE simulation_replays SET state = 'cancelled', finished_at = ? WHERE sim_id = ? "
+                            "AND n = ? AND state = 'queued' RETURNING n", [_now(), sim_id, n]).fetchone()
+    if not done:
+        raise SimError("that replay isn't queued.")
+    _kick(store, siem, sim_id, max_eps)
+
+
+def _kick(store, siem: Siem, sim_id: str, max_eps: float) -> None:
+    """Start each queued replay that may start now, and set the simulation replaying or playing. A
+    replay waits for its scenario's set-up (its rules must be in to see it); one asked to come after
+    also waits for every replay asked for before it to finish."""
+    with _KICK:
+        rows = replays(store, sim_id)
         if not _ending(sim_id):
-            try:
-                store.set_up_client(sim_id, siem.id, space, namespace, scenarios, actor)
-            except Exception:  # noqa: BLE001 - its own problems are recorded; the exercise goes on in Kibana
-                logger.exception("Simulation %s: could not set it up in the client's TIDE", sim_id)
-        rp = replay.Replay(es, segments, namespace=namespace, speed=speed, max_eps=max_eps,
-                           on_progress=lambda s: _set(store, sim_id, progress=json.dumps(s)))
-        if not _register(sim_id, rp):
-            return                                         # ended while it was setting up
-        _set(store, sim_id, only_if=("setting_up",), state="replaying")
+            setting_up = {p["scenario"] for p in scenario_parts(store, sim_id) if p["state"] == "setting_up"}
+            for r in rows:
+                if r["state"] != QUEUED or r["scenario"] in setting_up:
+                    continue
+                if r["after"] and any(x["n"] < r["n"] and x["state"] in WAITING for x in rows):
+                    continue
+                r["state"] = REPLAYING
+                r["pass"] = 1 + sum(1 for x in rows if x["scenario"] == r["scenario"] and x["pass"] and x is not r)
+                with store.connect() as conn:
+                    conn.execute("UPDATE simulation_replays SET state = 'replaying', pass = ?, started_at = ? "
+                                 "WHERE sim_id = ? AND n = ? AND state = 'queued'", [r["pass"], _now(), sim_id, r["n"]])
+                _spawn(sim_id, siem, _replay, store, siem, sim_id, dict(r), max_eps)
+        waiting = any(r["state"] in WAITING for r in rows)
+        _set(store, sim_id, only_if=("replaying", "playing"), state="replaying" if waiting else "playing")
+
+
+def _progress(store, sim_id: str, n: int, pass_n: int, summary: dict) -> None:
+    """A replay's progress; the simulation's own figures are the latest replay's."""
+    with store.connect() as conn:
+        conn.execute("UPDATE simulation_replays SET progress = ? WHERE sim_id = ? AND n = ?", [json.dumps(summary), sim_id, n])
+        latest = conn.execute("SELECT max(n) FROM simulation_replays WHERE sim_id = ? AND started_at IS NOT NULL",
+                              [sim_id]).fetchone()[0]
+        if latest == n:
+            conn.execute("UPDATE simulations SET progress = ? WHERE id = ?", [json.dumps({**summary, "pass": pass_n}), sim_id])
+
+
+def _set_replay(store, sim_id: str, n: int, **values) -> None:
+    cols = ", ".join(f"{k} = ?" for k in values)
+    with store.connect() as conn:
+        conn.execute(f"UPDATE simulation_replays SET {cols} WHERE sim_id = ? AND n = ?",   # nosec B608 # the columns are this module's own
+                     [*values.values(), sim_id, n])
+
+
+def _replay(store, siem: Siem, sim_id: str, r: dict, max_eps: float) -> None:
+    n = r["n"]
+    try:
+        sim = get(store, sim_id)
+        es = siem.es()
+        segments = replay.plan([packs.scenario(r["scenario"])], r["noise"])
+        replay.make_streams(es, segments, sim["namespace"])
+        rp = replay.Replay(es, segments, namespace=sim["namespace"], speed=r["speed"], max_eps=max_eps, loop=r["pass"],
+                           on_progress=lambda s: _progress(store, sim_id, n, r["pass"], s))
+        if not _register(sim_id, n, rp):
+            _set_replay(store, sim_id, n, state=CANCELLED, finished_at=_now())    # ended before it began
+            return
+        _set_replay(store, sim_id, n, run_id=rp.run_id)
         summary = rp.run()
-        _set(store, sim_id, progress=json.dumps(summary), replayed_at=_now())
+        _progress(store, sim_id, n, r["pass"], summary)
+        _set_replay(store, sim_id, n, state=STOPPED if summary.get("stopped") else REPLAYED, finished_at=_now())
+        _set(store, sim_id, replayed_at=_now())
         if not summary.get("stopped"):
             try:
                 store.resync_client(sim_id)
             except Exception:  # noqa: BLE001 - the rules' field checks catch up at the next sync
                 logger.exception("Simulation %s: could not sync its rules again", sim_id)
-        _set(store, sim_id, only_if=("replaying",), state="playing")
-    except Exception as exc:  # noqa: BLE001 - recorded on the simulation; ending and cleaning it up removes what it made
-        logger.exception("Simulation %s failed", sim_id)
-        _set(store, sim_id, only_if=("setting_up", "replaying"), state="failed", error=str(exc)[:500])
+    except Exception as exc:  # noqa: BLE001 - the simulation goes on; its page says why the replay stopped
+        logger.exception("Simulation %s: could not replay %s", sim_id, r["scenario"])
+        _set_replay(store, sim_id, n, state=FAILED, error=str(exc)[:500], finished_at=_now())
     finally:
-        _done(sim_id)
+        _unregister(sim_id, n)
+        _kick(store, siem, sim_id, max_eps)
 
 
 # ── End, clean up and clear ────────────────────────────────────────────────────────────────────
@@ -417,9 +719,10 @@ def _check(sim: Optional[dict], siem: Siem) -> dict:
 
 
 def end(store, siem: Siem, sim_id: str, by: str) -> None:
-    """End a simulation: stop its replay (and its set-up, if it is still setting up) and the players'
-    answering, and count each rule's alerts, in a thread. Its space, data, rules and alerts stay on the
-    SIEM, and what it set up stays in the client's TIDE, until it is cleaned up (clean_up())."""
+    """End a simulation: stop its replays (and its set-up, if it is still setting up), cancel those
+    queued, stop the players' answering, and count each rule's alerts, in a thread. Its space, data,
+    rules and alerts stay on the SIEM, and what it set up stays in the client's TIDE, until it is
+    cleaned up (clean_up())."""
     sim = _check(get(store, sim_id), siem)
     if sim["state"] == "ending" and not sim["interrupted"]:
         return
@@ -427,91 +730,121 @@ def end(store, siem: Siem, sim_id: str, by: str) -> None:
         raise SimError("It has ended already.")
     _set(store, sim_id, state="ending", ended_by=by)
     with _LOCK:
-        w = _WORKERS.get(sim_id)
+        w = _WORK.get(sim_id)
+        previous = list(w.threads) if w else []
         if w:
-            w["ending"] = True                             # a set-up still running won't start its replay
-            if w["replay"]:
-                w["replay"].stop()
-        previous = w["thread"] if w else None
-        th = threading.Thread(target=_stop, args=(store, siem, sim, previous), name=f"sim-end-{sim_id}", daemon=True)
-        _WORKERS[sim_id] = {"siem_id": siem.id, "thread": th, "replay": None, "ending": True}
-    th.start()
+            w.ending = True                                # a set-up still running starts no replay
+            for rp in w.replays.values():
+                rp.stop()
+    with _KICK, store.connect() as conn:
+        conn.execute("UPDATE simulation_replays SET state = 'cancelled', finished_at = ? WHERE sim_id = ? "
+                     "AND state = 'queued'", [_now(), sim_id])
+    _spawn(sim_id, siem, _stop, store, siem, sim, previous, ending=True)
 
 
-def _stop(store, siem: Siem, sim: dict, previous: Optional[threading.Thread]) -> None:
+def _stop(store, siem: Siem, sim: dict, previous: list) -> None:
     sim_id, space = sim["id"], sim["space"]
+    for th in previous:
+        th.join(600)                  # its set-ups (a sync among them) and replays, stopping
+    with store.connect() as conn:     # any a restart cut off
+        conn.execute("UPDATE simulation_replays SET state = 'stopped', finished_at = ? WHERE sim_id = ? "
+                     "AND state IN ('queued', 'replaying')", [_now(), sim_id])
+    kb = siem.kibana()
     try:
-        if previous is not None:
-            previous.join(600)        # the set-up (a sync among it) or replay, stopping
-        kb = siem.kibana()
-        try:
-            counts = kb.alert_counts(space) if kb.space_exists(space) else None
-            if counts is not None:
-                with store.connect() as conn:
-                    for rid, n in counts.items():
-                        conn.execute("UPDATE simulation_rules SET alerts = ? WHERE sim_id = ? AND rule_id = ?", [n, sim_id, rid])
-                    conn.execute("UPDATE simulation_rules SET alerts = 0 WHERE sim_id = ? AND state = 'created' "
-                                 "AND alerts IS NULL", [sim_id])
-        except replay.ElasticError as exc:
-            logger.warning("Simulation %s: could not count its rules' alerts: %s", sim_id, exc)
-        _set(store, sim_id, state="ended", ended_at=_now())
-    finally:
-        _done(sim_id)
+        counts = kb.alert_counts(space) if kb.space_exists(space) else None
+        if counts is not None:
+            with store.connect() as conn:
+                for rid, n in counts.items():
+                    conn.execute("UPDATE simulation_rules SET alerts = ? WHERE sim_id = ? AND rule_id = ?", [n, sim_id, rid])
+                conn.execute("UPDATE simulation_rules SET alerts = 0 WHERE sim_id = ? AND state = 'created' "
+                             "AND alerts IS NULL", [sim_id])
+    except replay.ElasticError as exc:
+        logger.warning("Simulation %s: could not count its rules' alerts: %s", sim_id, exc)
+    _set(store, sim_id, state="ended", ended_at=_now())
 
 
-def clean_up(store, siem: Siem, sim_id: str, actor: Optional[str] = None) -> None:
-    """Clean up an ended simulation, in a thread: remove what it set up in the client's TIDE (its
-    systems, baselines, and its destination with its rules), then delete its space (with its rules and
-    data view), its data streams and template, and its alerts. Each removal is recorded; cleaning up
-    again retries any that failed."""
+CLEAN_PARTS = ("tide", "space", "data")     # what a clean-up removes: what it set up in TIDE, its space, its logs
+CLEAN_STEPS = {"tide": ("tide",), "space": ("space", "alerts"), "data": ("data",)}
+
+
+def cleanup_status(sim: dict, objs: list) -> dict[str, str]:
+    """Each part of a simulation's clean-up (CLEAN_PARTS): ``none`` (it made nothing of it), ``left``,
+    ``done`` or ``failed`` (the last try's reason is in its cleanup report). ``tide``: what it set up in
+    the client's TIDE (its destination with its rules, baselines, systems, threat actors); ``space``: its
+    Kibana space, with its rules, data view and saved searches, and its alerts; ``data``: its logs and
+    their template. ``objs``: client.objects, which also says what it made on the SIEM."""
+    report, made = sim.get("cleanup") or {}, {o["kind"] for o in objs}
+    out = {}
+    for part, steps in CLEAN_STEPS.items():
+        tried = [report[s] for s in steps if report.get(s)]
+        if part == "tide":
+            set_up = any(o["kind"] in client.IN_TIDE and o["state"] == "made" for o in objs)
+            out[part] = ("failed" if tried and not tried[0]["ok"] else "left" if set_up or not tried else "done")
+        elif (client.SIEM_SPACE if part == "space" else client.SIEM_DATA) not in made:
+            out[part] = "none"              # a set-up that failed early made nothing there
+        else:
+            out[part] = ("failed" if any(not r["ok"] for r in tried) else "done" if len(tried) == len(steps) else "left")
+    return out
+
+
+def clean_up(store, siem: Siem, sim_id: str, actor: Optional[str] = None, parts: tuple = CLEAN_PARTS) -> None:
+    """Clean up an ended simulation, in a thread, as much of it as ``parts`` asks (CLEAN_PARTS, all of it
+    unless told): remove what it set up in the client's TIDE (its systems, baselines, threat actors, and
+    its destination with its rules); delete its space (with its rules and data view) and its alerts;
+    delete its data streams and template. A destination can't outlive its space: deleting the space
+    removes the destination from TIDE too, while its baselines and systems stay. Each removal is
+    recorded; cleaning up again does what is left, or failed."""
     sim = _check(get(store, sim_id), siem)
     if sim["state"] == "cleaning_up" and not sim["interrupted"]:
         return
     if sim["state"] not in ("ended", "cleaning_up"):
         raise SimError("End it first.")
-    if sim["cleaned"]:
-        raise SimError("It has been cleaned up: nothing it made is left.")
+    status = cleanup_status(sim, client.objects(store, sim_id))
+    todo = tuple(p for p in CLEAN_PARTS if p in parts and status[p] in ("left", "failed"))
+    if not todo:
+        raise SimError("It has been cleaned up: nothing it made is left." if sim["cleaned"]
+                       else "That has been cleaned up already.")
     _set(store, sim_id, state="cleaning_up")
-    with _LOCK:
-        th = threading.Thread(target=_clean, args=(store, siem, sim, actor), name=f"sim-clean-{sim_id}", daemon=True)
-        _WORKERS[sim_id] = {"siem_id": siem.id, "thread": th, "replay": None, "ending": True}
-    th.start()
+    _spawn(sim_id, siem, _clean, store, siem, sim, actor, todo, ending=True)
 
 
-def _clean(store, siem: Siem, sim: dict, actor: Optional[str] = None) -> None:
+def _clean(store, siem: Siem, sim: dict, actor: Optional[str] = None, todo: tuple = CLEAN_PARTS) -> None:
     sim_id, space, namespace = sim["id"], sim["space"], sim["namespace"]
     kb, es = siem.kibana(), siem.es()
-    report: dict[str, Any] = {}
+    report: dict[str, Any] = {k: v for k, v in (sim["cleanup"] or {}).items() if k not in ("failed", "left")}
 
-    def from_tide():
+    def from_tide(kinds: Optional[set] = None):
         try:
-            return store.remove_from_client(sim_id, actor)
+            return store.remove_from_client(sim_id, actor, kinds=kinds)
         except ValueError:
             raise
-        except Exception as exc:  # noqa: BLE001 - reported like the SIEM's steps; ending again retries
+        except Exception as exc:  # noqa: BLE001 - reported like the SIEM's steps; cleaning up again retries
             raise ValueError(str(exc)) from exc
 
-    # Only what it made on the SIEM: a set-up that failed early (a key without the privileges, say)
-    # left nothing there, and deleting it would be refused for the same reason.
-    made = {o["kind"] for o in client.objects(store, sim_id)}
-    steps = [("tide", from_tide)]
-    if client.SIEM_SPACE in made:
-        steps += [("space", lambda: kb.delete_space(space) or space),
-                  ("alerts", lambda: kibana.remove_alerts(es, space))]
-    if client.SIEM_DATA in made:
+    steps = []
+    if "tide" in todo:
+        steps.append(("tide", from_tide))
+    if "space" in todo:
+        if "tide" not in todo:              # a destination can't outlive its space
+            steps.append(("destination", lambda: from_tide({client.DESTINATION})))
+        steps += [("space", lambda: kb.delete_space(space) or space), ("alerts", lambda: kibana.remove_alerts(es, space))]
+    if "data" in todo:
         steps.append(("data", lambda: replay.remove_data(es, namespace)))
-    failed = False
+    blocked = ""
     for name, step in steps:
+        if blocked and name in ("space", "alerts"):
+            report[name] = {"ok": False, "error": blocked}
+            continue
         try:
             report[name] = {"ok": True, "removed": step()}
         except (replay.ElasticError, ValueError) as exc:
             report[name] = {"ok": False, "error": str(exc)[:300]}
-            failed = True
-    report["failed"] = failed
-    try:
-        _set(store, sim_id, state="ended", cleanup=json.dumps(report))
-    finally:
-        _done(sim_id)
+            if name == "destination":
+                blocked = f"its destination couldn't be removed from TIDE first: {exc}"[:300]
+    status = cleanup_status({**sim, "cleanup": report}, client.objects(store, sim_id))
+    report["failed"] = any(st == "failed" for st in status.values())
+    report["left"] = [p for p, st in status.items() if st in ("left", "failed")]
+    _set(store, sim_id, state="ended", cleanup=json.dumps(report))
 
 
 def clear(store, sim_id: str) -> None:
@@ -525,6 +858,8 @@ def clear(store, sim_id: str) -> None:
         for table in TABLES:
             column = "id" if table == "simulations" else "sim_id"
             conn.execute(f"DELETE FROM {table} WHERE {column} = ?", [sim_id])   # nosec B608 # TABLES is fixed
+    with _LOCK:
+        _SET_UP.pop(sim_id, None)
 
 
 # ── Saved searches (#126) ──────────────────────────────────────────────────────────────────────
@@ -581,6 +916,9 @@ def save_searches(siem: Siem, sim: dict, scenario: str, n: int, title: str, sear
 
 COLUMNS = ("id", "siem_id", "space", "namespace", "scenarios", "noise", "speed", "state", "error", "progress",
            "cleanup", "created_by", "created_at", "replayed_at", "ended_by", "ended_at")
+PART_COLUMNS = ("scenario", "logs", "rules", "tide", "questions", "state", "added_by", "added_at")
+REPLAY_COLUMNS = ("n", "scenario", "noise", "speed", "after", "state", "pass", "run_id", "progress", "error",
+                  "requested_by", "requested_at", "started_at", "finished_at")
 
 
 def _row(r) -> dict:
@@ -588,11 +926,10 @@ def _row(r) -> dict:
     d["scenarios"] = json.loads(d["scenarios"] or "[]")
     d["progress"] = json.loads(d["progress"]) if d["progress"] else None
     d["cleanup"] = json.loads(d["cleanup"]) if d["cleanup"] else None
-    with _LOCK:
-        live = d["id"] in _WORKERS
-    d["interrupted"] = d["state"] in ACTIVE and not live
+    d["interrupted"] = d["state"] in ACTIVE and not _live(d["id"])
     d["cleanup_failed"] = bool(d["cleanup"] and d["cleanup"].get("failed"))
-    d["cleaned"] = bool(d["cleanup"]) and not d["cleanup_failed"]
+    # Cleaned: nothing it made is left (a clean-up of only some of it leaves the rest in "left").
+    d["cleaned"] = bool(d["cleanup"]) and not d["cleanup_failed"] and not d["cleanup"].get("left")
     return d
 
 
@@ -608,10 +945,55 @@ def list_all(store) -> list[dict]:
     return [_row(r) for r in rows]
 
 
+def scenario_parts(store, sim_id: str) -> list[dict]:
+    """Each scenario in the simulation, in the order added, with what was asked of it (logs, rules, tide,
+    questions) and its state: setting_up (its rules and set-up under way; ``interrupted`` when a restart
+    cut that off) or ready. In a simulation from before scenarios had parts, each did all of it."""
+    sim = get(store, sim_id)
+    if sim is None:
+        return []
+    with store.connect() as conn:
+        rows = [dict(zip(PART_COLUMNS, r)) for r in conn.execute(
+            f"SELECT {', '.join(PART_COLUMNS)} FROM simulation_parts WHERE sim_id = ?", [sim_id]).fetchall()]   # nosec B608 # fixed columns
+    if not rows:
+        rows = [{"scenario": s, "logs": True, "rules": True, "tide": True, "questions": True, "state": "ready",
+                 "added_by": sim["created_by"], "added_at": sim["created_at"]} for s in sim["scenarios"]]
+    live, order = _live(sim_id), {s: i for i, s in enumerate(sim["scenarios"])}
+    for p in rows:
+        p["interrupted"] = p["state"] == "setting_up" and not live
+    return sorted(rows, key=lambda p: order.get(p["scenario"], len(order)))
+
+
+def replays(store, sim_id: str) -> list[dict]:
+    """The simulation's replays, in the order asked for: each one scenario's logs, queued, replaying,
+    replayed, stopped, failed or cancelled, with its pass (which time that scenario's logs were sent)
+    and progress. A simulation from before replays were kept one by one has one per pass, each of every
+    scenario (its scenario '')."""
+    with store.connect() as conn:
+        rows = [dict(zip(REPLAY_COLUMNS, r)) for r in conn.execute(
+            f"SELECT {', '.join(REPLAY_COLUMNS)} FROM simulation_replays WHERE sim_id = ? ORDER BY n", [sim_id]).fetchall()]   # nosec B608 # fixed columns
+    for r in rows:
+        r["progress"] = json.loads(r["progress"]) if r["progress"] else None
+    if rows:
+        return rows
+    sim = get(store, sim_id)
+    p = (sim or {}).get("progress")
+    if not p:
+        return []
+    last = int(p.get("pass") or 1)
+    return [{"n": i, "scenario": "", "noise": sim["noise"], "speed": sim["speed"], "after": i > 1,
+             "state": STOPPED if i == last and p.get("stopped") else REPLAYED, "pass": i, "run_id": None,
+             "progress": p if i == last else None, "error": sim["error"] if i == last else None,
+             "requested_by": sim["created_by"], "requested_at": sim["created_at"] if i == 1 else None,
+             "started_at": sim["created_at"] if i == 1 else None,
+             "finished_at": sim["replayed_at"] if i == last else None} for i in range(1, last + 1)]
+
+
 def players(store, sim_id: str) -> list[dict]:
     with store.connect() as conn:
-        return [{"user_id": u, "name": n} for u, n in conn.execute(
-            "SELECT user_id, name FROM simulation_players WHERE sim_id = ? ORDER BY name", [sim_id]).fetchall()]
+        return [{"user_id": u, "name": n, "added_by": b, "added_at": a} for u, n, b, a in conn.execute(
+            "SELECT user_id, name, added_by, added_at FROM simulation_players WHERE sim_id = ? ORDER BY name",
+            [sim_id]).fetchall()]
 
 
 def rule_results(store, sim_id: str) -> list[dict]:
@@ -623,8 +1005,13 @@ def rule_results(store, sim_id: str) -> list[dict]:
 
 # ── Playing ────────────────────────────────────────────────────────────────────────────────────
 
-def _question(sim: dict, scenario: str, n: int) -> Optional[game.Question]:
-    if scenario not in sim["scenarios"]:
+def question_scenarios(store, sim: dict) -> list[str]:
+    """The scenarios whose questions the players see, in the order they were added."""
+    return [p["scenario"] for p in scenario_parts(store, sim["id"]) if p["questions"]]
+
+
+def _question(shown: list[str], scenario: str, n: int) -> Optional[game.Question]:
+    if scenario not in shown:
         return None
     try:
         return next((q for q in game.questions(packs.scenario(scenario)) if q.n == n), None)
@@ -645,15 +1032,40 @@ def _may_play(conn, sim: Optional[dict], user_id: str) -> Optional[str]:
     return None
 
 
+def running(sim: dict) -> bool:
+    """It sets up, replays or plays, and wasn't cut off by a restart: players can be added."""
+    return sim["state"] in SHOWN and not sim["interrupted"]
+
+
+def add_players(store, sim_id: str, people: list[tuple[str, str]], by: str = "") -> list[str]:
+    """Add players (``[(TIDE user id, name)]``) to a simulation while it sets up, replays or plays: the
+    names of those added, leaving out anyone playing it already. They answer from then on, as the
+    players chosen at the start do. ``by``: who added them, as shown."""
+    sim = get(store, sim_id)
+    if sim is None:
+        raise SimError("there is no such simulation.")
+    if not running(sim):
+        raise SimError("players can be added only while it sets up, replays or plays.")
+    with store.connect() as conn:
+        have = {u for (u,) in conn.execute("SELECT user_id FROM simulation_players WHERE sim_id = ?", [sim_id]).fetchall()}
+        new = [(uid, name) for uid, name in dict(people).items() if uid not in have]
+        if new:
+            now = _now()
+            conn.executemany("INSERT INTO simulation_players (sim_id, user_id, name, added_by, added_at) "
+                             "VALUES (?, ?, ?, ?, ?)", [[sim_id, uid, name, by, now] for uid, name in new])
+    return [name for _, name in new]
+
+
 def answer(store, sim_id: str, user_id: str, scenario: str, n: int, text: str) -> dict:
     """One player's answer to one question: {"result": right | wrong | solved | too_fast | not_yet (it is
     setting up) | closed | not_player | unknown}, with the points and the write-up when right."""
     sim = get(store, sim_id)
+    shown = question_scenarios(store, sim) if sim else []
     with store.connect() as conn:
         why = _may_play(conn, sim, user_id)
         if why:
             return {"result": why}
-        q = _question(sim, scenario, n)
+        q = _question(shown, scenario, n)
         if q is None:
             return {"result": "unknown"}
         if conn.execute("SELECT 1 FROM simulation_solves WHERE sim_id = ? AND user_id = ? AND scenario = ? AND n = ?",
@@ -677,11 +1089,12 @@ def take_hint(store, sim_id: str, user_id: str, scenario: str, n: int) -> dict:
     """The next hint of a question, at its cost: {"result": hint | none | solved | not_yet | closed |
     not_player | unknown, "hint", "cost"}."""
     sim = get(store, sim_id)
+    shown = question_scenarios(store, sim) if sim else []
     with store.connect() as conn:
         why = _may_play(conn, sim, user_id)
         if why:
             return {"result": why}
-        q = _question(sim, scenario, n)
+        q = _question(shown, scenario, n)
         if q is None:
             return {"result": "unknown"}
         if conn.execute("SELECT 1 FROM simulation_solves WHERE sim_id = ? AND user_id = ? AND scenario = ? AND n = ?",
@@ -776,7 +1189,7 @@ def progress_for(store, sim_id: str, user_id: str) -> dict:
                                     "GROUP BY scenario, n", [sim_id, user_id]).fetchall():
             hints[f"{s}:{n}"] = int(c)
     out = {}
-    for sid in sim["scenarios"]:
+    for sid in question_scenarios(store, sim):
         for q in game.questions(packs.scenario(sid)):
             out[q.key] = {"solved": solved.get(q.key), "hints": q.hints[:hints.get(q.key, 0)]}
     return out

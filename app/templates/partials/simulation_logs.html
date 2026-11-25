@@ -1,0 +1,32 @@
+{#
+  One scenario's logs, in its row of the Scenarios table (api.simulations._rows): each replay not
+  finished, replaying (how far, Stop) or queued (what it waits for, Cancel), else what its last replay
+  did. Out of band (``oob``) when simulation_live sends it.
+#}
+{% from "macros/icons.html" import icon %}
+<div id="sim-logs-{{ s.id }}-{{ row.part.scenario }}" class="sim-logs"{% if oob %} hx-swap-oob="true"{% endif %}>
+{% for r in row.live %}
+    <div class="sim-replay">
+        <div class="sim-replay__line">
+        {% if r.state == 'replaying' %}
+            <span>Replaying{{ r.again }}{% if r.pct is not none %}: {{ r.pct }}%{% endif %}</span>
+            <span class="text-secondary text-sm">{{ '{:,}'.format(r.sent) }}{% if r.total %} of {{ '{:,}'.format(r.total) }}{% endif %} events{% if r.original %}, at {{ r.original }} in the attack's time{% endif %}</span>
+            {% if can_run %}
+            <button name="Stop Replay" type="button" class="btn btn-secondary btn-sm" hx-post="/api/simulations/{{ s.id }}/replays/{{ r.n }}/stop"
+                    hx-target="#sim-detail" hx-swap="innerHTML" hx-confirm="Stop this replay? What it has sent stays.">{{ icon('pause', '14') }} Stop</button>
+            {% endif %}
+        {% else %}
+            <span>{% if r.waits_for_rules %}Queued: waiting for its rules{% elif r.before %}Queued, after {{ r.before | join(', ') }}{% else %}Starting…{% endif %}</span>
+            {% if can_run %}
+            <button name="Cancel Replay" type="button" class="btn btn-secondary btn-sm" hx-post="/api/simulations/{{ s.id }}/replays/{{ r.n }}/cancel"
+                    hx-target="#sim-detail" hx-swap="innerHTML">{{ icon('x', '14') }} Cancel</button>
+            {% endif %}
+        {% endif %}
+        </div>
+        {% if r.state == 'replaying' %}<div class="bulk-progress"><div class="bulk-progress__fill" style="--pct: {{ r.pct or 0 }}%"></div></div>{% endif %}
+    </div>
+{% else %}
+    {% set text, cls = row.summary %}
+    <span class="{{ cls }}">{{ text }}</span>
+{% endfor %}
+</div>

@@ -80,7 +80,7 @@
     <div class="sys-section__body">
         {% if items %}
         <div class="sys-table-wrap">
-        {% set several = s.scenarios | length > 1 %}
+        {% set several = items | map(attribute='0.id') | unique | list | length > 1 %}
         <table class="rules-table sim-qtable">
             <thead><tr><th>Question</th><th>Solved by</th><th>First</th><th>Hints</th><th>Wrong answers</th></tr></thead>
             <tbody>

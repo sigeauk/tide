@@ -1,0 +1,20 @@
+{#
+  What happened in a simulation, newest first (api.simulations._activity): its start, each scenario
+  added, each replay asked for and how it went, each player added, each problem met, its end. Out of
+  band (``oob``) when simulation_live sends it.
+#}
+{% from "macros/icons.html" import icon %}
+<div id="sim-activity-{{ s.id }}"{% if oob %} hx-swap-oob="true"{% endif %}>
+{% if activity %}
+<ul class="sim-activity">
+    {% for e in activity %}
+    <li{% if e.warn %} class="text-warning"{% endif %}>
+        <span class="history-time" title="{{ e.at.strftime('%Y-%m-%d %H:%M:%S') }}">{{ e.at.strftime('%H:%M:%S') }}</span>
+        {% if e.warn %}{{ icon('triangle-alert', '13') }} {% endif %}{{ e.text }}
+    </li>
+    {% endfor %}
+</ul>
+{% else %}
+<p class="rm-empty">Nothing yet.</p>
+{% endif %}
+</div>

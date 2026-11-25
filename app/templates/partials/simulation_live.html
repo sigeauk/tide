@@ -1,0 +1,17 @@
+{#
+  What changed in a simulation's panel (api.simulations.simulation_live), when what it offers hasn't:
+  its figures, each scenario's logs, its activity, what it set up in TIDE, the board and its rules, each
+  swapped out of band into partials/simulation_detail.html, which stays as it is otherwise (a menu or
+  dialog open over it stays open).
+#}
+{% from "macros/icons.html" import icon %}
+{% set s, oob = sim, true %}
+{% include "partials/simulation_now.html" %}
+{% for row in rows %}{% include "partials/simulation_logs.html" %}{% endfor %}
+{% include "partials/simulation_activity.html" %}
+{% include "partials/simulation_in_tide.html" %}
+<div id="sim-admin-board-{{ s.id }}" hx-swap-oob="true">
+    {% set me = none %}
+    {% include "partials/simulation_board.html" %}
+</div>
+{% include "partials/simulation_rules.html" %}
